@@ -1,0 +1,48 @@
+"""把当前源码导出为可直接注册的用户版 MCP。"""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "src" / "ashare_announcements_mcp"
+REQUIREMENTS = "mcp>=1.10,<2\nrequests>=2.31,<3\npdfplumber>=0.11,<1\n"
+USER_README = """# A 股公告阅读 MCP（用户版）
+
+入口：`ashare_announcements_mcp/server.py`
+
+依赖安装：
+
+```bat
+python -m pip install -r requirements.txt
+```
+
+MCP 使用 stdio 传输，客户端 command 指向安装了上述依赖的 Python，args 指向入口文件。
+运行缓存保存在本目录的 `cache/{股票代码}/`。
+"""
+
+
+def export(target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    package_target = target / "ashare_announcements_mcp"
+    package_target.mkdir(parents=True, exist_ok=True)
+    for source_file in SOURCE.glob("*.py"):
+        shutil.copy2(source_file, package_target / source_file.name)
+    (target / "cache").mkdir(exist_ok=True)
+    (target / "requirements.txt").write_text(REQUIREMENTS, encoding="utf-8")
+    (target / "README.md").write_text(USER_README, encoding="utf-8")
+    print(f"已导出用户版：{target.resolve()}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="导出 A 股公告阅读 MCP 用户版")
+    parser.add_argument("target", type=Path, help="用户版目标目录")
+    args = parser.parse_args()
+    export(args.target)
+
+
+if __name__ == "__main__":
+    main()

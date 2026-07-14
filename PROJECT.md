@@ -287,16 +287,16 @@ Ashare-announcements-MCP/
 
 - [x] 项目初始化、README、PROJECT.md
 - [x] 参考代码复制
-- [ ] MCP Server 框架搭建（server.py、__main__.py）
-- [ ] `query_announcements` 工具实现（API 查询 + 缓存 + 过滤）
-- [ ] export 脚本实现（生成用户版代码到指定目录）
-- [ ] 用户版配置说明生成
-- [ ] 本地调试通过
+- [x] MCP Server 框架搭建（server.py、__main__.py）
+- [x] `query_announcements` 工具实现（API 查询 + 缓存 + 过滤）
+- [x] export 脚本实现（生成用户版代码到指定目录）
+- [x] 用户版配置说明生成
+- [x] 本地调试通过
 
 ### 第二阶段
 
-- [ ] `read_announcement` 工具实现
-- [ ] PDF 下载 + 文本提取集成
+- [x] `read_announcement` 工具实现
+- [x] PDF 下载 + 文本提取集成
 - [ ] 增量更新逻辑完善
 - [ ] 错误处理和重试机制
 
