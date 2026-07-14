@@ -61,3 +61,10 @@ def pdf_dir(stock_code: str) -> Path:
     path = stock_cache_dir(stock_code) / "pdfs"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def extraction_dir(stock_code: str) -> Path:
+    """保存 PDF 页级文本索引和 OCR 结果。"""
+    path = stock_cache_dir(stock_code) / "extracted"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

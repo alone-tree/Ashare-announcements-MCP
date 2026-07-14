@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import random
 import time
-from datetime import date
 from typing import Any
 
 import requests
@@ -89,34 +88,59 @@ def fetch_page(stock_code: str, page: int, page_size: int = 50) -> tuple[list[di
     return items, int(data.get("total_hits") or len(items))
 
 
-def fetch_announcements(
+def fetch_all_announcements(
     stock_code: str,
-    max_pages: int = 20,
     page_size: int = 50,
-    stop_before: date | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
-    """逐页抓取；有起始日期时，抓到该日期以前即可停止。"""
+    """首次建档时翻完全部公告页。"""
     all_items: list[dict[str, str]] = []
     source_total = 0
     fetched_pages = 0
-    complete = False
-    for page in range(1, max_pages + 1):
+    for page in range(1, 501):
         items, source_total = fetch_page(stock_code, page, page_size)
         fetched_pages = page
         if not items:
-            complete = True
             break
         all_items.extend(items)
         if len(all_items) >= source_total:
-            complete = True
             break
-        if stop_before:
-            dates = [item["display_time"][:10] for item in items if item["display_time"]]
-            if dates and min(dates) < stop_before.isoformat():
-                break
-        time.sleep(0.15)
+        time.sleep(0.12)
+    complete = source_total == 0 or len(all_items) >= source_total
     return all_items, {
         "fetched_pages": fetched_pages,
         "source_total": source_total,
         "cache_complete": complete,
+    }
+
+
+def fetch_updates(
+    stock_code: str,
+    known_codes: set[str],
+    page_size: int = 50,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """从最新页向后读取，遇到缓存中的公告后停止。"""
+    new_items: list[dict[str, str]] = []
+    source_total = 0
+    fetched_pages = 0
+    for page in range(1, 501):
+        items, source_total = fetch_page(stock_code, page, page_size)
+        fetched_pages = page
+        if not items:
+            break
+        for item in items:
+            identity = str(item.get("code") or item.get("url") or "")
+            if identity in known_codes:
+                return new_items, {
+                    "fetched_pages": fetched_pages,
+                    "source_total": source_total,
+                    "cache_complete": True,
+                }
+            new_items.append(item)
+        if len(new_items) >= source_total:
+            break
+        time.sleep(0.12)
+    return new_items, {
+        "fetched_pages": fetched_pages,
+        "source_total": source_total,
+        "cache_complete": len(new_items) >= source_total,
     }

@@ -9,7 +9,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "ashare_announcements_mcp"
-REQUIREMENTS = "mcp>=1.10,<2\nrequests>=2.31,<3\npdfplumber>=0.11,<1\n"
+REQUIREMENTS = (
+    "mcp>=1.10,<2\n"
+    "requests>=2.31,<3\n"
+    "pymupdf>=1.26,<2\n"
+    "pymupdf4llm>=0.3,<1\n"
+    "rapidocr>=3.9,<4\n"
+    "onnxruntime>=1.20,<2\n"
+)
 USER_README = """# A 股公告阅读 MCP（用户版）
 
 入口：`ashare_announcements_mcp/server.py`
@@ -22,6 +29,10 @@ python -m pip install -r requirements.txt
 
 MCP 使用 stdio 传输，客户端 command 指向安装了上述依赖的 Python，args 指向入口文件。
 运行缓存保存在本目录的 `cache/{股票代码}/`。
+
+`query_announcements` 首次查询会建立该公司的完整公告档案，之后每次查询前自动补充最新公告。每页固定最多返回 50 条；关键词之间用空格表示 OR，用大写或小写 `AND` 表示 AND。
+
+阅读长公告时先调用 `inspect_announcement`，再用 `search_announcement` 找到相关页，最后用 `read_announcement` 读取页段。原生表格转为 Markdown；扫描页按需使用 RapidOCR，结果会缓存。扫描页检索每次最多处理 3 页，若 `search_complete=false`，请用相同参数继续调用。
 """
 
 

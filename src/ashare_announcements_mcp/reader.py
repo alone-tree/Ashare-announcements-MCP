@@ -1,58 +1,382 @@
-"""PDF 文本提取。"""
+"""面向 AI 的 PDF 结构检查、检索、表格提取和 OCR 阅读。"""
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
+import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
-import pdfplumber
+import pymupdf
+
+from ashare_announcements_mcp.cache import extraction_dir
+
+
+INDEX_VERSION = 3
+OCR_BATCH_SIZE = 3
+_PYMUPDF4LLM: Any = None
+
+
+def _index_path(stock_code: str, pdf_path: Path) -> Path:
+    return extraction_dir(stock_code) / f"{pdf_path.stem}.json"
+
+
+def _save_index(path: Path, data: dict[str, Any]) -> None:
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _build_index(pdf_path: Path) -> dict[str, Any]:
+    """快速扫描全部页面，只提取原生文本并识别需要 OCR 的页面。"""
+    pages: list[dict[str, Any]] = []
+    with pymupdf.open(pdf_path) as document:
+        for page_number, page in enumerate(document, start=1):
+            text = page.get_text("text", sort=True).strip()
+            compact = re.sub(r"\s+", "", text)
+            image_count = len(page.get_images(full=True))
+            replacement_ratio = text.count("\ufffd") / max(len(text), 1)
+            needs_ocr = (len(compact) < 40 and image_count > 0) or replacement_ratio > 0.1
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            pages.append(
+                {
+                    "page": page_number,
+                    "native_text": text,
+                    "native_chars": len(text),
+                    "image_count": image_count,
+                    "needs_ocr": needs_ocr,
+                    "heading": " ".join(lines[:2])[:160],
+                }
+            )
+        metadata = {key: value for key, value in document.metadata.items() if value}
+        toc = [
+            {"level": level, "title": title, "page": page}
+            for level, title, page, *_ in document.get_toc(simple=False)
+        ]
+    stat = pdf_path.stat()
+    return {
+        "version": INDEX_VERSION,
+        "source_size": stat.st_size,
+        "source_mtime_ns": stat.st_mtime_ns,
+        "metadata": metadata,
+        "toc": toc,
+        "pages": pages,
+    }
+
+
+def _load_index(stock_code: str, pdf_path: Path) -> tuple[Path, dict[str, Any]]:
+    path = _index_path(stock_code, pdf_path)
+    stat = pdf_path.stat()
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                data.get("version") == INDEX_VERSION
+                and data.get("source_size") == stat.st_size
+                and data.get("source_mtime_ns") == stat.st_mtime_ns
+            ):
+                return path, data
+        except (OSError, json.JSONDecodeError):
+            pass
+    data = _build_index(pdf_path)
+    _save_index(path, data)
+    return path, data
+
+
+def _page_ranges(page_numbers: list[int]) -> str:
+    if not page_numbers:
+        return ""
+    ranges: list[str] = []
+    start = previous = page_numbers[0]
+    for number in page_numbers[1:]:
+        if number == previous + 1:
+            previous = number
+            continue
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = previous = number
+    ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ", ".join(ranges)
+
+
+def _load_pymupdf4llm() -> Any:
+    global _PYMUPDF4LLM
+    if _PYMUPDF4LLM is None:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            import pymupdf4llm
+
+        _PYMUPDF4LLM = pymupdf4llm
+    return _PYMUPDF4LLM
+
+
+def _native_markdown(pdf_path: Path, page_number: int) -> str:
+    converter = _load_pymupdf4llm()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        return converter.to_markdown(
+            str(pdf_path),
+            pages=[page_number - 1],
+            ignore_images=True,
+            table_strategy="lines_strict",
+            show_progress=False,
+        ).strip()
+
+
+def _ocr_pages(pdf_path: Path, page_numbers: list[int]) -> dict[int, str]:
+    """在独立进程中批量 OCR，避免 ONNX Runtime 阻塞 MCP 服务进程。"""
+    if not page_numbers:
+        return {}
+    worker = Path(__file__).with_name("ocr_worker.py")
+    completed = subprocess.run(
+        [sys.executable, str(worker), str(pdf_path), ",".join(map(str, page_numbers))],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=180,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"OCR 工作进程失败：{completed.stderr.strip() or completed.stdout.strip()}")
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("OCR 工作进程返回了无效结果") from exc
+    if not payload.get("ok"):
+        raise RuntimeError(f"OCR 失败：{payload.get('error', '未知错误')}")
+    return {int(page): text for page, text in payload.get("pages", {}).items()}
+
+
+def _ocr_markdown(pdf_path: Path, page_number: int) -> str:
+    return _ocr_pages(pdf_path, [page_number]).get(page_number, "")
+
+
+def _ensure_page_text(
+    pdf_path: Path,
+    index_path: Path,
+    index: dict[str, Any],
+    page_number: int,
+    *,
+    rich: bool,
+    ocr: bool,
+) -> tuple[str, str, bool]:
+    page = index["pages"][page_number - 1]
+    changed = False
+    if page["needs_ocr"]:
+        if ocr and not page.get("ocr_attempted") and not page.get("ocr_text"):
+            page["ocr_text"] = _ocr_markdown(pdf_path, page_number)
+            page["ocr_attempted"] = True
+            changed = True
+        text = page.get("ocr_text") or page.get("native_text") or ""
+        if page.get("ocr_text"):
+            extraction = "ocr"
+        elif page.get("ocr_attempted"):
+            extraction = "ocr_empty"
+        else:
+            extraction = "native_incomplete"
+    else:
+        if rich and not page.get("markdown"):
+            page["markdown"] = _native_markdown(pdf_path, page_number)
+            changed = True
+        text = page.get("markdown") or page.get("native_text") or ""
+        extraction = "native_markdown" if page.get("markdown") else "native_text"
+    if changed:
+        _save_index(index_path, index)
+    return text, extraction, "|---" in text
+
+
+def inspect_pdf(pdf_path: Path, stock_code: str) -> dict[str, Any]:
+    _, index = _load_index(stock_code, pdf_path)
+    pages = index["pages"]
+    full_toc = index.get("toc") or []
+    concise_toc = [item for item in full_toc if item.get("level") == 1][:30]
+    if not concise_toc:
+        concise_toc = full_toc[:20]
+    scanned = [page["page"] for page in pages if page["needs_ocr"]]
+    total_pages = len(pages)
+    if total_pages <= 10:
+        profile = "short"
+        workflow = "直接调用 read_announcement，从第 1 页开始阅读。"
+    elif scanned:
+        profile = "long_mixed_scan"
+        workflow = "先用 search_announcement 定位主题，再读取命中页；扫描页会按需 OCR。"
+    else:
+        profile = "long_structured"
+        workflow = "先用 search_announcement 定位主题，再用 read_announcement 阅读相关页段。"
+    return {
+        "total_pages": total_pages,
+        "profile": profile,
+        "native_text_chars": sum(page["native_chars"] for page in pages),
+        "native_text_coverage": round((total_pages - len(scanned)) / max(total_pages, 1), 4),
+        "scanned_pages": _page_ranges(scanned),
+        "scanned_page_count": len(scanned),
+        "toc_entries": len(full_toc),
+        "toc": concise_toc,
+        "toc_truncated": len(concise_toc) < len(full_toc),
+        "first_page_heading": pages[0].get("heading", "") if pages else "",
+        "recommended_workflow": workflow,
+    }
+
+
+def _query_terms(query: str) -> tuple[list[str], bool]:
+    text = query.strip().lower()
+    if not text:
+        raise ValueError("query 不能为空")
+    is_and = bool(re.search(r"\s+and\s+", text, flags=re.IGNORECASE))
+    if is_and:
+        terms = [part.strip() for part in re.split(r"\s+and\s+", text, flags=re.IGNORECASE)]
+    else:
+        terms = [part for part in text.split() if part]
+    return [term for term in terms if term], is_and
+
+
+def search_pdf(
+    pdf_path: Path,
+    stock_code: str,
+    query: str,
+    max_results: int = 20,
+    ocr_scanned: bool = True,
+) -> dict[str, Any]:
+    index_path, index = _load_index(stock_code, pdf_path)
+    terms, is_and = _query_terms(query)
+    hits = []
+    pending_ocr_pages = [
+        page["page"]
+        for page in index["pages"]
+        if page["needs_ocr"]
+        and ocr_scanned
+        and not page.get("ocr_attempted")
+        and not page.get("ocr_text")
+    ]
+    ocr_pages = pending_ocr_pages[:OCR_BATCH_SIZE]
+    remaining_ocr_pages = pending_ocr_pages[OCR_BATCH_SIZE:]
+    if ocr_pages:
+        extracted = _ocr_pages(pdf_path, ocr_pages)
+        for page_number in ocr_pages:
+            text = extracted.get(page_number, "")
+            index["pages"][page_number - 1]["ocr_text"] = text
+            index["pages"][page_number - 1]["ocr_attempted"] = True
+        _save_index(index_path, index)
+    for page in index["pages"]:
+        page_number = page["page"]
+        text = page.get("ocr_text") or page.get("native_text") or ""
+        lowered = text.lower()
+        matched = all(term in lowered for term in terms) if is_and else any(
+            term in lowered for term in terms
+        )
+        if not matched:
+            continue
+        score = sum(lowered.count(term) for term in terms)
+        positions = [lowered.find(term) for term in terms if lowered.find(term) >= 0]
+        position = min(positions, default=0)
+        start = max(0, position - 180)
+        end = min(len(text), position + 360)
+        hits.append(
+            {
+                "page": page_number,
+                "score": score,
+                "extraction": "ocr" if page.get("ocr_text") else "native_text",
+                "snippet": re.sub(r"\s+", " ", text[start:end]).strip(),
+            }
+        )
+    hits.sort(key=lambda item: (-item["score"], item["page"]))
+    return {
+        "query": query,
+        "logic": "AND" if is_and else "OR",
+        "matched_pages": len(hits),
+        "search_complete": not remaining_ocr_pages,
+        "ocr_pages_processed": _page_ranges(ocr_pages),
+        "ocr_pending_pages": _page_ranges(remaining_ocr_pages),
+        "recommended_next_action": (
+            "再次使用相同参数调用 search_announcement，继续建立扫描页索引。"
+            if remaining_ocr_pages
+            else "根据命中页调用 read_announcement。"
+        ),
+        "results": hits[:max_results],
+    }
 
 
 def read_pdf(
-    path: Path,
-    max_chars: int,
-    start_page: int = 0,
-    start_char: int = 0,
+    pdf_path: Path,
+    stock_code: str,
+    start_page: int = 1,
+    end_page: int | None = None,
+    max_chars: int = 12_000,
+    ocr: bool = True,
 ) -> dict[str, Any]:
-    """从指定页和页内字符开始提取，达到字符上限后停止。"""
-    texts: list[str] = []
-    chars = 0
-    pages_read = 0
-    with pdfplumber.open(path) as pdf:
-        total_pages = len(pdf.pages)
-        if start_page < 0 or start_page >= total_pages:
-            raise ValueError(f"start_page 必须在 0 到 {max(total_pages - 1, 0)} 之间")
-        if start_char < 0:
-            raise ValueError("start_char 不能小于 0")
-        next_page: int | None = None
-        next_char = 0
-        for page_index, page in enumerate(pdf.pages[start_page:], start=start_page):
-            full_text = page.extract_text() or ""
-            page_offset = start_char if page_index == start_page else 0
-            text = full_text[page_offset:]
-            separator = "\n\n" if texts else ""
-            remaining = max_chars - chars - len(separator)
-            if remaining <= 0:
-                break
-            texts.append(separator + text[:remaining])
-            chars += len(separator) + min(len(text), remaining)
-            pages_read += 1
-            if len(text) > remaining:
-                next_page = page_index
-                next_char = page_offset + remaining
-                break
-            if chars >= max_chars:
-                next_page = page_index + 1 if page_index + 1 < total_pages else None
-                break
-        else:
-            next_page = None
+    index_path, index = _load_index(stock_code, pdf_path)
+    total_pages = len(index["pages"])
+    if start_page < 1 or start_page > total_pages:
+        raise ValueError(f"start_page 必须在 1 到 {total_pages} 之间")
+    target_end = total_pages if end_page is None else end_page
+    if target_end < start_page or target_end > total_pages:
+        raise ValueError(f"end_page 必须在 {start_page} 到 {total_pages} 之间")
+    if not 1_000 <= max_chars <= 100_000:
+        raise ValueError("max_chars 必须在 1000 到 100000 之间")
+
+    blocks: list[str] = []
+    page_details = []
+    next_page: int | None = None
+    for page_number in range(start_page, target_end + 1):
+        page = index["pages"][page_number - 1]
+        if (
+            page["needs_ocr"]
+            and ocr
+            and not page.get("ocr_attempted")
+            and not page.get("ocr_text")
+        ):
+            pending = []
+            for candidate in range(
+                page_number,
+                min(target_end, page_number + OCR_BATCH_SIZE - 1) + 1,
+            ):
+                candidate_page = index["pages"][candidate - 1]
+                if not candidate_page["needs_ocr"]:
+                    break
+                if not candidate_page.get("ocr_attempted") and not candidate_page.get(
+                    "ocr_text"
+                ):
+                    pending.append(candidate)
+            extracted = _ocr_pages(pdf_path, pending)
+            for candidate in pending:
+                text = extracted.get(candidate, "")
+                index["pages"][candidate - 1]["ocr_text"] = text
+                index["pages"][candidate - 1]["ocr_attempted"] = True
+            _save_index(index_path, index)
+        text, extraction, has_table = _ensure_page_text(
+            pdf_path,
+            index_path,
+            index,
+            page_number,
+            rich=True,
+            ocr=ocr,
+        )
+        block = f"## 第 {page_number} 页\n\n{text.strip()}".strip()
+        current_chars = sum(len(item) for item in blocks) + max(0, len(blocks) - 1) * 2
+        if blocks and current_chars + len(block) > max_chars:
+            next_page = page_number
+            break
+        blocks.append(block)
+        page_details.append(
+            {
+                "page": page_number,
+                "extraction": extraction,
+                "chars": len(text),
+                "table_detected": has_table,
+            }
+        )
+    else:
+        next_page = target_end + 1 if target_end < total_pages else None
+
+    text = "\n\n".join(blocks)
     return {
-        "text": "".join(texts),
+        "text": text,
         "total_pages": total_pages,
-        "start_page": start_page,
-        "pages_read": pages_read,
+        "pages_returned": [item["page"] for item in page_details],
+        "page_details": page_details,
+        "chars_returned": len(text),
         "next_page": next_page,
-        "next_char": next_char,
-        "chars_returned": chars,
         "is_last_chunk": next_page is None,
     }

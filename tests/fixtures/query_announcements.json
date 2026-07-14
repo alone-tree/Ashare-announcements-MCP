@@ -1,8 +1,6 @@
 {
   "stock_code": "002271",
-  "keyword": "收购|补助",
+  "keyword": "收购 补助",
   "start_date": "2026-06-01",
-  "page_size": 5,
-  "refresh": true,
-  "max_pages": 2
+  "page": 1
 }
