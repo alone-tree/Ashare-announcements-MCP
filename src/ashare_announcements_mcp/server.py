@@ -17,7 +17,12 @@ from mcp.server.fastmcp import FastMCP
 from ashare_announcements_mcp.api import fetch_all_announcements, fetch_updates
 from ashare_announcements_mcp.cache import load_cache, merge_items, save_cache
 from ashare_announcements_mcp.downloader import download_pdf
-from ashare_announcements_mcp.reader import inspect_pdf, read_pdf, search_pdf
+from ashare_announcements_mcp.reader import (
+    initialize_pdf_engine,
+    inspect_pdf,
+    read_pdf,
+    search_pdf,
+)
 
 
 mcp = FastMCP("A 股公告阅读")
@@ -221,4 +226,5 @@ async def read_announcement(
 
 
 if __name__ == "__main__":
+    initialize_pdf_engine()
     mcp.run()

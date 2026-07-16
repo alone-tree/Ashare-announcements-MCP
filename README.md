@@ -7,7 +7,7 @@
 - `query_announcements`：首次查询建立公司全部公告档案，之后每次查询前自动补充最新公告；所有筛选和翻页只读本地缓存。
 - `inspect_announcement`：快速检查 PDF 页数、目录、原生文本覆盖率和扫描页分布。
 - `search_announcement`：检索整份公告，返回命中页和上下文片段；扫描页可按需 OCR 后参与检索。
-- `read_announcement`：按完整页面返回内容，原生表格转为 Markdown，扫描页自动 OCR，长文通过 `next_page` 连续阅读。
+- `read_announcement`：按完整页面返回内容；原生页面由 PyMuPDF Layout 排除页眉页脚并转为 Markdown，扫描页自动 OCR，长文通过 `next_page` 连续阅读。
 
 ## 导出用户版
 
@@ -73,13 +73,13 @@ mcpServers:
 
 - `announcements.json`：完整公告档案。
 - `pdfs/`：下载后的 PDF。
-- `extracted/`：逐页原生文本、结构化 Markdown 和 OCR 结果。
+- `extracted/`：逐页原生文本、Layout Markdown 和 OCR 结果。
 
 ## 技术栈
 
 - Python 3.10+
 - MCP Python SDK、requests
-- PyMuPDF、PyMuPDF4LLM
+- PyMuPDF、PyMuPDF4LLM、PyMuPDF Layout
 - RapidOCR、ONNX Runtime
 
 详细设计和样本验证见 [公告阅读产品设计](docs/公告阅读产品设计.md)。

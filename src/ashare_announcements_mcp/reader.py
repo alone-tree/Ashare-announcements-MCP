@@ -16,8 +16,9 @@ import pymupdf
 from ashare_announcements_mcp.cache import extraction_dir
 
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 OCR_BATCH_SIZE = 3
+NATIVE_MARKDOWN_BATCH_SIZE = 8
 _PYMUPDF4LLM: Any = None
 
 
@@ -71,6 +72,7 @@ def _build_index(pdf_path: Path) -> dict[str, Any]:
 def _load_index(stock_code: str, pdf_path: Path) -> tuple[Path, dict[str, Any]]:
     path = _index_path(stock_code, pdf_path)
     stat = pdf_path.stat()
+    previous: dict[str, Any] | None = None
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -80,9 +82,22 @@ def _load_index(stock_code: str, pdf_path: Path) -> tuple[Path, dict[str, Any]]:
                 and data.get("source_mtime_ns") == stat.st_mtime_ns
             ):
                 return path, data
+            if (
+                data.get("source_size") == stat.st_size
+                and data.get("source_mtime_ns") == stat.st_mtime_ns
+            ):
+                previous = data
         except (OSError, json.JSONDecodeError):
             pass
     data = _build_index(pdf_path)
+    if previous:
+        for page, old_page in zip(
+            data["pages"],
+            previous.get("pages") or [],
+        ):
+            for key in ("ocr_text", "ocr_attempted"):
+                if key in old_page:
+                    page[key] = old_page[key]
     _save_index(path, data)
     return path, data
 
@@ -107,21 +122,69 @@ def _load_pymupdf4llm() -> Any:
     if _PYMUPDF4LLM is None:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             import pymupdf4llm
+            from pymupdf import layout as pymupdf_layout
 
+            pymupdf_layout.activate()
         _PYMUPDF4LLM = pymupdf4llm
     return _PYMUPDF4LLM
 
 
-def _native_markdown(pdf_path: Path, page_number: int) -> str:
+def initialize_pdf_engine() -> None:
+    """在 stdio 事件循环启动前初始化 Windows Layout 运行时。"""
+    _load_pymupdf4llm()
+
+
+def _native_markdown_pages(pdf_path: Path, page_numbers: list[int]) -> dict[int, str]:
+    """批量转换指定页面，让 Layout 保留结构并控制长文档单次耗时。"""
+    if not page_numbers:
+        return {}
     converter = _load_pymupdf4llm()
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        return converter.to_markdown(
+        chunks = converter.to_markdown(
             str(pdf_path),
-            pages=[page_number - 1],
+            pages=[page_number - 1 for page_number in page_numbers],
+            page_chunks=True,
+            header=False,
+            footer=False,
+            use_ocr=False,
             ignore_images=True,
             table_strategy="lines_strict",
             show_progress=False,
-        ).strip()
+        )
+    if not isinstance(chunks, list) or len(chunks) != len(page_numbers):
+        raise RuntimeError("PyMuPDF4LLM 未返回完整的逐页 Markdown")
+    result: dict[int, str] = {}
+    for fallback_page, chunk in zip(page_numbers, chunks, strict=True):
+        if not isinstance(chunk, dict):
+            raise RuntimeError("PyMuPDF4LLM 返回了无效的页面结果")
+        metadata = chunk.get("metadata") or {}
+        page_number = int(metadata.get("page_number") or fallback_page)
+        if page_number not in page_numbers or page_number in result:
+            page_number = fallback_page
+        result[page_number] = str(chunk.get("text") or "").strip()
+    return result
+
+
+def _cache_native_markdown(
+    pdf_path: Path,
+    index_path: Path,
+    index: dict[str, Any],
+    page_numbers: list[int],
+) -> None:
+    pending = [
+        page_number
+        for page_number in page_numbers
+        if not index["pages"][page_number - 1]["needs_ocr"]
+        and not index["pages"][page_number - 1].get("markdown_attempted")
+    ]
+    if not pending:
+        return
+    extracted = _native_markdown_pages(pdf_path, pending)
+    for page_number in pending:
+        page = index["pages"][page_number - 1]
+        page["markdown"] = extracted.get(page_number, "")
+        page["markdown_attempted"] = True
+    _save_index(index_path, index)
 
 
 def _ocr_pages(pdf_path: Path, page_numbers: list[int]) -> dict[int, str]:
@@ -177,9 +240,8 @@ def _ensure_page_text(
         else:
             extraction = "native_incomplete"
     else:
-        if rich and not page.get("markdown"):
-            page["markdown"] = _native_markdown(pdf_path, page_number)
-            changed = True
+        if rich and not page.get("markdown_attempted"):
+            _cache_native_markdown(pdf_path, index_path, index, [page_number])
         text = page.get("markdown") or page.get("native_text") or ""
         extraction = "native_markdown" if page.get("markdown") else "native_text"
     if changed:
@@ -321,6 +383,23 @@ def read_pdf(
     next_page: int | None = None
     for page_number in range(start_page, target_end + 1):
         page = index["pages"][page_number - 1]
+        if not page["needs_ocr"] and not page.get("markdown_attempted"):
+            batch_end = min(
+                target_end,
+                page_number + NATIVE_MARKDOWN_BATCH_SIZE - 1,
+            )
+            batch_pages = [
+                candidate
+                for candidate in range(page_number, batch_end + 1)
+                if not index["pages"][candidate - 1]["needs_ocr"]
+                and not index["pages"][candidate - 1].get("markdown_attempted")
+            ]
+            _cache_native_markdown(
+                pdf_path,
+                index_path,
+                index,
+                batch_pages,
+            )
         if (
             page["needs_ocr"]
             and ocr
