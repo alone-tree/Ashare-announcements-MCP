@@ -10,10 +10,11 @@
 
 `python -m ashare_announcements_mcp.cli` 从 stdin 接收一个 JSON 请求，stdout 只返回一个 JSON 响应。CLI 与 MCP 共用公告档案、下载和 PDF 阅读模块，不维护第二套缓存。
 
-支持三个 action：
+支持四个 action：
 
 - `query_batch`：批量同步并查询多家公司，返回日期和关键词范围内的全部公告。
 - `inspect_batch`：批量检查 PDF 页数、文档画像、原生文本覆盖率和扫描页。
+- `search_batch`：批量检索整份 PDF，返回命中页和短片段；默认不主动 OCR。
 - `read_batch`：批量读取指定页段；默认 `max_chars=20000`、`ocr=false`。
 
 CLI 只提供通用查询和阅读能力。按公告类型、长度和扫描比例分流的业务规则由调用方维护。
@@ -59,7 +60,7 @@ query_batch CLI
   -> 复用同一档案同步服务
   -> 多公司查询与扁平结果
 
-inspect_batch / read_batch CLI
+inspect_batch / search_batch / read_batch CLI
   -> 复用同一 PDF 下载、索引和阅读缓存
 
 inspect_announcement

@@ -88,6 +88,41 @@ def inspect_batch(request: dict[str, Any]) -> dict[str, Any]:
     return _map_announcements("inspect_batch", request, "inspections", _inspect_item)
 
 
+def _search_item(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    from ashare_announcements_mcp.downloader import download_pdf
+    from ashare_announcements_mcp.reader import search_pdf
+
+    identity = _announcement_identity(item)
+    if not identity["stock_code"] or not identity["url"]:
+        raise ValueError("每条公告必须包含 stock_code 和 url")
+    raw_query = item.get("query") or request.get("query") or ""
+    query = str(raw_query).strip()
+    if not query:
+        raise ValueError("每条公告必须包含 query，或在请求顶层提供 query")
+    max_results = int(item.get("max_results", request.get("max_results", 20)))
+    if not 1 <= max_results <= 100:
+        raise ValueError("max_results 必须在 1 到 100 之间")
+    ocr_scanned = bool(item.get("ocr_scanned", request.get("ocr_scanned", False)))
+    path, cache_hit = download_pdf(identity["stock_code"], identity["url"])
+    result = search_pdf(
+        path,
+        identity["stock_code"],
+        query=query,
+        max_results=max_results,
+        ocr_scanned=ocr_scanned,
+    )
+    return {**identity, "cache_hit": cache_hit, "path": str(path), **result}
+
+
+def search_batch(request: dict[str, Any]) -> dict[str, Any]:
+    return _map_announcements(
+        "search_batch",
+        request,
+        "searches",
+        lambda item: _search_item(item, request),
+    )
+
+
 def _read_item(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     from ashare_announcements_mcp.downloader import download_pdf
     from ashare_announcements_mcp.reader import read_pdf
@@ -146,6 +181,7 @@ def _map_announcements(
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "query_batch": query_batch,
     "inspect_batch": inspect_batch,
+    "search_batch": search_batch,
     "read_batch": read_batch,
 }
 

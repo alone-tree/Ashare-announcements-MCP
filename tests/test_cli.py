@@ -166,6 +166,64 @@ def test_read_batch_passes_request_options_and_returns_text(monkeypatch) -> None
     assert captured["ocr"] is False
 
 
+def test_search_batch_passes_keywords_and_returns_hits(monkeypatch) -> None:
+    captured = {}
+
+    def fake_search(item, request):
+        captured.update(request)
+        return {
+            "stock_code": item["stock_code"],
+            "url": item["url"],
+            "code": item["code"],
+            "title": item["title"],
+            "query": request["query"],
+            "matched_pages": 1,
+            "search_complete": True,
+            "results": [{"page": 7, "score": 2, "snippet": "交易价格"}],
+        }
+
+    monkeypatch.setattr(cli, "_search_item", fake_search)
+    result = cli.dispatch(
+        {
+            "action": "search_batch",
+            "announcements": [
+                {
+                    "stock_code": "000001",
+                    "url": "https://example.com/A.pdf",
+                    "code": "A",
+                    "title": "重大资产重组报告书",
+                }
+            ],
+            "query": "交易价格 业绩承诺",
+            "max_results": 10,
+            "ocr_scanned": False,
+        }
+    )
+
+    assert result["status"] == "success"
+    assert result["searches"][0]["results"][0]["page"] == 7
+    assert captured["query"] == "交易价格 业绩承诺"
+    assert captured["ocr_scanned"] is False
+
+
+def test_search_batch_rejects_null_query() -> None:
+    result = cli.dispatch(
+        {
+            "action": "search_batch",
+            "announcements": [
+                {
+                    "stock_code": "000001",
+                    "url": "https://example.com/A.pdf",
+                    "query": None,
+                }
+            ],
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["searches"][0]["error"] == "每条公告必须包含 query，或在请求顶层提供 query"
+
+
 def test_main_reads_stdin_and_writes_one_json_response(monkeypatch) -> None:
     monkeypatch.setattr(cli, "dispatch", lambda request: {"ok": True, "action": request["action"]})
     stdin = io.StringIO('{"action":"query_batch"}')

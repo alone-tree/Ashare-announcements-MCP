@@ -28,7 +28,7 @@ MCP 入口：`ashare_announcements_mcp/server.py`
 python ashare_announcements_mcp\cli.py
 ```
 
-CLI 从 stdin 接收一个 JSON 请求，stdout 只返回一个 JSON 响应。支持 `query_batch`、`inspect_batch`、`read_batch`，与 MCP 共用公告档案和 PDF 缓存。
+CLI 从 stdin 接收一个 JSON 请求，stdout 只返回一个 JSON 响应。支持 `query_batch`、`inspect_batch`、`search_batch`、`read_batch`，与 MCP 共用公告档案和 PDF 缓存。
 
 依赖安装：
 
