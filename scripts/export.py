@@ -20,7 +20,15 @@ REQUIREMENTS = (
 )
 USER_README = """# A 股公告阅读 MCP（用户版）
 
-入口：`ashare_announcements_mcp/server.py`
+MCP 入口：`ashare_announcements_mcp/server.py`
+
+批处理 CLI 入口：
+
+```bat
+python ashare_announcements_mcp\cli.py
+```
+
+CLI 从 stdin 接收一个 JSON 请求，stdout 只返回一个 JSON 响应。支持 `query_batch`、`inspect_batch`、`read_batch`，与 MCP 共用公告档案和 PDF 缓存。
 
 依赖安装：
 

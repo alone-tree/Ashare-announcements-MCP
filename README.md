@@ -8,6 +8,17 @@
 - `inspect_announcement`：快速检查 PDF 页数、目录、原生文本覆盖率和扫描页分布。
 - `search_announcement`：检索整份公告，返回命中页和上下文片段；扫描页可按需 OCR 后参与检索。
 - `read_announcement`：按完整页面返回内容；原生页面由 PyMuPDF Layout 排除页眉页脚并转为 Markdown，扫描页自动 OCR，长文通过 `next_page` 连续阅读。
+- 批处理 JSON CLI：供确定性脚本批量查询、检查和读取公告，与 MCP 共用缓存。
+
+## 批处理 CLI
+
+CLI 从 stdin 读取单个 JSON 请求，stdout 只输出单个 JSON 响应：
+
+```bat
+echo {"action":"query_batch","stock_codes":["002271"],"start_date":"2026-07-01"} | D:\venvs\a-share-announcements\Scripts\python.exe src\ashare_announcements_mcp\cli.py
+```
+
+支持 `query_batch`、`inspect_batch` 和 `read_batch`。默认读取上限为 20,000 字符且不启用 OCR；公告类型、长度和扫描比例等业务分流由调用方决定。
 
 ## 导出用户版
 

@@ -1,7 +1,10 @@
 """不访问网络的最小核心测试。"""
 
 from ashare_announcements_mcp.cache import merge_items
-from ashare_announcements_mcp.server import _keyword_matches, _stock_code
+from ashare_announcements_mcp.service import (
+    keyword_matches as _keyword_matches,
+    normalize_stock_code as _stock_code,
+)
 
 
 def test_keyword_or_and() -> None:

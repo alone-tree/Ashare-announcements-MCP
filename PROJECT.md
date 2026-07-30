@@ -6,6 +6,18 @@
 
 ## 工具契约
 
+### 批处理 CLI
+
+`python -m ashare_announcements_mcp.cli` 从 stdin 接收一个 JSON 请求，stdout 只返回一个 JSON 响应。CLI 与 MCP 共用公告档案、下载和 PDF 阅读模块，不维护第二套缓存。
+
+支持三个 action：
+
+- `query_batch`：批量同步并查询多家公司，返回日期和关键词范围内的全部公告。
+- `inspect_batch`：批量检查 PDF 页数、文档画像、原生文本覆盖率和扫描页。
+- `read_batch`：批量读取指定页段；默认 `max_chars=20000`、`ocr=false`。
+
+CLI 只提供通用查询和阅读能力。按公告类型、长度和扫描比例分流的业务规则由调用方维护。
+
 ### `query_announcements`
 
 ```python
@@ -42,6 +54,13 @@ query_announcements(
 query_announcements
   -> 首次全量建档 / 后续增量补全
   -> 本地筛选与 50 条分页
+
+query_batch CLI
+  -> 复用同一档案同步服务
+  -> 多公司查询与扁平结果
+
+inspect_batch / read_batch CLI
+  -> 复用同一 PDF 下载、索引和阅读缓存
 
 inspect_announcement
   -> 下载并缓存 PDF
@@ -90,7 +109,9 @@ OCR 工作进程必须使用 `stdin=DEVNULL`，不能继承 MCP stdio 输入管�
 python scripts\export.py "D:\HermesSync\Hermes\projects\A股数据基础设施\A股公告阅读"
 ```
 
-能力库注册指向导出目录的 `ashare_announcements_mcp/server.py`。源码更新后重新 export，再执行能力库 reload 即可加载新版本。
+能力库注册指向导出目录的 `ashare_announcements_mcp/server.py`。所有修改必须先在本开发库完成并通过测试，随后先提交 Git，再执行 export；禁止直接修改用户版导出目录。
+
+开发测试环境：`D:\venvs\a-share-announcements\Scripts\python.exe`。
 
 ## 开发约束
 
