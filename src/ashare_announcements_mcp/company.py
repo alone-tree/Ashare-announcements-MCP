@@ -7,6 +7,8 @@ from typing import Any
 import requests
 
 from ashare_announcements_mcp.api import HEADERS
+from ashare_announcements_mcp.cache import load_companies, save_companies
+from ashare_announcements_mcp.service import sync_archive
 
 
 SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
@@ -69,3 +71,128 @@ def check_company(keyword: str) -> dict[str, Any]:
     if source_total > len(candidates):
         result["hint"] = "命中数超过返回上限，请使用更精确的关键词重新查询"
     return result
+
+
+def _resolve_security(code: str) -> dict[str, Any]:
+    """精确查询单个证券代码，返回建档所需的普通 A/H 公司证券信息。"""
+    text = str(code).strip()
+    if not text:
+        raise ValueError("代码不能为空")
+    if not text.isdigit():
+        raise ValueError(f"代码必须是数字：{text}")
+    candidates, _ = _search(text)
+    matched = [item for item in candidates if str(item.get("Code") or "") == text]
+    if not matched:
+        raise ValueError(f"无法精确查询到证券：{text}")
+    item = matched[0]
+    classify = str(item.get("Classify") or "")
+    type_us = str(item.get("TypeUS") or "")
+    if classify == "AStock":
+        market = "A"
+    elif classify == "HK" and type_us == "3":
+        market = "H"
+    else:
+        raise ValueError(
+            f"{text} 不是普通 A/H 公司证券（Classify={classify} TypeUS={type_us}），拒绝建档"
+        )
+    inner_code = str(item.get("InnerCode") or "")
+    if market == "H" and not inner_code:
+        raise ValueError(f"{text} 缺少港股 InnerCode，拒绝建档")
+    return {
+        "code": text,
+        "name": str(item.get("Name") or ""),
+        "market": market,
+        "classify": classify,
+        "inner_code": inner_code,
+    }
+
+
+def establish_company(codes: list[str]) -> dict[str, Any]:
+    """按明确代码数组建档，保存公司映射并同步各证券公告列表。"""
+    if not isinstance(codes, list) or not codes:
+        raise ValueError("codes 必须是非空数组")
+    if len(codes) > 2:
+        raise ValueError("codes 最多接受一个 A 股代码加一个 H 股代码")
+
+    securities = [_resolve_security(code) for code in codes]
+    markets = {security["market"] for security in securities}
+    if len(markets) != len(securities):
+        raise ValueError("codes 不能包含两个同市场代码")
+
+    registry = load_companies()
+    companies = registry["companies"]
+    aliases = registry["aliases"]
+
+    owned_keys = {
+        security["code"]: aliases.get(security["code"]) for security in securities
+    }
+    existing_keys = {key for key in owned_keys.values() if key}
+    if len(existing_keys) > 1:
+        raise RuntimeError("所选代码分属不同公司，拒绝合并建档")
+    company_key = existing_keys.pop() if existing_keys else None
+
+    if company_key:
+        existing = companies[company_key]["securities"]
+        existing_markets = {security["market"] for security in existing}
+        for security in securities:
+            if security["market"] in existing_markets and not any(
+                item["code"] == security["code"] for item in existing
+            ):
+                raise RuntimeError(
+                    f"{security['code']} 与公司 {company_key} 现有 {security['market']} 股代码冲突"
+                )
+    else:
+        company_key = next(
+            (security["code"] for security in securities if security["market"] == "A"),
+            securities[0]["code"],
+        )
+        companies[company_key] = {"securities": []}
+
+    company = companies[company_key]
+    for security in securities:
+        if not any(item["code"] == security["code"] for item in company["securities"]):
+            company["securities"].append(
+                {
+                    "code": security["code"],
+                    "market": security["market"],
+                    "name": security["name"],
+                    "classify": security["classify"],
+                    "inner_code": security["inner_code"],
+                }
+            )
+        aliases[security["code"]] = company_key
+    save_companies({"companies": companies, "aliases": aliases})
+
+    results = []
+    for security in securities:
+        try:
+            items, status = sync_archive(
+                security["code"],
+                ann_type="H" if security["market"] == "H" else "A",
+                inner_code=security["inner_code"] if security["market"] == "H" else None,
+            )
+            results.append(
+                {
+                    "code": security["code"],
+                    "market": security["market"],
+                    "name": security["name"],
+                    "success": True,
+                    "total": len(items),
+                    "new": status.get("new_announcements", 0),
+                    "error": None,
+                }
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "code": security["code"],
+                    "market": security["market"],
+                    "name": security["name"],
+                    "success": False,
+                    "total": 0,
+                    "new": 0,
+                    "error": str(exc),
+                }
+            )
+
+    return {"company_key": company_key, "securities": results}

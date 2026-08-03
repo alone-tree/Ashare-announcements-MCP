@@ -24,6 +24,39 @@ def stock_cache_dir(stock_code: str) -> Path:
     return path
 
 
+def companies_path() -> Path:
+    return app_root() / "cache" / "companies.json"
+
+
+def load_companies() -> dict[str, Any]:
+    """读取公司映射；文件缺失或损坏时返回空结构。"""
+    path = companies_path()
+    if not path.exists():
+        return {"companies": {}, "aliases": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"companies": {}, "aliases": {}}
+    if not isinstance(data, dict):
+        return {"companies": {}, "aliases": {}}
+    return {
+        "companies": data.get("companies") or {},
+        "aliases": data.get("aliases") or {},
+    }
+
+
+def save_companies(data: dict[str, Any]) -> Path:
+    """原子写入公司映射。"""
+    path = companies_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
+    return path
+
+
 def load_cache(stock_code: str) -> dict[str, Any]:
     path = stock_cache_dir(stock_code) / "announcements.json"
     if not path.exists():

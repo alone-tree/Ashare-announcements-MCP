@@ -13,7 +13,7 @@ if __package__ in (None, ""):
 from mcp.server.fastmcp import FastMCP
 
 from ashare_announcements_mcp.downloader import download_pdf
-from ashare_announcements_mcp.company import check_company
+from ashare_announcements_mcp.company import check_company, establish_company as establish_securities
 from ashare_announcements_mcp.reader import (
     initialize_pdf_engine,
     inspect_pdf,
@@ -33,14 +33,24 @@ mcp = FastMCP("A 股公告阅读")
 
 @mcp.tool()
 def establish_company(
-    keyword: str,
     action: str = "check",
+    keyword: str | None = None,
+    codes: list[str] | None = None,
 ) -> dict[str, Any]:
-    """查询东方财富中的 A 股和港股上市公司证券；当前仅支持 check。"""
+    """查询或建档东方财富 A/H 上市公司。
+
+    action=check 用 keyword 搜索候选证券（不过滤、不归组，忠实返回前 20 条）。
+    action=establish 用 codes 建档（一个代码，或一个 A 股代码加一个 H 股代码；
+    不要使用 -R、-WR 等人民币柜台代码建档，应选择主要港股代码）。
+    """
     try:
-        if action != "check":
-            raise ValueError("当前仅支持 action=check")
-        return {"ok": True, "action": action, **check_company(keyword)}
+        if action == "check":
+            if not keyword:
+                raise ValueError("action=check 需要 keyword")
+            return {"ok": True, "action": action, **check_company(keyword)}
+        if action == "establish":
+            return {"ok": True, "action": action, **establish_securities(codes or [])}
+        raise ValueError(f"未知 action：{action}")
     except Exception as exc:
         return {"ok": False, "action": action, "error": str(exc)}
 

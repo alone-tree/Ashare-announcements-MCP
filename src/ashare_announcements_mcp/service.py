@@ -42,15 +42,24 @@ def keyword_matches(item: dict[str, Any], keyword: str | None) -> bool:
     return any(term in haystack for term in terms)
 
 
-def sync_archive(code: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """维护完整档案；查询层只消费本函数返回的缓存快照。"""
+def sync_archive(
+    code: str,
+    ann_type: str = "A",
+    inner_code: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """维护完整档案；查询层只消费本函数返回的缓存快照。
+
+    ann_type 用于 A/H 公告接口；inner_code 用于港股按当前证券过滤旧公司记录。
+    """
     cached = load_cache(code)
     items = cached.get("items") or []
     meta = cached.get("meta") or {}
     archive_was_complete = bool(items) and bool(meta.get("cache_complete"))
     try:
         if not archive_was_complete:
-            fetched, fetch_meta = fetch_all_announcements(code, page_size=PAGE_SIZE)
+            fetched, fetch_meta = fetch_all_announcements(
+                code, page_size=PAGE_SIZE, ann_type=ann_type, expected_inner_code=inner_code
+            )
             if not fetch_meta.get("cache_complete"):
                 raise RuntimeError("首次建档未能获取全部公告")
             items = merge_items([], fetched)
@@ -59,7 +68,13 @@ def sync_archive(code: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             known_codes = {
                 str(item.get("code") or item.get("url") or "") for item in items
             }
-            fetched, fetch_meta = fetch_updates(code, known_codes, page_size=PAGE_SIZE)
+            fetched, fetch_meta = fetch_updates(
+                code,
+                known_codes,
+                page_size=PAGE_SIZE,
+                ann_type=ann_type,
+                expected_inner_code=inner_code,
+            )
             new_count = len(fetched)
             if not fetched:
                 return items, {
