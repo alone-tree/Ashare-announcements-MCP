@@ -1,0 +1,70 @@
+{
+  "generated_at": "2026-08-03T14:32:29",
+  "notices": [
+    {
+      "code": "300308",
+      "ann_type": "A",
+      "api_total_hits": 2761,
+      "pages": 56,
+      "received": 2761,
+      "unique_art_codes": 2761,
+      "recent_5y_since_2021_08_03": 1041,
+      "newest": {
+        "time": "2026-07-30 20:35:42",
+        "title": "涓檯鏃垱:鍏充簬鎺ц偂鑲′笢鍙婂叾涓€鑷磋鍔ㄤ汉鎸佽偂姣斾緥鍙樺姩瓒呰繃1%鏁存暟鍊嶇殑鍏憡",
+        "art_code": "AN202607301827498678"
+      },
+      "oldest": {
+        "time": "2012-01-05 00:00:00",
+        "title": "灞变笢涓檯鐢靛伐瑁呭鑲′唤鏈夐檺鍏徃棣栨鍏紑鍙戣鑲＄エ骞跺湪鍒涗笟鏉夸笂甯傛嫑鑲¤鏄庝功(鐢虫姤绋?",
+        "art_code": "AN201203030004977410"
+      },
+      "pdf": {
+        "url": "https://pdf.dfcfw.com/pdf/H2_AN202607301827498678_1.pdf",
+        "http": 200,
+        "content_type": "application/pdf",
+        "bytes": 155408,
+        "magic": "%PDF-"
+      },
+      "elapsed_seconds": 16.06
+    },
+    {
+      "code": "03308",
+      "ann_type": "H",
+      "api_total_hits": 919,
+      "pages": 19,
+      "received": 919,
+      "unique_art_codes": 919,
+      "recent_5y_since_2021_08_03": 110,
+      "newest": {
+        "time": "2026-07-30 22:20:13",
+        "title": "娴峰鐩戠鍏憡",
+        "art_code": "AN202607301827500445"
+      },
+      "oldest": {
+        "time": "2006-03-08 00:00:00",
+        "title": "鎷涜偂绔犵▼",
+        "art_code": "AN201511240011525265"
+      },
+      "pdf": {
+        "url": "https://pdf.dfcfw.com/pdf/H2_AN202607301827500445_1.pdf",
+        "http": 200,
+        "content_type": "application/pdf",
+        "bytes": 988,
+        "magic": "<scri"
+      },
+      "elapsed_seconds": 5.27
+    }
+  ],
+  "qa_js": {
+    "js_url": "https://gbfek.dfcfw.com/deploy/guba_web_qa/work/qa_search.js?r=262",
+    "bytes": 182757,
+    "markers": {
+      "question/api/Info/Search": "澶峔";2==a?c=\"鏆傛棤浼犻椈姹傝瘉\":3==a&&(c=\"鏆傛棤鍏徃鍙戝竷\"),$(\"#qa_list_content\").html(l({my:!1,emptyText:c}))}$(\"#qa_list_more\").hide()}else $(\"#qa_list_more\").show();$(\"#qa_list_more\").click(function(){o.getMore(t)}),r.launchIn(\".qa_social_btn\"),s($(\"#qa_list_content\"))},getQAType:function(){var t=a.url.getQueryString(\"type\");return\"qa_search\"==window.pagetype?t||1:t||0},getMore:function(t){if(\"鍔犺浇涓?..\"!=$(\"#qa_list_more\").text()){var e=this,n=this.getQAType();$(\"#qa_list_more\").text(\"鍔犺浇涓?..\");var o=window.barcode?\"question/api/Info/Search\":\"question/api/Question/GetQaList\",i=window.barcode?{code:window.barcode,ps:15,p:l+1,qatype:n}:{pageNum:15,pageIndex:l+1,question_type:n};a.net.send(o,i).success(function(o){if($(\"#qa_list_more\").text(\"鐐瑰嚮鍔犺浇鏇村\"),o&&1==o.rc&&o.re.length>0){l+=1;for(var i=o.re.length,r=\"\",a=0;a<i;++a)r+=e.renderItem(o.re[a],n);htmlsObj=$(r),s(htmlsObj,o),$(t).append(htmlsObj),o.PageIndex*o.PageSize>=o.count&&$(\"#qa_list_more\").hide()}}).error(function(){$(\"#qa_list_more\").text(\"鐐瑰嚮鍔犺浇鏇村\")})}}}},328:function(t,e){},329:function(t,e,n){var o=n(0);function i(t){return t&&(t.__esModule?t[\"default\"]:t)}t.exports=(o[\"default\"]||o).template({1:function(t,e,n,o,i){var r=t.lambda,a=t.escapeExpression;return'        <a href=\"/list,'+a(r(null!=e?e.stockbar_code:e,e))+'.html\" target=\"_blank\">\\r\\n            <div class=\"avatar_code icon icon_stock_bg\">'+a(r(null!=e?e.stockbar_code:e,e))+'</div>\\r\\n        </a>\\r\\n        <a href=\"/list,'+a(r(null!=e?e.stockbar_code:e,e))+'.html\" target=\"_blank\">",
+      "sendGubawebapi": "ace/GetData.aspx\",s.path=t,c=n||1):(o=\"/interface/GetData.aspx\",s.path=t,c=n||2),s.env=c,function(t,e){var n=new a,t=t;try{!0===window.dualActive&&(t=t.replace(\"/interface/\",\"/interfaceX/\"))}catch(t){console.log(t)}return $.ajax({type:\"POST\",url:t,dataType:\"json\",data:e,xhrFields:{withCredentials:!0},success:function(t){n.successCall&&(t.eResult&&(t.re=r.d(t.eResult),t.re=JSON.parse(t.re)),n.successCall(t))},error:function(t){n.errorCall&&n.errorCall(t)}}),n}(o,s)},ajax:u,jsonp:s,sendByScript:d,sendGubawebapi:function(t,e,n){var o={pi:\"ecp\",isweb:!0,deviceid:\"guba\",version:\"3.1.1\",product:\"Guba\",plat:\"Web\"};for(var i in e)o[i]=e[i];return s(\"//gubawebapi.eastmoney.com/v3/\"+t,o,\"jsonp\",n)},sendAskapi:function(t,e,n){var o=\"/interface/\"+t+\".aspx\";return n.AppId=\"EM_PC_Web\",e&&(n={url:e,key:JSON.stringify(n)}),helper.env.isDevelop?(o=window.location.protocol+\"//\"+window.location.hostname+\":\"+(1*window.location.port+2)+\"/transfer\",o+=\"?remote=//gubadevelop.eastmoney.com/wenda/\"+t+\".aspx\",u(o+=\"&origin=//\"+window.location.host,n)):u(o,n)},getBulletin:function(t,e,n){n=n||600;var o=\"//gubawebapi.eastmoney.com\";(window.location.href.indexOf(\"gubatest.eastmoney\")>0||window.location.href.indexOf(\"guba-test.eastmoney\")>0)&&(o=\"//gubatestapi.eastmoney.com\"),$.ajax({async:!1,url:o+\"/v3/read/Banner/TopicBulletin.aspx?deviceid=1&version=100&product=guba&plat=web\",type:\"GET\",dataType:\"jsonp\",timeout:5e3,data:{url:encodeURIComponent(t),cachetime:n},success:function(t){e&&e(t)}})},getBulletin",
+      "sendNewGubaapi": "n.aspx?deviceid=1&version=100&product=guba&plat=web\",type:\"GET\",dataType:\"jsonp\",timeout:5e3,data:{url:encodeURIComponent(t),cachetime:n},success:function(t){e&&e(t)}})},getBulletin2:function(t,e,n){n=n||600,$.ajax({async:!1,url:\"/interface/GetBulletin.aspx?url=\"+encodeURIComponent(t)+\"&cachetime=\"+n,type:\"GET\",timeout:5e3,data:{},success:function(t){e&&e(t)}})},getGubaApiHost:function(){var t=\"//gubaapi4app-test.eastmoney.com\";return i.isRelease&&(t=\"https://gubaapi4apphttps.eastmoney.com\"),t},sendNewGubaapi:c,sendInterface:function(t,e){var n=\"/\"+t;return e=e||{},i.isDevelop&&(n=\"//guba-test.eastmoney.com\"+n,e.origin=window.location.origin),u(n,e)},sendHongbaoapi:function(t,e){var n=3;return helper.env.isRelease&&(n=4),c(t,JSON.stringify(e),n)},sendFundApi:function(t,e){return d(\"//fundwebapi.eastmoney.com\"+t,e?JSON.stringify(e):\"\")},loadImg:function(t){var e=new Image;return e.src=t,e},getHq:function(t,e){e=$.extend({fields:\"\"},e);var n=t.indexOf(\",\")>=0,i=\"\",r=\"UID|0|MOBILE|0|web\";r=o.get(\"uidal\")?r.replace(\"UID\",helper.cookie.get(\"uidal\").substring(0,16)):r.replace(\"UID\",\"\"),r=null!=o.get(\"mtp\")?\"0\"==o.get(\"mtp\")?r.replace(\"MOBILE\",\"3\"):r.replace(\"MOBILE\",helper.cookie.get(\"mtp\")):r.replace(\"MOBILE\",\"0\"),n?(e.fields||(e.fields=\"f1,f2,f3,f12,f13,f14,f152\"),i=\"//push2.eastmoney.com/api/qt/ulist.np/get?invt=2&fltt=2&np=3&ut=a79f54e3d4c8d44e494efb8f748db291&secids=\"+t+\"&fields=\"+e.fields+\"&wbp2u=\"+r):(e.fields||(e.fields=\"f43,f170,f57,f107,f58\"),i=\"//push2.eastmoney.com/api/",
+      "send:function": "column\",{value:a,enumerable:!0}):this.column=a)}catch(t){}}i.prototype=new Error,e[\"default\"]=i,t.exports=e[\"default\"]},40:function(t,e){var n={};t.exports={input:function(t,e){!function(t,e){n[t]=e}(t,e)},output:n,updateObject:function t(e,n){for(var o in n){var i=n[o];e.hasOwnProperty(o)&&\"object\"==typeof i?t(e[o],n[o]):e[o]=n[o]}}}},41:function(t,e){var n={turnOn:!0,print:function(t){n.turnOn&&console.log(t)},warn:function(t){n.turnOn&&alert(t)}};t.exports=n},42:function(t,e,n){var o=n(7),i={send:function(t,e,n,i){o.send(t,e).success(function(t){1!=t.rc&&1!=t.result||n(t)}).error(function(t){i&&i(t),console.log(t)})},UserBriefInfo:function(t,e,n){i.send(\"userinfo/api/Web/UserBriefInfo\",t,e,n)},UserShortInfluContentList:function(t,e,n){i.send(\"userinfo/api/Web/UserShortInfluContentList\",t,e,n)},LikeReply:function(t,e,n){i.send(\"likeopt/api/Like/LikeReply\",t,e,n)},CancelLikeReply:function(t,e,n){i.send(\"likeopt/api/Like/CancelLikeReply\",t,e,n)},LikeArticle:function(t,e,n){i.send(\"likeopt/api/Like/LikeArticle\",t,e,n)},CancelLikeArticle:function(t,e,n){i.send(\"likeopt/api/Like/CancelLikeArticle\",t,e,n)},ViewReply:function(t,e,n){i.send(\"reply/api/Reply/ViewReply\",t,e,n)}};t.exports=i},43:function(t,e){t.exports={IEVersion:function(){var t=navigator.userAgent,e=t.indexOf(\"compatible\")>-1&&t.indexOf(\"MSIE\")>-1,n=t.indexOf(\"Edge\")>-1&&!e,o=t.indexOf(\"Trident\")>-1&&t.indexOf(\"rv:11.0\")>-1;if(e){new RegExp(\"MSIE (\\\\d+\\\\.\\\\d+);\").test(t);var i=parseFloat(RegExp.$1);return 7==i?7:8=="
+    },
+    "module7": null
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "generated_at": "2026-08-03T14:34:32",
+  "qa": {
+    "api_count": 1697,
+    "pages": 114,
+    "page_size": 15,
+    "successful_pages": 114,
+    "errors": [],
+    "received": 1697,
+    "unique_post_ids": 1697,
+    "recent_5y_since_2021_08_03": 1297,
+    "newest": {
+      "post_id": 1737959059,
+      "question_time": "2026-06-28 08:24:15",
+      "answer_time": null,
+      "question": "杩戞湡浼犻椈鍏徃涓婃父鐗╂枡鐐厜鐗囪灏侀攣锛屽競鍦哄畾浣嶅叕鍙稿彧鏄竴涓腑娓哥粍瑁呭巶锛岄潰涓翠笂涓嬫父鎸ゅ帇"
+    },
+    "oldest": {
+      "post_id": 915987837,
+      "question_time": "2014-07-10 22:56:00",
+      "answer_time": null,
+      "question": "浣犲ソ锛屽叕鍙稿叾瀹炴湁鏈哄櫒浜烘櫤鑳借澶囨蹇碉紝鍖荤枟鍣ㄦ姒傚康锛屽彲鎯滃叕鍙稿浼犲お灏戯紝鍏诲湪娣遍椇浜烘湭"
+    },
+    "elapsed_seconds": 2.16
+  }
+}

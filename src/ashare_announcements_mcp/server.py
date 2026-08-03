@@ -13,6 +13,7 @@ if __package__ in (None, ""):
 from mcp.server.fastmcp import FastMCP
 
 from ashare_announcements_mcp.downloader import download_pdf
+from ashare_announcements_mcp.company import check_company
 from ashare_announcements_mcp.reader import (
     initialize_pdf_engine,
     inspect_pdf,
@@ -28,6 +29,20 @@ from ashare_announcements_mcp.service import (
 
 
 mcp = FastMCP("A 股公告阅读")
+
+
+@mcp.tool()
+def establish_company(
+    keyword: str,
+    action: str = "check",
+) -> dict[str, Any]:
+    """查询东方财富中的 A 股和港股上市公司证券；当前仅支持 check。"""
+    try:
+        if action != "check":
+            raise ValueError("当前仅支持 action=check")
+        return {"ok": True, "action": action, **check_company(keyword)}
+    except Exception as exc:
+        return {"ok": False, "action": action, "error": str(exc)}
 
 
 @mcp.tool()
