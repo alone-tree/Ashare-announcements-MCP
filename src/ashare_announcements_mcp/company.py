@@ -13,13 +13,6 @@ SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
 SEARCH_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
 
 
-def _is_company_security(item: dict[str, Any]) -> bool:
-    classify = str(item.get("Classify") or "")
-    if classify == "AStock":
-        return True
-    return classify == "HK" and str(item.get("TypeUS") or "") == "3"
-
-
 def _search(keyword: str) -> tuple[list[dict[str, Any]], int]:
     response = requests.get(
         SEARCH_URL,
@@ -60,40 +53,19 @@ def _format_security(item: dict[str, Any]) -> dict[str, str]:
 
 
 def check_company(keyword: str) -> dict[str, Any]:
-    """查询关键词，并补查首次命中公司的同名 A/H 证券。"""
+    """查询关键词，忠实返回东方财富搜索接口的候选，不过滤、不归组。"""
     text = str(keyword).strip()
     if not text:
         raise ValueError("keyword 不能为空")
 
-    initial, source_total = _search(text)
-    securities = [item for item in initial if _is_company_security(item)]
-    if text.isdigit() and len(text) in (5, 6):
-        securities = [item for item in securities if str(item.get("Code") or "") == text]
-
-    names = {str(item.get("Name") or "").strip() for item in securities}
-    for name in sorted(names):
-        if not name or name == text:
-            continue
-        related, _ = _search(name)
-        securities.extend(
-            item
-            for item in related
-            if str(item.get("Name") or "").strip() == name and _is_company_security(item)
-        )
-
-    unique: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for item in securities:
-        key = (
-            str(item.get("Classify") or ""),
-            str(item.get("Code") or ""),
-            str(item.get("InnerCode") or ""),
-        )
-        unique[key] = item
-
-    candidates = [_format_security(item) for item in unique.values()]
-    candidates.sort(key=lambda item: (item["name"], item["classify"], item["code"]))
-    return {
+    raw_candidates, source_total = _search(text)
+    candidates = [_format_security(item) for item in raw_candidates]
+    result: dict[str, Any] = {
         "keyword": text,
         "source_total_count": source_total,
+        "returned_count": len(candidates),
         "candidates": candidates,
     }
+    if source_total > len(candidates):
+        result["hint"] = "命中数超过返回上限，请使用更精确的关键词重新查询"
+    return result
