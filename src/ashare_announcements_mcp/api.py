@@ -6,11 +6,13 @@ import json
 import random
 import time
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
 
 API_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+QA_URL = "https://guba.eastmoney.com/interface/GetData.aspx"
 PDF_URL = "https://pdf.dfcfw.com/pdf/H2_{art_code}_1.pdf"
 HEADERS = {
     "User-Agent": (
@@ -20,6 +22,12 @@ HEADERS = {
     "Accept": "*/*",
     "Accept-Language": "zh-CN,zh;q=0.9",
     "Referer": "https://data.eastmoney.com/notices/",
+}
+QA_HEADERS = {
+    **HEADERS,
+    "Content-Type": "application/x-www-form-urlencoded",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://guba.eastmoney.com/qa/qa_search.aspx?company={stock_code}&qatype=1",
 }
 
 
@@ -201,4 +209,99 @@ def fetch_updates(
         "fetched_pages": fetched_pages,
         "source_total": source_total,
         "cache_complete": len(new_items) >= source_total,
+    }
+
+
+def _format_interaction(item: dict[str, Any]) -> dict[str, str]:
+    """只保留互动问答查询需要的字段。"""
+    return {
+        "post_id": str(item.get("post_id") or ""),
+        "stockbar_code": str(item.get("stockbar_code") or ""),
+        "stockbar_name": str(item.get("stockbar_name") or ""),
+        "post_publish_time": str(item.get("post_publish_time") or ""),
+        "post_display_time": str(item.get("post_display_time") or ""),
+        "ask_question": str(item.get("ask_question") or ""),
+        "ask_answer": str(item.get("ask_answer") or ""),
+    }
+
+
+def fetch_qa_page(
+    stock_code: str, page: int, page_size: int = 15
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """抓取一页互动问答；post_display_time 是回答展示时间。"""
+    headers = {**QA_HEADERS, "Referer": QA_HEADERS["Referer"].format(stock_code=stock_code)}
+    param = urlencode(
+        {"code": stock_code, "ps": page_size, "p": page, "qatype": 1}
+    )
+    response = requests.post(
+        QA_URL,
+        data={"path": "question/api/Info/Search", "param": param, "env": "2"},
+        headers=headers,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not payload.get("re") and payload.get("error_code") not in (0, None):
+        raise RuntimeError(f"东方财富互动问答接口失败：{payload.get('me') or '未知错误'}")
+    rows = payload.get("re") or []
+    items = [_format_interaction(item) for item in rows]
+    return items, {
+        "total": int(payload.get("count") or len(items)),
+        "total_pages": int(payload.get("TotalPage") or 0),
+        "page_index": int(payload.get("PageIndex") or page),
+    }
+
+
+def fetch_all_interactions(
+    stock_code: str, page_size: int = 15
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """首次建档时翻完全部互动问答页。"""
+    all_items: list[dict[str, str]] = []
+    meta: dict[str, Any] = {"total": 0, "total_pages": 0}
+    for page in range(1, 501):
+        items, page_meta = fetch_qa_page(stock_code, page, page_size)
+        meta = page_meta
+        if not items:
+            break
+        all_items.extend(items)
+        if meta["total_pages"] and page >= meta["total_pages"]:
+            break
+        time.sleep(0.12)
+    complete = bool(all_items) and (meta["total_pages"] == 0 or len(all_items) >= meta["total"])
+    return all_items, {
+        "total": meta["total"],
+        "total_pages": meta["total_pages"],
+        "cache_complete": complete,
+    }
+
+
+def fetch_interaction_updates(
+    stock_code: str,
+    known_ids: set[str],
+    page_size: int = 15,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """从最新页向后读取，遇到缓存中的 post_id 后停止。"""
+    new_items: list[dict[str, str]] = []
+    meta: dict[str, Any] = {"total": 0, "total_pages": 0}
+    for page in range(1, 501):
+        items, page_meta = fetch_qa_page(stock_code, page, page_size)
+        meta = page_meta
+        if not items:
+            break
+        for item in items:
+            identity = str(item.get("post_id") or "")
+            if identity in known_ids:
+                return new_items, {
+                    "total": meta["total"],
+                    "total_pages": meta["total_pages"],
+                    "cache_complete": True,
+                }
+            new_items.append(item)
+        if meta["total_pages"] and page >= meta["total_pages"]:
+            break
+        time.sleep(0.12)
+    return new_items, {
+        "total": meta["total"],
+        "total_pages": meta["total_pages"],
+        "cache_complete": len(new_items) >= meta["total"],
     }

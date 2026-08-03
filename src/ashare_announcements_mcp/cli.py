@@ -13,7 +13,7 @@ from typing import Any, Callable
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ashare_announcements_mcp.service import query_archive
+from ashare_announcements_mcp.service import query_archive, query_interactions
 
 
 def _status(items: list[dict[str, Any]]) -> str:
@@ -179,8 +179,37 @@ def _map_announcements(
     return _batch_response(action, outputs, result_key)
 
 
+def query_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
+    stock_codes = request.get("stock_codes")
+    if not isinstance(stock_codes, list) or not stock_codes:
+        raise ValueError("stock_codes 必须是非空数组")
+
+    companies: list[dict[str, Any]] = []
+    interactions: list[dict[str, Any]] = []
+    for value in stock_codes:
+        stock_code = str(value)
+        try:
+            result = query_interactions(
+                stock_code,
+                start_date=request.get("start_date"),
+                end_date=request.get("end_date"),
+                keyword=request.get("keyword"),
+            )
+            company = {"ok": True, **result}
+            interactions.extend(result.get("results") or [])
+        except Exception as exc:
+            company = {"ok": False, "stock_code": stock_code, "error": str(exc), "results": []}
+        companies.append(company)
+
+    response = _batch_response("query_interactions_batch", companies, "companies")
+    response["interactions"] = interactions
+    response["matched"] = len(interactions)
+    return response
+
+
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "query_batch": query_batch,
+    "query_interactions_batch": query_interactions_batch,
     "inspect_batch": inspect_batch,
     "search_batch": search_batch,
     "read_batch": read_batch,

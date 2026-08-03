@@ -6,12 +6,19 @@ import re
 from datetime import date
 from typing import Any
 
-from ashare_announcements_mcp.api import fetch_all_announcements, fetch_updates
+from ashare_announcements_mcp.api import (
+    fetch_all_announcements,
+    fetch_all_interactions,
+    fetch_interaction_updates,
+    fetch_updates,
+)
 from ashare_announcements_mcp.cache import (
     load_cache,
     load_companies,
+    load_interactions,
     merge_items,
     save_cache,
+    save_interactions,
 )
 
 PAGE_SIZE = 50
@@ -221,3 +228,104 @@ def paginate_query(result: dict[str, Any], page: int, page_size: int = PAGE_SIZE
         "has_more": page < total_pages,
         "results": results[offset : offset + page_size],
     }
+
+
+def _resolve_a_code(stock_code: str) -> str:
+    """通过公司映射定位 A 股代码；纯港股或未建档时报错。"""
+    code = normalize_stock_code(stock_code)
+    company_key, securities = resolve_company(code)
+    for security in securities:
+        if security["market"] == "A":
+            return security["code"]
+    raise ValueError("港股无互动问答，不适用")
+
+
+def sync_interactions(code: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """维护互动问答完整档案；首次全量，之后从最新页增量更新。"""
+    cached = load_interactions(code)
+    items = cached.get("items") or []
+    meta = cached.get("meta") or {}
+    archive_was_complete = bool(items) and bool(meta.get("cache_complete"))
+    try:
+        if not archive_was_complete:
+            fetched, fetch_meta = fetch_all_interactions(code)
+            if not fetch_meta.get("cache_complete"):
+                raise RuntimeError("首次建档未能获取全部互动问答")
+            items = fetched
+            new_count = len(items)
+        else:
+            known_ids = {str(item.get("post_id") or "") for item in items}
+            fetched, fetch_meta = fetch_interaction_updates(code, known_ids)
+            new_count = len(fetched)
+            if not fetched:
+                return items, {
+                    "update_check_ok": True,
+                    "new_interactions": 0,
+                    "update_error": None,
+                }
+            items = fetched + items
+        meta = {**meta, **fetch_meta, "cache_complete": True}
+        save_interactions(code, items, meta)
+        return items, {
+            "update_check_ok": True,
+            "new_interactions": new_count,
+            "update_error": None,
+        }
+    except Exception as exc:
+        if archive_was_complete:
+            return items, {
+                "update_check_ok": False,
+                "new_interactions": 0,
+                "update_error": str(exc),
+            }
+        raise RuntimeError(f"无法建立完整互动问答档案：{exc}") from exc
+
+
+def query_interactions(
+    stock_code: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    keyword: str | None = None,
+) -> dict[str, Any]:
+    """查询互动问答；纯港股返回不适用。日期按回答时间筛选。"""
+    start = optional_date(start_date, "start_date")
+    end = optional_date(end_date, "end_date")
+    if start and end and start > end:
+        raise ValueError("start_date 不能晚于 end_date")
+
+    code = _resolve_a_code(stock_code)
+    items, update_status = sync_interactions(code)
+    filtered = []
+    for item in items:
+        item_date = str(item.get("post_display_time") or "")[:10]
+        if start and item_date and item_date < start.isoformat():
+            continue
+        if end and item_date and item_date > end.isoformat():
+            continue
+        if not interaction_keyword_matches(item, keyword):
+            continue
+        filtered.append(item)
+
+    return {
+        "stock_code": code,
+        "stock_name": items[0].get("stockbar_name", "") if items else "",
+        "total_interactions": len(items),
+        "matched": len(filtered),
+        **update_status,
+        "results": filtered,
+    }
+
+
+def interaction_keyword_matches(item: dict[str, Any], keyword: str | None) -> bool:
+    """空格表示 OR；显式写 AND 时要求所有关键词都命中。问题和回答都检索。"""
+    if not keyword:
+        return True
+    haystack = (
+        f"{item.get('ask_question', '')} {item.get('ask_answer', '')}".lower()
+    )
+    text = keyword.strip().lower()
+    if re.search(r"\s+and\s+", text, flags=re.IGNORECASE):
+        terms = [term.strip() for term in re.split(r"\s+and\s+", text, flags=re.IGNORECASE)]
+        return all(term in haystack for term in terms if term)
+    terms = [term for term in text.split() if term]
+    return any(term in haystack for term in terms)

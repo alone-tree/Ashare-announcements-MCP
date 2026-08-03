@@ -25,6 +25,7 @@ from ashare_announcements_mcp.service import (
     normalize_stock_code as _stock_code,
     paginate_query,
     query_archive,
+    query_interactions as query_interactions_service,
 )
 
 
@@ -126,6 +127,29 @@ async def search_announcement(
 def _validate_pdf_url(url: str) -> None:
     if not url.startswith("https://pdf.dfcfw.com/pdf/"):
         raise ValueError("url 必须是东方财富 pdf.dfcfw.com 公告链接")
+
+
+@mcp.tool()
+def query_interactions(
+    stock_code: str,
+    page: int = 1,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    keyword: str | None = None,
+) -> dict[str, Any]:
+    """查询 A 股互动问答；纯港股返回不适用。首次全量建档，之后增量更新。"""
+    try:
+        if page < 1:
+            raise ValueError("page 必须大于等于 1")
+        result = query_interactions_service(
+            stock_code,
+            start_date=start_date,
+            end_date=end_date,
+            keyword=keyword,
+        )
+        return {"ok": True, **paginate_query(result, page, PAGE_SIZE)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @mcp.tool()

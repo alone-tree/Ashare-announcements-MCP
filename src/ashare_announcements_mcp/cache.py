@@ -68,6 +68,30 @@ def load_cache(stock_code: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {"items": [], "meta": {}}
 
 
+def load_interactions(stock_code: str) -> dict[str, Any]:
+    """读取互动问答缓存；文件缺失或损坏时返回空结构。"""
+    path = stock_cache_dir(stock_code) / "interactions.json"
+    if not path.exists():
+        return {"items": [], "meta": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"items": [], "meta": {}}
+    return data if isinstance(data, dict) else {"items": [], "meta": {}}
+
+
+def save_interactions(stock_code: str, items: list[dict[str, Any]], meta: dict[str, Any]) -> Path:
+    path = stock_cache_dir(stock_code) / "interactions.json"
+    payload = {
+        "meta": {**meta, "updated_at": datetime.now().astimezone().isoformat(timespec="seconds")},
+        "items": items,
+    }
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
 def save_cache(stock_code: str, items: list[dict[str, Any]], meta: dict[str, Any]) -> Path:
     path = stock_cache_dir(stock_code) / "announcements.json"
     payload = {
