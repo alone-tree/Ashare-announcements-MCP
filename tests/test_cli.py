@@ -276,3 +276,36 @@ def test_main_returns_top_level_error_for_non_object(monkeypatch) -> None:
 def test_cli_rejects_unknown_action() -> None:
     with pytest.raises(ValueError, match="未知 action"):
         cli.dispatch({"action": "unknown"})
+
+
+def test_cli_establish_check_requires_keyword() -> None:
+    with pytest.raises(ValueError, match="check 需要 keyword"):
+        cli.dispatch({"action": "establish_company", "action_type": "check"})
+
+
+def test_cli_establish_establish_requires_codes() -> None:
+    with pytest.raises(ValueError, match="establish 需要非空 codes 数组"):
+        cli.dispatch({"action": "establish_company", "action_type": "establish"})
+
+
+def test_cli_establish_company_delegates(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "check_company",
+        lambda keyword: {"source_total_count": 1, "candidates": []},
+    )
+    monkeypatch.setattr(
+        cli,
+        "establish_securities",
+        lambda codes: {"company_key": codes[0], "securities": []},
+    )
+
+    checked = cli.dispatch({"action": "establish_company", "keyword": "中际"})
+    assert checked["ok"] is True
+    assert checked["source_total_count"] == 1
+
+    established = cli.dispatch(
+        {"action": "establish_company", "action_type": "establish", "codes": ["300308"]}
+    )
+    assert established["ok"] is True
+    assert established["company_key"] == "300308"

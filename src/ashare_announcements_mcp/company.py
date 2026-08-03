@@ -8,7 +8,7 @@ import requests
 
 from ashare_announcements_mcp.api import HEADERS
 from ashare_announcements_mcp.cache import load_companies, save_companies
-from ashare_announcements_mcp.service import sync_archive
+from ashare_announcements_mcp.service import sync_archive, sync_interactions
 
 
 SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
@@ -195,4 +195,25 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
                 }
             )
 
-    return {"company_key": company_key, "securities": results}
+    interactions_status = {"applicable": False, "message": "港股无互动问答，不适用"}
+    a_security = next((s for s in securities if s["market"] == "A"), None)
+    if a_security:
+        try:
+            items, status = sync_interactions(a_security["code"])
+            interactions_status = {
+                "applicable": True,
+                "success": True,
+                "total": len(items),
+                "new": status.get("new_interactions", 0),
+                "error": None,
+            }
+        except Exception as exc:
+            interactions_status = {
+                "applicable": True,
+                "success": False,
+                "total": 0,
+                "new": 0,
+                "error": str(exc),
+            }
+
+    return {"company_key": company_key, "securities": results, "interactions": interactions_status}

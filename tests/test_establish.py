@@ -45,6 +45,13 @@ def _ok_sync(_code: str, **_kwargs: Any) -> tuple[list[dict[str, Any]], dict[str
     )
 
 
+def _ok_qa(_code: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return (
+        [{"post_id": "Q1", "ask_question": "问题", "ask_answer": "回答"}],
+        {"update_check_ok": True, "new_interactions": 1, "update_error": None},
+    )
+
+
 def _setup(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -62,6 +69,7 @@ def _setup(
 
     monkeypatch.setattr(company, "save_companies", fake_save)
     monkeypatch.setattr(company, "sync_archive", _ok_sync)
+    monkeypatch.setattr(company, "sync_interactions", _ok_qa)
     return saved
 
 
@@ -87,6 +95,9 @@ def test_establish_single_a_stock(monkeypatch: pytest.MonkeyPatch) -> None:
     saved_data = saved["data"]
     assert list(saved_data["aliases"].items()) == [("300308", "300308")]
     assert saved_data["companies"]["300308"]["securities"][0]["inner_code"] == "A-INNER"
+    assert result["interactions"]["applicable"] is True
+    assert result["interactions"]["success"] is True
+    assert result["interactions"]["total"] == 1
 
 
 def test_establish_ah_pair_uses_a_code_as_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -115,6 +126,10 @@ def test_establish_pure_hk_uses_h_code_as_key(monkeypatch: pytest.MonkeyPatch) -
 
     assert result["company_key"] == "00700"
     assert saved["data"]["aliases"] == {"00700": "00700"}
+    assert result["interactions"] == {
+        "applicable": False,
+        "message": "港股无互动问答，不适用",
+    }
 
 
 def test_establish_rejects_two_a_stocks(monkeypatch: pytest.MonkeyPatch) -> None:

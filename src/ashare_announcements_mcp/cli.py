@@ -13,6 +13,10 @@ from typing import Any, Callable
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ashare_announcements_mcp.company import (
+    check_company,
+    establish_company as establish_securities,
+)
 from ashare_announcements_mcp.service import query_archive, query_interactions
 
 
@@ -207,7 +211,24 @@ def query_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def establish_company_action(request: dict[str, Any]) -> dict[str, Any]:
+    """CLI 版建档：action_type=check 用 keyword；action_type=establish 用 codes。"""
+    action_type = request.get("action_type") or "check"
+    if action_type == "check":
+        keyword = request.get("keyword")
+        if not keyword:
+            raise ValueError("check 需要 keyword")
+        return {"ok": True, "action_type": action_type, **check_company(str(keyword))}
+    if action_type == "establish":
+        codes = request.get("codes")
+        if not isinstance(codes, list) or not codes:
+            raise ValueError("establish 需要非空 codes 数组")
+        return {"ok": True, "action_type": action_type, **establish_securities(codes)}
+    raise ValueError(f"未知 action_type：{action_type}")
+
+
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "establish_company": establish_company_action,
     "query_batch": query_batch,
     "query_interactions_batch": query_interactions_batch,
     "inspect_batch": inspect_batch,
