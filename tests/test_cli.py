@@ -31,8 +31,28 @@ def test_query_archive_filters_before_cli_batch(monkeypatch) -> None:
     ]
     monkeypatch.setattr(
         service,
+        "load_companies",
+        lambda: {
+            "companies": {
+                "000001": {
+                    "securities": [
+                        {
+                            "code": "000001",
+                            "market": "A",
+                            "name": "测试公司",
+                            "classify": "AStock",
+                            "inner_code": "A-INNER",
+                        }
+                    ]
+                }
+            },
+            "aliases": {"000001": "000001"},
+        },
+    )
+    monkeypatch.setattr(
+        service,
         "sync_archive",
-        lambda _code: (
+        lambda _code, **_kwargs: (
             items,
             {"update_check_ok": True, "new_announcements": 0, "update_error": None},
         ),
@@ -46,6 +66,7 @@ def test_query_archive_filters_before_cli_batch(monkeypatch) -> None:
     )
 
     assert result["stock_code"] == "000001"
+    assert result["company_key"] == "000001"
     assert result["total_announcements"] == 2
     assert result["matched"] == 1
     assert result["results"][0]["code"] == "A"

@@ -51,6 +51,7 @@ def query_batch(request: dict[str, Any]) -> dict[str, Any]:
                 start_date=request.get("start_date"),
                 end_date=request.get("end_date"),
                 keyword=request.get("keyword"),
+                market=request.get("market", "all"),
             )
             company = {"ok": True, **result}
             announcements.extend(result.get("results") or [])

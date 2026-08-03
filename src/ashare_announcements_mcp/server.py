@@ -62,8 +62,12 @@ def query_announcements(
     start_date: str | None = None,
     end_date: str | None = None,
     keyword: str | None = None,
+    market: str = "all",
 ) -> dict[str, Any]:
-    """查询完整公告档案；首次全量建档，之后每次查询前自动检查新公告。"""
+    """查询完整公告档案；首次全量建档，之后每次查询前自动检查新公告。
+
+    market 只筛选本地结果（all/A/H），所有关联证券都会自动增量更新。
+    """
     try:
         if page < 1:
             raise ValueError("page 必须大于等于 1")
@@ -72,6 +76,7 @@ def query_announcements(
             start_date=start_date,
             end_date=end_date,
             keyword=keyword,
+            market=market,
         )
         return {"ok": True, **paginate_query(result, page, PAGE_SIZE)}
     except Exception as exc:

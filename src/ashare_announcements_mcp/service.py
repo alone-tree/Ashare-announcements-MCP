@@ -7,17 +7,32 @@ from datetime import date
 from typing import Any
 
 from ashare_announcements_mcp.api import fetch_all_announcements, fetch_updates
-from ashare_announcements_mcp.cache import load_cache, merge_items, save_cache
+from ashare_announcements_mcp.cache import (
+    load_cache,
+    load_companies,
+    merge_items,
+    save_cache,
+)
 
 PAGE_SIZE = 50
 
 
 def normalize_stock_code(value: str) -> str:
-    """兼容 002271、SZ002271、002271.SZ 等常见格式。"""
-    matches = re.findall(r"(?<!\d)(\d{6})(?!\d)", str(value).strip().upper())
+    """兼容 002271、SZ002271、002271.SZ、HK03308 等常见格式；不自动补零。"""
+    matches = re.findall(r"(?<!\d)(\d{5,6})(?!\d)", str(value).strip().upper())
     if len(matches) != 1:
-        raise ValueError("stock_code 必须包含一个六位股票代码")
+        raise ValueError("stock_code 必须包含一个五或六位证券代码")
     return matches[0]
+
+
+def resolve_company(code: str) -> tuple[str, list[dict[str, Any]]]:
+    """通过 companies.json 定位公司及关联证券；未建档时报错。"""
+    registry = load_companies()
+    company_key = registry["aliases"].get(code)
+    if not company_key:
+        raise ValueError(f"{code} 未建档，请先 check → establish → query")
+    securities = registry["companies"].get(company_key, {}).get("securities") or []
+    return company_key, securities
 
 
 def optional_date(value: str | None, name: str) -> date | None:
@@ -105,17 +120,70 @@ def query_archive(
     start_date: str | None = None,
     end_date: str | None = None,
     keyword: str | None = None,
+    market: str = "all",
 ) -> dict[str, Any]:
-    """同步完整档案并返回本地筛选后的全部匹配公告。"""
+    """通过公司映射定位所有关联证券，同步后合并查询。
+
+    market 允许 all/A/H，只作用于本地筛选；所有关联证券都执行增量更新。
+    未建档时报错并提示 check → establish → query。
+    """
     code = normalize_stock_code(stock_code)
+    if market not in ("all", "A", "H"):
+        raise ValueError("market 必须是 all、A 或 H")
     start = optional_date(start_date, "start_date")
     end = optional_date(end_date, "end_date")
     if start and end and start > end:
         raise ValueError("start_date 不能晚于 end_date")
 
-    items, update_status = sync_archive(code)
+    company_key, securities = resolve_company(code)
+
+    merged: list[dict[str, Any]] = []
+    security_status: list[dict[str, Any]] = []
+    for security in securities:
+        market_code = security["market"]
+        try:
+            items, update_status = sync_archive(
+                security["code"],
+                ann_type="H" if market_code == "H" else "A",
+                inner_code=security["inner_code"] if market_code == "H" else None,
+            )
+            security_status.append(
+                {
+                    "code": security["code"],
+                    "market": market_code,
+                    "name": security["name"],
+                    "update": {
+                        "success": True,
+                        "total": len(items),
+                        "new": update_status.get("new_announcements", 0),
+                        "error": None,
+                    },
+                }
+            )
+            for item in items:
+                item["market"] = market_code
+            merged.extend(items)
+        except Exception as exc:
+            security_status.append(
+                {
+                    "code": security["code"],
+                    "market": market_code,
+                    "name": security["name"],
+                    "update": {
+                        "success": False,
+                        "total": 0,
+                        "new": 0,
+                        "error": str(exc),
+                    },
+                }
+            )
+
+    merged.sort(key=lambda item: str(item.get("display_time") or ""), reverse=True)
+    if market != "all":
+        merged = [item for item in merged if item.get("market") == market]
+
     filtered = []
-    for item in items:
+    for item in merged:
         item_date = str(item.get("display_time") or "")[:10]
         if start and item_date and item_date < start.isoformat():
             continue
@@ -127,10 +195,10 @@ def query_archive(
 
     return {
         "stock_code": code,
-        "stock_name": items[0].get("short_name", "") if items else "",
-        "total_announcements": len(items),
+        "company_key": company_key,
+        "securities": security_status,
+        "total_announcements": len(merged),
         "matched": len(filtered),
-        **update_status,
         "results": filtered,
     }
 

@@ -25,3 +25,5 @@ def test_stock_code_validation() -> None:
     assert _stock_code("002271") == "002271"
     assert _stock_code("SZ002271") == "002271"
     assert _stock_code("002271.SZ") == "002271"
+    assert _stock_code("03308") == "03308"
+    assert _stock_code("HK03308") == "03308"
