@@ -78,21 +78,6 @@ def _announcement_identity(item: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _inspect_item(item: dict[str, Any]) -> dict[str, Any]:
-    from ashare_announcements_mcp.downloader import download_pdf
-    from ashare_announcements_mcp.reader import inspect_pdf
-
-    identity = _announcement_identity(item)
-    if not identity["stock_code"] or not identity["url"]:
-        raise ValueError("每条公告必须包含 stock_code 和 url")
-    path, cache_hit = download_pdf(identity["stock_code"], identity["url"])
-    return {**identity, "cache_hit": cache_hit, "path": str(path), **inspect_pdf(path, identity["stock_code"])}
-
-
-def inspect_batch(request: dict[str, Any]) -> dict[str, Any]:
-    return _map_announcements("inspect_batch", request, "inspections", _inspect_item)
-
-
 def _search_item(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     from ashare_announcements_mcp.downloader import download_pdf
     from ashare_announcements_mcp.reader import search_pdf
@@ -135,7 +120,8 @@ def _read_item(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     identity = _announcement_identity(item)
     if not identity["stock_code"] or not identity["url"]:
         raise ValueError("每条公告必须包含 stock_code 和 url")
-    start_page = int(item.get("start_page", request.get("start_page", 1)))
+    raw_start = item.get("start_page", request.get("start_page"))
+    start_page = int(raw_start) if raw_start is not None else None
     raw_end_page = item.get("end_page", request.get("end_page"))
     end_page = int(raw_end_page) if raw_end_page is not None else None
     max_chars = int(item.get("max_chars", request.get("max_chars", 20_000)))
@@ -231,7 +217,6 @@ ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "establish_company": establish_company_action,
     "query_batch": query_batch,
     "query_interactions_batch": query_interactions_batch,
-    "inspect_batch": inspect_batch,
     "search_batch": search_batch,
     "read_batch": read_batch,
 }

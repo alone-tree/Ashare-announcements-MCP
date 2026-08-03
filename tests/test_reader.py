@@ -118,3 +118,89 @@ def test_index_upgrade_preserves_ocr_but_discards_old_markdown(
     assert index["pages"][0]["ocr_text"] == "已缓存 OCR"
     assert index["pages"][0]["ocr_attempted"] is True
     assert "markdown" not in index["pages"][0]
+
+
+def _fake_index(native_chars: list[int], needs_ocr: list[bool]) -> dict:
+    return {
+        "version": reader.INDEX_VERSION,
+        "source_size": 100,
+        "source_mtime_ns": 1,
+        "toc": [],
+        "pages": [
+            {
+                "page": i + 1,
+                "native_text": "正文" * max(native_chars[i] // 2, 1),
+                "native_chars": native_chars[i],
+                "image_count": 0,
+                "needs_ocr": needs_ocr[i],
+                "heading": f"标题{i + 1}",
+            }
+            for i in range(len(native_chars))
+        ],
+    }
+
+
+def _patch_read(monkeypatch, index: dict) -> None:
+    monkeypatch.setattr(
+        reader,
+        "_load_index",
+        lambda _code, _path: (Path("index.json"), index),
+    )
+    monkeypatch.setattr(reader, "_cache_native_markdown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reader, "_ocr_pages", lambda _path, pages: {p: "" for p in pages})
+    monkeypatch.setattr(reader, "_ensure_page_text", lambda *a, **k: ("第 N 页正文", "native_markdown", False))
+
+
+def test_read_detect_mode_short_returns_full_text(monkeypatch) -> None:
+    index = _fake_index(native_chars=[100] * 3, needs_ocr=[False] * 3)
+    _patch_read(monkeypatch, index)
+
+    result = reader.read_pdf(Path("sample.pdf"), "000001")
+
+    assert result["profile"] == "short"
+    assert result["pages_returned"] == [1, 2, 3]
+    assert result["next_page"] is None
+    assert result["is_last_chunk"] is True
+    assert result["recommended_workflow"] == "公告较短，已直接返回全文。"
+
+
+def test_read_detect_mode_long_returns_profile_and_three_pages(monkeypatch) -> None:
+    index = _fake_index(native_chars=[200] * 141, needs_ocr=[False] * 141)
+    _patch_read(monkeypatch, index)
+
+    result = reader.read_pdf(Path("sample.pdf"), "000001")
+
+    assert result["profile"] == "long_structured"
+    assert result["total_pages"] == 141
+    assert result["pages_returned"] == [1, 2, 3]
+    assert result["next_page"] == 4
+    assert "共 141 页" in result["recommended_workflow"]
+    assert result["scanned_page_count"] == 0
+    assert result["native_text_chars"] == 200 * 141
+
+
+def test_read_detect_mode_long_mixed_scan(monkeypatch) -> None:
+    index = _fake_index(
+        native_chars=[200] * 20,
+        needs_ocr=[False] * 20,
+    )
+    for page in index["pages"][8:12]:
+        page["needs_ocr"] = True
+    _patch_read(monkeypatch, index)
+
+    result = reader.read_pdf(Path("sample.pdf"), "000001")
+
+    assert result["profile"] == "long_mixed_scan"
+    assert result["scanned_pages"] == "9-12"
+    assert "扫描页" in result["recommended_workflow"]
+
+
+def test_read_detect_mode_still_respects_explicit_start_page(monkeypatch) -> None:
+    index = _fake_index(native_chars=[200] * 141, needs_ocr=[False] * 141)
+    _patch_read(monkeypatch, index)
+
+    result = reader.read_pdf(Path("sample.pdf"), "000001", start_page=50, end_page=52)
+
+    assert result["pages_returned"] == [50, 51, 52]
+    assert result["profile"] == "long_structured"
+    assert "recommended_workflow" not in result

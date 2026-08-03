@@ -37,17 +37,13 @@ query_announcements(
 - 每页固定最多 50 条；返回完整公告数、匹配数和总页数。
 - 股票代码自动清理市场前后缀；关键词空格为 OR，显式 `AND` 为 AND。
 
-### `inspect_announcement`
-
-快速建立逐页索引，返回总页数、目录、原生文本覆盖率、扫描页范围和建议工作流。该步骤不对正常页面做昂贵的表格提取，也不主动 OCR。
-
 ### `search_announcement`
 
 在完整逐页索引中检索关键词，返回命中页和短片段。扫描页可按需 OCR 并写回缓存，因此后续检索和阅读无需重复识别。
 
 ### `read_announcement`
 
-按 1 起始页码读取完整页面。正常页通过 PyMuPDF4LLM 尽量保留标题、段落和表格；扫描页通过 RapidOCR 恢复文字。单次返回受 `max_chars` 约束，但不会截断页面，使用 `next_page` 继续。
+不传 `start_page` 时自动检测：短公告（≤10 页）直接返回全文；长公告返回文档画像（页数、profile、扫描页、文本覆盖率、推荐动作）和前 3 页正文预览。传 `start_page` 时精读指定页段：正常页通过 PyMuPDF4LLM 尽量保留标题、段落和表格；扫描页通过 RapidOCR 恢复文字。单次返回受 `max_chars` 约束，但不会截断页面，使用 `next_page` 继续。
 
 ## 数据流
 
@@ -60,24 +56,20 @@ query_batch CLI
   -> 复用同一档案同步服务
   -> 多公司查询与扁平结果
 
-inspect_batch / search_batch / read_batch CLI
+search_batch / read_batch CLI
   -> 复用同一 PDF 下载、索引和阅读缓存
 
-inspect_announcement
+read_announcement
   -> 下载并缓存 PDF
   -> PyMuPDF 全文快速索引
-  -> 标记疑似扫描页
+  -> 自动检测画像（页数/扫描页/覆盖率/推荐动作）
+  -> 短公告直接返回全文；长公告返回画像 + 前 3 页预览
+  -> 带 start_page 时按页精读（普通页转 Markdown，扫描页 OCR）
 
 search_announcement
   -> 查询逐页索引
   -> 必要时由独立工作进程每批 OCR 3 个扫描页并缓存
   -> 返回命中页和片段
-
-read_announcement
-  -> 普通页转换 Markdown
-  -> 扫描页 OCR
-  -> 按完整页面返回，并给出 next_page
-```
 
 ## 缓存结构
 

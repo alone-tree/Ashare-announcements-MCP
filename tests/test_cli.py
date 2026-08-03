@@ -120,33 +120,6 @@ def test_query_batch_flattens_all_company_results(monkeypatch) -> None:
     assert [item["code"] for item in result["announcements"]] == ["A-000001", "A-000002"]
 
 
-def test_inspect_batch_keeps_identity_on_failure(monkeypatch) -> None:
-    def fake_inspect(item):
-        if item["code"] == "B":
-            raise RuntimeError("PDF 无法下载")
-        return {
-            "stock_code": item["stock_code"],
-            "url": item["url"],
-            "code": item["code"],
-            "title": item["title"],
-            "total_pages": 2,
-            "profile": "short",
-        }
-
-    monkeypatch.setattr(cli, "_inspect_item", fake_inspect)
-    announcements = [
-        {"stock_code": "000001", "url": "https://example.com/A.pdf", "code": "A", "title": "A公告"},
-        {"stock_code": "000001", "url": "https://example.com/B.pdf", "code": "B", "title": "B公告"},
-    ]
-
-    result = cli.dispatch({"action": "inspect_batch", "announcements": announcements})
-
-    assert result["status"] == "partial_success"
-    assert result["inspections"][0]["total_pages"] == 2
-    assert result["inspections"][1]["code"] == "B"
-    assert result["inspections"][1]["error"] == "PDF 无法下载"
-
-
 def test_read_batch_passes_request_options_and_returns_text(monkeypatch) -> None:
     captured = {}
 
@@ -185,6 +158,26 @@ def test_read_batch_passes_request_options_and_returns_text(monkeypatch) -> None
     assert result["readings"][0]["text"] == "公告正文"
     assert captured["max_chars"] == 20_000
     assert captured["ocr"] is False
+
+
+def test_read_batch_defaults_to_detect_mode(monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_read(item, request):
+        captured.update(request)
+        return {"code": item["code"], "text": "画像+正文", "pages_returned": [1, 2, 3]}
+
+    monkeypatch.setattr(cli, "_read_item", fake_read)
+    cli.dispatch(
+        {
+            "action": "read_batch",
+            "announcements": [
+                {"stock_code": "000001", "url": "https://example.com/A.pdf", "code": "A", "title": "A"}
+            ],
+        }
+    )
+
+    assert captured.get("start_page") is None
 
 
 def test_search_batch_passes_keywords_and_returns_hits(monkeypatch) -> None:

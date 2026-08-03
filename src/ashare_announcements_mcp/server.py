@@ -16,7 +16,6 @@ from ashare_announcements_mcp.downloader import download_pdf
 from ashare_announcements_mcp.company import check_company, establish_company as establish_securities
 from ashare_announcements_mcp.reader import (
     initialize_pdf_engine,
-    inspect_pdf,
     read_pdf,
     search_pdf,
 )
@@ -86,21 +85,6 @@ def query_announcements(
 
 
 @mcp.tool()
-def inspect_announcement(
-    stock_code: str,
-    url: str,
-) -> dict[str, Any]:
-    """检查公告页数、文本覆盖、扫描页和目录；长公告应先调用本工具。"""
-    try:
-        code = _stock_code(stock_code)
-        _validate_pdf_url(url)
-        path, cache_hit = download_pdf(code, url)
-        return {"ok": True, "cache_hit": cache_hit, "path": str(path), **inspect_pdf(path, code)}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-
-@mcp.tool()
 async def search_announcement(
     stock_code: str,
     url: str,
@@ -108,7 +92,7 @@ async def search_announcement(
     max_results: int = 20,
     ocr_scanned: bool = True,
 ) -> dict[str, Any]:
-    """检索整份公告；扫描页每次 OCR 三页，search_complete=false 时用相同参数续建索引。"""
+    """检索整份公告正文；扫描页每次 OCR 三页，search_complete=false 时用相同参数续建索引。"""
     try:
         code = _stock_code(stock_code)
         _validate_pdf_url(url)
@@ -157,12 +141,12 @@ def query_interactions(
 async def read_announcement(
     stock_code: str,
     url: str,
-    start_page: int = 1,
+    start_page: int | None = None,
     end_page: int | None = None,
     max_chars: int = 12_000,
     ocr: bool = True,
 ) -> dict[str, Any]:
-    """按完整页面读取公告，保留 Markdown 表格；扫描页自动 OCR，长文用 next_page 续读。"""
+    """阅读公告：不传 start_page 时自动检测——短公告直接返回全文，长公告返回画像和前 3 页预览及阅读建议；传 start_page 时精读指定页段，保留 Markdown 表格，扫描页自动 OCR，用 next_page 续读。"""
     try:
         code = _stock_code(stock_code)
         _validate_pdf_url(url)
