@@ -99,10 +99,10 @@ OCR 工作进程必须使用 `stdin=DEVNULL`，不能继承 MCP stdio 输入管�
 ## 导出与注册
 
 ```bat
-python scripts\export.py "D:\HermesSync\Hermes\projects\A股数据基础设施\A股公告阅读"
+python scripts\export.py "D:\HermesSync	ools-share-announcement-reading"
 ```
 
-能力库注册指向导出目录的 `ashare_announcements_mcp/server.py`。所有修改必须先在本开发库完成并通过测试，随后先提交 Git，再执行 export；禁止直接修改用户版导出目录。
+Hermes 配置（config.yaml a-stock-announcements）直接注册导出目录的 `ashare_announcements_mcp/server.py`；历史的能力库 A股公告阅读 注册已不用。所有修改必须先在本开发库完成并通过测试，随后先提交 Git，再执行 export；禁止直接修改用户版导出目录。
 
 开发测试环境：`D:\venvs\a-share-announcements\Scripts\python.exe`。
 
