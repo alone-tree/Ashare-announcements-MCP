@@ -230,14 +230,14 @@ def paginate_query(result: dict[str, Any], page: int, page_size: int = PAGE_SIZE
     }
 
 
-def _resolve_a_code(stock_code: str) -> str:
-    """通过公司映射定位 A 股代码；纯港股或未建档时报错。"""
+def _resolve_interaction_target(stock_code: str) -> tuple[str | None, str, list[dict[str, Any]]]:
+    """通过公司映射定位互动问答对应的 A 股代码；纯港股返回 None。"""
     code = normalize_stock_code(stock_code)
     company_key, securities = resolve_company(code)
     for security in securities:
         if security["market"] == "A":
-            return security["code"]
-    raise ValueError("港股无互动问答，不适用")
+            return security["code"], company_key, securities
+    return None, company_key, securities
 
 
 def sync_interactions(code: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -293,7 +293,18 @@ def query_interactions(
     if start and end and start > end:
         raise ValueError("start_date 不能晚于 end_date")
 
-    code = _resolve_a_code(stock_code)
+    code, company_key, securities = _resolve_interaction_target(stock_code)
+    if code is None:
+        return {
+            "stock_code": normalize_stock_code(stock_code),
+            "company_key": company_key,
+            "stock_name": securities[0].get("name", "") if securities else "",
+            "applicable": False,
+            "reason": "港股无互动问答，不适用",
+            "total_interactions": 0,
+            "matched": 0,
+            "results": [],
+        }
     items, update_status = sync_interactions(code)
     filtered = []
     for item in items:
@@ -308,7 +319,9 @@ def query_interactions(
 
     return {
         "stock_code": code,
+        "company_key": company_key,
         "stock_name": items[0].get("stockbar_name", "") if items else "",
+        "applicable": True,
         "total_interactions": len(items),
         "matched": len(filtered),
         **update_status,

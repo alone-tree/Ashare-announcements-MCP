@@ -195,7 +195,7 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
                 }
             )
 
-    interactions_status = {"applicable": False, "message": "港股无互动问答，不适用"}
+    interactions_status = {"applicable": False, "reason": "港股无互动问答，不适用"}
     a_security = next((s for s in securities if s["market"] == "A"), None)
     if a_security:
         try:

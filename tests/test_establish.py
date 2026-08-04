@@ -128,7 +128,7 @@ def test_establish_pure_hk_uses_h_code_as_key(monkeypatch: pytest.MonkeyPatch) -
     assert saved["data"]["aliases"] == {"00700": "00700"}
     assert result["interactions"] == {
         "applicable": False,
-        "message": "港股无互动问答，不适用",
+        "reason": "港股无互动问答，不适用",
     }
 
 

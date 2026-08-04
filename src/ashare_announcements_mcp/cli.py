@@ -1,6 +1,8 @@
 """供确定性批处理脚本调用的公告 JSON CLI。
 
 从 stdin 读取一个 JSON 请求，stdout 只输出一个 JSON 响应。
+action 支持：establish_company、query_batch、query_interactions_batch、search_batch、read_batch。
+同 MCP 能力保持一致；批处理查询返回全部匹配结果，不做 MCP 的 50 条分页。
 """
 
 from __future__ import annotations
@@ -92,7 +94,7 @@ def _search_item(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any
     max_results = int(item.get("max_results", request.get("max_results", 20)))
     if not 1 <= max_results <= 100:
         raise ValueError("max_results 必须在 1 到 100 之间")
-    ocr_scanned = bool(item.get("ocr_scanned", request.get("ocr_scanned", False)))
+    ocr_scanned = bool(item.get("ocr_scanned", request.get("ocr_scanned", True)))
     path, cache_hit = download_pdf(identity["stock_code"], identity["url"])
     result = search_pdf(
         path,
@@ -124,8 +126,8 @@ def _read_item(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     start_page = int(raw_start) if raw_start is not None else None
     raw_end_page = item.get("end_page", request.get("end_page"))
     end_page = int(raw_end_page) if raw_end_page is not None else None
-    max_chars = int(item.get("max_chars", request.get("max_chars", 20_000)))
-    ocr = bool(item.get("ocr", request.get("ocr", False)))
+    max_chars = int(item.get("max_chars", request.get("max_chars", 12_000)))
+    ocr = bool(item.get("ocr", request.get("ocr", True)))
     path, cache_hit = download_pdf(identity["stock_code"], identity["url"])
     result = read_pdf(
         path,
@@ -198,8 +200,8 @@ def query_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def establish_company_action(request: dict[str, Any]) -> dict[str, Any]:
-    """CLI 版建档：action_type=check 用 keyword；action_type=establish 用 codes。"""
-    action_type = request.get("action_type") or "check"
+    """CLI 版建档：兼容 action_type；优先使用与 MCP 一致的 company_action=check/establish。"""
+    action_type = request.get("company_action") or request.get("action_type") or "check"
     if action_type == "check":
         keyword = request.get("keyword")
         if not keyword:

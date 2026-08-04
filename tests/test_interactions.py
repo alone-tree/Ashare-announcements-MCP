@@ -230,8 +230,15 @@ def test_query_interactions_pure_hk_returns_not_applicable(
         },
     )
 
-    with pytest.raises(ValueError, match="港股无互动问答，不适用"):
-        service.query_interactions("00700")
+    result = service.query_interactions("00700")
+
+    assert result["stock_code"] == "00700"
+    assert result["company_key"] == "00700"
+    assert result["stock_name"] == "腾讯控股"
+    assert result["applicable"] is False
+    assert result["reason"] == "港股无互动问答，不适用"
+    assert result["matched"] == 0
+    assert result["results"] == []
 
 
 def test_sync_interactions_incremental_prepends_new(monkeypatch: pytest.MonkeyPatch) -> None:

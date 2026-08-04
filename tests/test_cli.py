@@ -2,6 +2,7 @@
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -120,6 +121,30 @@ def test_query_batch_flattens_all_company_results(monkeypatch) -> None:
     assert [item["code"] for item in result["announcements"]] == ["A-000001", "A-000002"]
 
 
+def test_query_interactions_batch_not_applicable_is_success(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "query_interactions",
+        lambda _stock_code, **_kwargs: {
+            "stock_code": "00700",
+            "company_key": "00700",
+            "stock_name": "腾讯控股",
+            "applicable": False,
+            "reason": "港股无互动问答，不适用",
+            "matched": 0,
+            "results": [],
+        },
+    )
+
+    result = cli.dispatch({"action": "query_interactions_batch", "stock_codes": ["00700"]})
+
+    assert result["ok"] is True
+    assert result["status"] == "success"
+    assert result["failed"] == 0
+    assert result["companies"][0]["applicable"] is False
+    assert result["interactions"] == []
+
+
 def test_read_batch_passes_request_options_and_returns_text(monkeypatch) -> None:
     captured = {}
 
@@ -180,6 +205,28 @@ def test_read_batch_defaults_to_detect_mode(monkeypatch) -> None:
     assert captured.get("start_page") is None
 
 
+def test_read_item_defaults_match_mcp(monkeypatch) -> None:
+    from ashare_announcements_mcp import downloader, reader
+
+    captured: dict = {}
+    monkeypatch.setattr(downloader, "download_pdf", lambda _code, _url: (Path("x.pdf"), True))
+
+    def fake_read_pdf(_path, _code, **kwargs):
+        captured.update(kwargs)
+        return {"text": "", "pages_returned": [], "next_page": None, "is_last_chunk": True}
+
+    monkeypatch.setattr(reader, "read_pdf", fake_read_pdf)
+
+    cli._read_item(
+        {"stock_code": "000001", "url": "https://pdf.dfcfw.com/pdf/H2_A_1.pdf"},
+        {},
+    )
+
+    assert captured["max_chars"] == 12_000
+    assert captured["ocr"] is True
+    assert captured["start_page"] is None
+
+
 def test_search_batch_passes_keywords_and_returns_hits(monkeypatch) -> None:
     captured = {}
 
@@ -236,6 +283,26 @@ def test_search_batch_rejects_null_query() -> None:
 
     assert result["status"] == "failed"
     assert result["searches"][0]["error"] == "每条公告必须包含 query，或在请求顶层提供 query"
+
+
+def test_search_item_defaults_match_mcp(monkeypatch) -> None:
+    from ashare_announcements_mcp import downloader, reader
+
+    captured: dict = {}
+    monkeypatch.setattr(downloader, "download_pdf", lambda _code, _url: (Path("x.pdf"), True))
+
+    def fake_search_pdf(_path, _code, query, max_results, ocr_scanned):
+        captured.update(query=query, max_results=max_results, ocr_scanned=ocr_scanned)
+        return {"query": query, "matched_pages": 0, "search_complete": True, "results": []}
+
+    monkeypatch.setattr(reader, "search_pdf", fake_search_pdf)
+
+    cli._search_item(
+        {"stock_code": "000001", "url": "https://pdf.dfcfw.com/pdf/H2_A_1.pdf", "query": "收入"},
+        {},
+    )
+
+    assert captured == {"query": "收入", "max_results": 20, "ocr_scanned": True}
 
 
 def test_main_reads_stdin_and_writes_one_json_response(monkeypatch) -> None:
