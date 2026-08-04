@@ -28,7 +28,7 @@ MCP 入口：`ashare_announcements_mcp/server.py`
 python ashare_announcements_mcp\cli.py
 ```
 
-CLI 从 stdin 接收一个 JSON 请求，stdout 只返回一个 JSON 响应。支持 `query_batch`、`inspect_batch`、`search_batch`、`read_batch`，与 MCP 共用公告档案和 PDF 缓存。
+CLI 从 stdin 接收一个 JSON 请求，stdout 只返回一个 JSON 响应。支持 `establish_company`、`query_batch`、`query_interactions_batch`、`search_batch`、`read_batch`，与 MCP 共用公司注册表、公告档案、互动问答和 PDF 缓存。
 
 依赖安装：
 
@@ -39,9 +39,9 @@ python -m pip install -r requirements.txt
 MCP 使用 stdio 传输，客户端 command 指向安装了上述依赖的 Python，args 指向入口文件。
 运行缓存保存在本目录的 `cache/{股票代码}/`。
 
-`query_announcements` 首次查询会建立该公司的完整公告档案，之后每次查询前自动补充最新公告。每页固定最多返回 50 条；关键词之间用空格表示 OR，用大写或小写 `AND` 表示 AND。
+`establish_company` 用明确代码建档（支持 A/H 公司，先 `action=check` 查候选）；`query_announcements` 查询完整公告档案，支持 `market=all/A/H` 筛选；`query_interactions` 查询 A 股互动问答。首次查询会建立完整档案，之后每次查询前自动补充最新公告。每页固定最多返回 50 条；关键词之间用空格表示 OR，用大写或小写 `AND` 表示 AND。未建档代码会报错并提示 check → establish → query。
 
-阅读长公告时先调用 `inspect_announcement`，再用 `search_announcement` 找到相关页，最后用 `read_announcement` 读取页段。原生页面使用 PyMuPDF Layout 分批转为 Markdown，并自动排除页眉页脚；扫描页按需使用 RapidOCR，结果会缓存。扫描页检索每次最多处理 3 页，若 `search_complete=false`，请用相同参数继续调用。
+阅读公告直接调用 `read_announcement`：不传 `start_page` 时自动检测（短公告直接返回全文，长公告返回画像和前 3 页预览及阅读建议）；传 `start_page` 时精读指定页段，用 `next_page` 续读。需要定位主题时用 `search_announcement` 检索正文。原生页面使用 PyMuPDF Layout 分批转为 Markdown，并自动排除页眉页脚；扫描页按需使用 RapidOCR，结果会缓存。扫描页检索每次最多处理 3 页，若 `search_complete=false`，请用相同参数继续调用。
 """
 
 
