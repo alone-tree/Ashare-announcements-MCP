@@ -11,6 +11,20 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import ConfigDict
+
+# FastMCP 默认静默忽略未声明参数（pydantic extra='ignore'），
+# AI 传错参数名（如把分页 page 当 start_page）会静默落回默认值，难以察觉。
+# 开启严格模式：任何未声明参数在进入工具函数前显式报错，提示 AI 使用正确参数名。
+try:
+    from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
+
+    ArgModelBase.model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+    )
+except Exception:  # 兼容 mcp 版本差异：拿不到基类时保持默认行为
+    pass
 
 from ashare_announcements_mcp.downloader import download_pdf
 from ashare_announcements_mcp.company import check_company, establish_company as establish_securities
@@ -160,6 +174,7 @@ async def read_announcement(
     不传 start_page 时自动检测：≤10 页短公告直接返回全文；>10 页长公告返回画像和前 3 页预览及阅读建议。
     传 start_page 时精读指定页段，保留 Markdown 表格，扫描页自动 OCR，用 next_page 续读。
     本工具按 stock_code 作为 PDF 缓存目录，不要求公司已建档；公告是否存在以 url 下载结果为准。
+    续读：把上次返回的 next_page 值传给 start_page（如 start_page=50），end_page 可选。
     """
     try:
         code = _stock_code(stock_code)
