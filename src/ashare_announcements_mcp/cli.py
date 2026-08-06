@@ -126,7 +126,7 @@ def _read_item(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     start_page = int(raw_start) if raw_start is not None else None
     raw_end_page = item.get("end_page", request.get("end_page"))
     end_page = int(raw_end_page) if raw_end_page is not None else None
-    max_chars = int(item.get("max_chars", request.get("max_chars", 12_000)))
+    max_pages = int(item.get("max_pages", request.get("max_pages", 20)))
     ocr = bool(item.get("ocr", request.get("ocr", True)))
     path, cache_hit = download_pdf(identity["stock_code"], identity["url"])
     result = read_pdf(
@@ -134,7 +134,7 @@ def _read_item(item: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
         identity["stock_code"],
         start_page=start_page,
         end_page=end_page,
-        max_chars=max_chars,
+        max_pages=max_pages,
         ocr=ocr,
     )
     return {**identity, "cache_hit": cache_hit, "path": str(path), **result}

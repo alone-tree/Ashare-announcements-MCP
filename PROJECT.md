@@ -15,7 +15,7 @@
 - `query_batch`：批量同步并查询多家公司，返回日期和关键词范围内的全部公告。
 - `inspect_batch`：批量检查 PDF 页数、文档画像、原生文本覆盖率和扫描页。
 - `search_batch`：批量检索整份 PDF，返回命中页和短片段；默认不主动 OCR。
-- `read_batch`：批量读取指定页段；默认 `max_chars=20000`、`ocr=false`。
+- `read_batch`：批量读取指定页段；默认 `max_pages=20`、`ocr=true`。
 
 CLI 只提供通用查询和阅读能力。按公告类型、长度和扫描比例分流的业务规则由调用方维护。
 
@@ -43,7 +43,7 @@ query_announcements(
 
 ### `read_announcement`
 
-不传 `start_page` 时自动检测：短公告（≤10 页）直接返回全文；长公告返回文档画像（页数、profile、扫描页、文本覆盖率、推荐动作）和前 3 页正文预览。传 `start_page` 时精读指定页段：正常页通过 PyMuPDF4LLM 尽量保留标题、段落和表格；扫描页通过 RapidOCR 恢复文字。单次返回受 `max_chars` 约束，但不会截断页面，使用 `next_page` 继续。
+不传 `start_page` 时自动检测：短公告（≤10 页）直接返回全文；长公告返回文档画像（页数、profile、扫描页、文本覆盖率、推荐动作）和前 3 页正文预览。传 `start_page` 时精读指定页段：正常页通过 PyMuPDF4LLM 尽量保留标题、段落和表格；扫描页通过 RapidOCR 恢复文字。单次最多返回 `max_pages` 页（默认 20，不设上限，可一次读完全文），使用 `next_page` 继续。
 
 ## 数据流
 
