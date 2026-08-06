@@ -129,8 +129,10 @@ async def search_announcement(
 
 
 def _validate_pdf_url(url: str) -> None:
+    if Path(url).is_file():
+        return
     if not url.startswith("https://pdf.dfcfw.com/pdf/"):
-        raise ValueError("url 必须是东方财富 pdf.dfcfw.com 公告链接")
+        raise ValueError("url 必须是东方财富 pdf.dfcfw.com 公告链接，或本地已存在的 PDF 文件路径")
 
 
 @mcp.tool()

@@ -25,10 +25,16 @@ PAGE_SIZE = 50
 
 
 def normalize_stock_code(value: str) -> str:
-    """兼容 002271、SZ002271、002271.SZ、HK03308 等常见格式；不自动补零。"""
-    matches = re.findall(r"(?<!\d)(\d{5,6})(?!\d)", str(value).strip().upper())
+    """兼容 002271、SZ002271、002271.SZ、HK03308 等常见格式；不自动补零。
+
+    本地公司使用非数字代码（如 LOCAL-YYYY），允许直接透传——前提是它已建档。
+    """
+    text = str(value).strip()
+    if "LOCAL-" in text.upper():
+        return text.upper()
+    matches = re.findall(r"(?<!\d)(\d{5,6})(?!\d)", text.upper())
     if len(matches) != 1:
-        raise ValueError("stock_code 必须包含一个五或六位证券代码")
+        raise ValueError("stock_code 必须包含一个五或六位证券代码，或已建档的 LOCAL- 本地公司代码")
     return matches[0]
 
 
@@ -149,11 +155,17 @@ def query_archive(
     for security in securities:
         market_code = security["market"]
         try:
-            items, update_status = sync_archive(
-                security["code"],
-                ann_type="H" if market_code == "H" else "A",
-                inner_code=security["inner_code"] if market_code == "H" else None,
-            )
+            if market_code == "LOCAL":
+                # 本地公司（未上市等）：无网络来源，直接读缓存档案
+                cached = load_cache(security["code"])
+                items = cached.get("items") or []
+                update_status = {"update_check_ok": True, "new_announcements": 0, "update_error": None}
+            else:
+                items, update_status = sync_archive(
+                    security["code"],
+                    ann_type="H" if market_code == "H" else "A",
+                    inner_code=security["inner_code"] if market_code == "H" else None,
+                )
             security_status.append(
                 {
                     "code": security["code"],
@@ -231,7 +243,7 @@ def paginate_query(result: dict[str, Any], page: int, page_size: int = PAGE_SIZE
 
 
 def _resolve_interaction_target(stock_code: str) -> tuple[str | None, str, list[dict[str, Any]]]:
-    """通过公司映射定位互动问答对应的 A 股代码；纯港股返回 None。"""
+    """通过公司映射定位互动问答对应的 A 股代码；纯港股/本地公司返回 None。"""
     code = normalize_stock_code(stock_code)
     company_key, securities = resolve_company(code)
     for security in securities:

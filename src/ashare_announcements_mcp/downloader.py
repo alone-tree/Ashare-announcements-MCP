@@ -36,7 +36,13 @@ def _request(url: str) -> bytes:
 
 
 def download_pdf(stock_code: str, url: str) -> tuple[Path, bool]:
-    """下载并按公告代码稳定命名；返回路径及是否命中缓存。"""
+    """下载并按公告代码稳定命名；返回路径及是否命中缓存。
+
+    本地路径（未上市公司的本地申报材料等）直接返回，不发起网络请求。
+    """
+    local = Path(url)
+    if local.is_file() and local.read_bytes()[:5] == b"%PDF-":
+        return local, True
     path = pdf_dir(stock_code) / f"{_art_code(url)}.pdf"
     if path.exists() and path.read_bytes()[:5] == b"%PDF-":
         return path, True
