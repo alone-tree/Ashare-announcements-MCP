@@ -81,6 +81,7 @@ def query_announcements(
     """查询完整公告档案；首次全量建档，之后每次查询前自动检查新公告。
 
     未建档代码会报错并提示 check → establish → query。market 只筛选本地结果（all/A/H），所有关联证券都会自动增量更新。
+    market=A 同时包含 B 股公告（B 股不单独筛选）；market=H 只筛港股。
     每页固定 50 条；用 page 翻页，has_more 表示是否还有下一页。
     某个市场更新失败时仍返回旧缓存；可重新查询一次，第二次仍失败则停止重复尝试。
     """
@@ -145,7 +146,7 @@ def query_interactions(
 ) -> dict[str, Any]:
     """查询 A 股互动问答；首次全量建档，之后增量更新。
 
-    传 H 股代码时，若该公司有关联 A 股，则返回对应 A 股互动问答；纯港股返回 ok=true、applicable=false、reason=港股无互动问答，不适用。
+    传 H 股代码时，若该公司有关联 A 股，则返回对应 A 股互动问答；纯港股/B 股/本地公司返回 ok=true、applicable=false、reason 说明不适用。
     每页固定 50 条；用 page 翻页，has_more 表示是否还有下一页。
     """
     try:

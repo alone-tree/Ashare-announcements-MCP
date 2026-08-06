@@ -87,17 +87,20 @@ def _resolve_security(code: str) -> dict[str, Any]:
     item = matched[0]
     classify = str(item.get("Classify") or "")
     type_us = str(item.get("TypeUS") or "")
-    if classify == "AStock":
+    security_type_name = str(item.get("SecurityTypeName") or "")
+    if classify == "AStock" or security_type_name in ("沪A", "深A", "科创板", "京A"):
         market = "A"
     elif classify == "HK" and type_us == "3":
         market = "H"
+    elif security_type_name in ("沪B", "深B"):
+        market = "B"
     else:
         raise ValueError(
-            f"{text} 不是普通 A/H 公司证券（Classify={classify} TypeUS={type_us}），拒绝建档"
+            f"{text} 不是普通 A/B/H 公司证券（Classify={classify} TypeUS={type_us}），拒绝建档"
         )
     inner_code = str(item.get("InnerCode") or "")
-    if market == "H" and not inner_code:
-        raise ValueError(f"{text} 缺少港股 InnerCode，拒绝建档")
+    if market in ("H", "B") and not inner_code:
+        raise ValueError(f"{text} 缺少{('港股' if market == 'H' else 'B股')} InnerCode，拒绝建档")
     return {
         "code": text,
         "name": str(item.get("Name") or ""),
@@ -112,7 +115,7 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
     if not isinstance(codes, list) or not codes:
         raise ValueError("codes 必须是非空数组")
     if len(codes) > 2:
-        raise ValueError("codes 最多接受一个 A 股代码加一个 H 股代码")
+        raise ValueError("codes 最多接受两个代码（如一个 A 股加一个 H 股/B 股）")
 
     securities = [_resolve_security(code) for code in codes]
     markets = {security["market"] for security in securities}
@@ -168,8 +171,8 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
         try:
             items, status = sync_archive(
                 security["code"],
-                ann_type="H" if security["market"] == "H" else "A",
-                inner_code=security["inner_code"] if security["market"] == "H" else None,
+                ann_type="H" if security["market"] == "H" else ("B" if security["market"] == "B" else "A"),
+                inner_code=security["inner_code"] if security["market"] in ("H", "B") else None,
             )
             results.append(
                 {
@@ -195,7 +198,7 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
                 }
             )
 
-    interactions_status = {"applicable": False, "reason": "港股无互动问答，不适用"}
+    interactions_status = {"applicable": False, "reason": "该公司无互动问答（纯港股/B 股），不适用"}
     a_security = next((s for s in securities if s["market"] == "A"), None)
     if a_security:
         try:

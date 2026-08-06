@@ -114,6 +114,40 @@ def test_query_rejects_bad_market(monkeypatch: pytest.MonkeyPatch) -> None:
         service.query_archive("300308", market="X")
 
 
+def test_query_market_a_includes_b_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    """market=A 时 B 股公告一并返回（B 股不单独筛选）。"""
+    registry = {
+        "companies": {
+            "900901": {
+                "securities": [
+                    {"code": "900901", "market": "B", "name": "云赛B股", "classify": "BStock", "inner_code": "B-INNER"},
+                ]
+            }
+        },
+        "aliases": {"900901": "900901"},
+    }
+    monkeypatch.setattr(service, "load_companies", lambda: registry)
+    b_items = [
+        {"code": "B1", "title": "B股公告", "display_time": "2026-07-01 10:00:00"},
+        {"code": "B2", "title": "B股分配", "display_time": "2026-06-01 10:00:00"},
+    ]
+    captured: dict = {}
+
+    def fake_sync(code, ann_type="A", inner_code=None):
+        captured["ann_type"] = ann_type
+        captured["inner_code"] = inner_code
+        return b_items, {"update_check_ok": True, "new_announcements": 0, "update_error": None}
+
+    monkeypatch.setattr(service, "sync_archive", fake_sync)
+
+    result = service.query_archive("900901", market="A")
+
+    assert captured["ann_type"] == "B"
+    assert captured["inner_code"] == "B-INNER"
+    assert result["total_announcements"] == 2
+    assert result["matched"] == 2
+
+
 def test_query_not_established_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(service, "load_companies", lambda: {"companies": {}, "aliases": {}})
     with pytest.raises(ValueError, match="未建档，请先 check → establish → query"):

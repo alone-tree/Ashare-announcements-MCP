@@ -130,7 +130,7 @@ def test_query_interactions_batch_not_applicable_is_success(monkeypatch) -> None
             "company_key": "00700",
             "stock_name": "腾讯控股",
             "applicable": False,
-            "reason": "港股无互动问答，不适用",
+            "reason": "该公司无互动问答（纯港股/B 股/本地公司），不适用",
             "matched": 0,
             "results": [],
         },

@@ -15,6 +15,7 @@ def _security(
     classify: str,
     inner_code: str,
     type_us: str = "3",
+    security_type_name: str | None = None,
 ) -> dict[str, str]:
     return {
         "Code": code,
@@ -24,7 +25,7 @@ def _security(
         "JYS": "80" if classify == "AStock" else "116",
         "Classify": classify,
         "MarketType": "2",
-        "SecurityTypeName": "深A" if classify == "AStock" else "港股",
+        "SecurityTypeName": security_type_name or ("深A" if classify == "AStock" else "港股"),
         "SecurityType": "2",
         "MktNum": "0" if classify == "AStock" else "116",
         "TypeUS": "80" if classify == "AStock" else type_us,
@@ -128,7 +129,7 @@ def test_establish_pure_hk_uses_h_code_as_key(monkeypatch: pytest.MonkeyPatch) -
     assert saved["data"]["aliases"] == {"00700": "00700"}
     assert result["interactions"] == {
         "applicable": False,
-        "reason": "港股无互动问答，不适用",
+        "reason": "该公司无互动问答（纯港股/B 股），不适用",
     }
 
 
@@ -164,8 +165,37 @@ def test_establish_rejects_non_numeric_code(monkeypatch: pytest.MonkeyPatch) -> 
 def test_establish_rejects_derivative(monkeypatch: pytest.MonkeyPatch) -> None:
     derivative = _security("13160", "腾讯中银六乙购B", "HK", "D-INNER", type_us="6")
     _setup(monkeypatch, securities=[derivative])
-    with pytest.raises(ValueError, match="不是普通 A/H 公司证券"):
+    with pytest.raises(ValueError, match="不是普通 A/B/H 公司证券"):
         company.establish_company(["13160"])
+
+
+def test_establish_accepts_b_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    b_share = _security("900901", "云赛B股", "BStock", "B-INNER", type_us="3", security_type_name="沪B")
+    monkeypatch.setattr(
+        company,
+        "_search",
+        lambda _keyword: ([b_share], 1),
+    )
+    monkeypatch.setattr(company, "load_companies", lambda: _empty_registry())
+    saved: dict[str, Any] = {}
+    monkeypatch.setattr(company, "save_companies", lambda data: saved.update(data=data))
+
+    captured: dict = {}
+
+    def fake_sync(code, ann_type="A", inner_code=None):
+        captured["ann_type"] = ann_type
+        captured["inner_code"] = inner_code
+        return ([], {"new_announcements": 0, "update_check_ok": True, "update_error": None})
+
+    monkeypatch.setattr(company, "sync_archive", fake_sync)
+
+    result = company.establish_company(["900901"])
+
+    assert result["company_key"] == "900901"
+    assert result["securities"][0]["market"] == "B"
+    assert captured["ann_type"] == "B"
+    assert captured["inner_code"] == "B-INNER"
+    assert result["interactions"]["applicable"] is False
 
 
 def test_establish_exact_code_match_ignores_fuzzy(monkeypatch: pytest.MonkeyPatch) -> None:

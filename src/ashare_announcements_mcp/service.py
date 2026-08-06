@@ -138,6 +138,7 @@ def query_archive(
     """通过公司映射定位所有关联证券，同步后合并查询。
 
     market 允许 all/A/H，只作用于本地筛选；所有关联证券都执行增量更新。
+    market=A 同时包含 B 股公告（B 股不单独筛选）；market=H 只筛港股。
     未建档时报错并提示 check → establish → query。
     """
     code = normalize_stock_code(stock_code)
@@ -163,8 +164,8 @@ def query_archive(
             else:
                 items, update_status = sync_archive(
                     security["code"],
-                    ann_type="H" if market_code == "H" else "A",
-                    inner_code=security["inner_code"] if market_code == "H" else None,
+                    ann_type="H" if market_code == "H" else ("B" if market_code == "B" else "A"),
+                    inner_code=security["inner_code"] if market_code in ("H", "B") else None,
                 )
             security_status.append(
                 {
@@ -198,8 +199,10 @@ def query_archive(
             )
 
     merged.sort(key=lambda item: str(item.get("display_time") or ""), reverse=True)
-    if market != "all":
-        merged = [item for item in merged if item.get("market") == market]
+    if market == "A":
+        merged = [item for item in merged if item.get("market") in ("A", "B")]
+    elif market == "H":
+        merged = [item for item in merged if item.get("market") == "H"]
 
     filtered = []
     for item in merged:
@@ -243,7 +246,7 @@ def paginate_query(result: dict[str, Any], page: int, page_size: int = PAGE_SIZE
 
 
 def _resolve_interaction_target(stock_code: str) -> tuple[str | None, str, list[dict[str, Any]]]:
-    """通过公司映射定位互动问答对应的 A 股代码；纯港股/本地公司返回 None。"""
+    """通过公司映射定位互动问答对应的 A 股代码；纯港股/B 股/本地公司返回 None。"""
     code = normalize_stock_code(stock_code)
     company_key, securities = resolve_company(code)
     for security in securities:
@@ -312,7 +315,7 @@ def query_interactions(
             "company_key": company_key,
             "stock_name": securities[0].get("name", "") if securities else "",
             "applicable": False,
-            "reason": "港股无互动问答，不适用",
+            "reason": "该公司无互动问答（纯港股/B 股/本地公司），不适用",
             "total_interactions": 0,
             "matched": 0,
             "results": [],

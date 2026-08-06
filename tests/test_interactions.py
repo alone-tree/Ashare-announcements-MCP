@@ -236,7 +236,7 @@ def test_query_interactions_pure_hk_returns_not_applicable(
     assert result["company_key"] == "00700"
     assert result["stock_name"] == "腾讯控股"
     assert result["applicable"] is False
-    assert result["reason"] == "港股无互动问答，不适用"
+    assert result["reason"] == "该公司无互动问答（纯港股/B 股/本地公司），不适用"
     assert result["matched"] == 0
     assert result["results"] == []
 
