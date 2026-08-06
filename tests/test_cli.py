@@ -174,14 +174,14 @@ def test_read_batch_passes_request_options_and_returns_text(monkeypatch) -> None
                     "title": "A公告",
                 }
             ],
-            "max_pages": 50,
+            "return_pages": 50,
             "ocr": False,
         }
     )
 
     assert result["status"] == "success"
     assert result["readings"][0]["text"] == "公告正文"
-    assert captured["max_pages"] == 50
+    assert captured["return_pages"] == 50
     assert captured["ocr"] is False
 
 
@@ -222,7 +222,7 @@ def test_read_item_defaults_match_mcp(monkeypatch) -> None:
         {},
     )
 
-    assert captured["max_pages"] == 20
+    assert captured["return_pages"] == 20
     assert captured["ocr"] is True
     assert captured["start_page"] is None
 

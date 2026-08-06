@@ -366,7 +366,7 @@ def read_pdf(
     stock_code: str,
     start_page: int | None = None,
     end_page: int | None = None,
-    max_pages: int = 20,
+    return_pages: int = 20,
     ocr: bool = True,
 ) -> dict[str, Any]:
     """阅读公告；start_page 缺省时自动检测并预览，带页码时精读指定页段。
@@ -374,15 +374,15 @@ def read_pdf(
     检测模式（start_page=None）：
       - short（≤10 页）：直接返回全文；
       - long：返回文档画像（profile/扫描页/覆盖率/推荐动作）+ 前 3 页正文预览。
-    精读模式（start_page 指定）：从 start_page 起最多返回 max_pages 页，
-    未读完时用 next_page 续读；不设页数上限，可传任意大的 max_pages。
+    精读模式（start_page 指定）：从 start_page 起返回 return_pages 页
+    （默认 20 页，可传任意大的值一次读完全文）；未读完时用 next_page 续读。
     """
     index_path, index = _load_index(stock_code, pdf_path)
     profile = _build_profile(index)
     total_pages = profile["total_pages"]
 
-    if max_pages < 1:
-        raise ValueError("max_pages 必须大于等于 1")
+    if return_pages < 1:
+        raise ValueError("return_pages 必须大于等于 1")
 
     detect_mode = start_page is None
     if detect_mode:
@@ -396,7 +396,7 @@ def read_pdf(
         target_end = total_pages if end_page is None else end_page
         if target_end < start_page or target_end > total_pages:
             raise ValueError(f"end_page 必须在 {start_page} 到 {total_pages} 之间")
-        end_page = min(target_end, start_page + max_pages - 1)
+        end_page = min(target_end, start_page + return_pages - 1)
 
     blocks: list[str] = []
     page_details = []
