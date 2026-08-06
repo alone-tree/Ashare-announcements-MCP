@@ -40,23 +40,36 @@ def _parse_filename(filename: str) -> tuple[str | None, str]:
     return date_part, title
 
 
+def _copy_name(source_dir: Path, pdf: Path) -> str:
+    """缓存内目标文件名：子目录文件带父目录名前缀，避免重名覆盖。"""
+    relative = pdf.relative_to(source_dir)
+    parts = list(relative.parts)
+    if len(parts) > 1:
+        parts = [parts[-2], parts[-1]]
+    name = "_".join(parts)
+    return name if name.lower().endswith(".pdf") else f"{name}.pdf"
+
+
 def import_local(code: str, name: str, source_dir: Path, dry_run: bool = False) -> dict:
     code = code.upper()
     source_dir = Path(source_dir).resolve()
     if not source_dir.is_dir():
         raise ValueError(f"目录不存在：{source_dir}")
 
-    pdfs = sorted(source_dir.glob("*.pdf"))
+    pdfs = sorted(source_dir.rglob("*.pdf"))
     if not pdfs:
         raise ValueError(f"目录中没有 PDF 文件：{source_dir}")
 
     items = []
     copied: list[Path] = []
     for pdf in pdfs:
+        # 日期优先级：文件名 → 父目录名 → 文件修改时间
         date_part, title = _parse_filename(pdf.name)
+        if not date_part and pdf.parent != source_dir:
+            date_part, _ = _parse_filename(pdf.parent.name)
         if not date_part:
             date_part = datetime.fromtimestamp(pdf.stat().st_mtime).strftime("%Y-%m-%d")
-        target = pdf_dir(code) / pdf.name
+        target = pdf_dir(code) / _copy_name(source_dir, pdf)
         if not dry_run and not target.exists():
             shutil.copy2(pdf, target)
             copied.append(target)
@@ -64,7 +77,7 @@ def import_local(code: str, name: str, source_dir: Path, dry_run: bool = False) 
             copied.append(target)
         items.append(
             {
-                "code": pdf.name,
+                "code": _copy_name(source_dir, pdf),
                 "url": str(target),
                 "title": title,
                 "display_time": f"{date_part} 00:00:00",
