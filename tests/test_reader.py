@@ -179,10 +179,23 @@ def test_read_detect_mode_long_returns_profile_and_three_pages(monkeypatch) -> N
     assert result["native_text_chars"] == 200 * 141
 
 
+def test_read_detect_mode_13_pages_is_short(monkeypatch) -> None:
+    """13 页与默认 return_pages=20 一致：一次能读完，检测模式直接返回全文。"""
+    index = _fake_index(native_chars=[100] * 13, needs_ocr=[False] * 13)
+    _patch_read(monkeypatch, index)
+
+    result = reader.read_pdf(Path("sample.pdf"), "000001")
+
+    assert result["profile"] == "short"
+    assert result["pages_returned"] == list(range(1, 14))
+    assert result["next_page"] is None
+    assert result["is_last_chunk"] is True
+
+
 def test_read_detect_mode_long_mixed_scan(monkeypatch) -> None:
     index = _fake_index(
-        native_chars=[200] * 20,
-        needs_ocr=[False] * 20,
+        native_chars=[200] * 30,
+        needs_ocr=[False] * 30,
     )
     for page in index["pages"][8:12]:
         page["needs_ocr"] = True

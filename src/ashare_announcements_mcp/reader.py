@@ -254,7 +254,7 @@ def _build_profile(index: dict[str, Any]) -> dict[str, Any]:
     pages = index["pages"]
     scanned = [page["page"] for page in pages if page["needs_ocr"]]
     total_pages = len(pages)
-    if total_pages <= 10:
+    if total_pages <= 20:
         profile = "short"
         workflow = "公告较短，已直接返回全文。"
     elif scanned:
@@ -372,7 +372,7 @@ def read_pdf(
     """阅读公告；start_page 缺省时自动检测并预览，带页码时精读指定页段。
 
     检测模式（start_page=None）：
-      - short（≤10 页）：直接返回全文；
+      - short（≤20 页）：直接返回全文；
       - long：返回文档画像（profile/扫描页/覆盖率/推荐动作）+ 前 3 页正文预览。
     精读模式（start_page 指定）：从 start_page 起返回 return_pages 页
     （默认 20 页，可传任意大的值一次读完全文）；未读完时用 next_page 续读。
