@@ -73,6 +73,16 @@ def check_company(keyword: str) -> dict[str, Any]:
     return result
 
 
+def _reject_reason(type_us: str) -> str:
+    """把 TypeUS 转成人类可读的拒绝原因，帮助 AI 理解为什么不能建档。"""
+    reason_map = {
+        "1": "港股 TypeUS=1 为杠杆 ETF",
+        "5": "美股 TypeUS=5 为 ETF",
+        "6": "TypeUS=6 为权证/票据等衍生品",
+    }
+    return reason_map.get(type_us, f"该证券类型（TypeUS={type_us}）不支持")
+
+
 def _resolve_security(code: str) -> dict[str, Any]:
     """精确查询单个证券代码，返回建档所需的普通 A/B/H/US 公司证券信息。
 
@@ -86,7 +96,7 @@ def _resolve_security(code: str) -> dict[str, Any]:
     candidates, _ = _search(text)
     matched = [item for item in candidates if str(item.get("Code") or "") == text]
     if not matched:
-        raise ValueError(f"无法精确查询到证券：{text}")
+        raise ValueError(f"无法精确查询到证券：{text}（请用 action=check + keyword 搜索候选代码后重试）")
     item = matched[0]
     classify = str(item.get("Classify") or "")
     type_us = str(item.get("TypeUS") or "")
@@ -104,9 +114,10 @@ def _resolve_security(code: str) -> dict[str, Any]:
         # 美股：type_us=1 原生正股（AAPL）、3 ADR（BABA/NIO）；5 ETF、6 票据排除；未知类型默认接受
         market = "US"
     else:
+        reason = _reject_reason(type_us)
         raise ValueError(
             f"{text} 不是普通 A/B/H/US 公司证券（Classify={classify} TypeUS={type_us} "
-            f"SecurityTypeName={security_type_name}），拒绝建档"
+            f"SecurityTypeName={security_type_name}，{reason}），拒绝建档"
         )
     inner_code = str(item.get("InnerCode") or "")
     if market in ("H", "B") and not inner_code:
