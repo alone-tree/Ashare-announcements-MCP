@@ -91,3 +91,11 @@ $env:PYTHONPATH = 'src'
 ```
 
 `reference/` 仅供参考，不在其中开发。
+
+## 美股支持（2026-08 已实现）
+
+- 美股（含 ADR，如 AAPL/NIO/BABA）走 SEC EDGAR 通道，A/H/B 股走东方财富。
+- 市场按代码自动路由：数字代码→东财，美股字母代码→EDGAR；check 用东财搜索（覆盖美股）。
+- 美股文档为 HTML，按 page-break 切虚拟页（无分页时按结构切块），复用 PDF 阅读引擎。
+- 建档时用 SEC company_tickers.json 做 ticker→CIK 映射（本地缓存 24h）。
+- 发行类文件（424B*/FWP）默认保留不过滤（2026-08 决策：先留着，如需要研究结构化产品）。

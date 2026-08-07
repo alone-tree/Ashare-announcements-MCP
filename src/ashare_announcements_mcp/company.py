@@ -92,8 +92,9 @@ def _resolve_security(code: str) -> dict[str, Any]:
         market = "H"
     elif security_type_name in ("沪B", "深B"):
         market = "B"
-    elif classify == "UsStock" and type_us == "1":
-        # 美股正股：需要 SEC CIK 用于 EDGAR 通道
+    elif classify == "UsStock" and type_us in ("1", "3"):
+        # 美股：type_us=1 原生正股（AAPL），type_us=3 ADR（NIO/BABA/PDD）；
+        # 排除 type_us=5/6 的 ETF/票据/衍生品
         market = "US"
     else:
         raise ValueError(

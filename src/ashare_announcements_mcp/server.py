@@ -51,11 +51,11 @@ def establish_company(
     keyword: str | None = None,
     codes: list[str] | None = None,
 ) -> dict[str, Any]:
-    """查询或建档东方财富 A/H 上市公司。
+    """查询或建档上市公司。A/H/B 股走东方财富，美股走 SEC EDGAR。
 
     action=check 用 keyword 搜索候选证券（不过滤、不归组，忠实返回前 20 条；候选可能包含权证、ADR、人民币柜台、指数或板块，AI 必须按返回字段自行核对）。
     action=establish 用 codes 建档（一个代码，或一个 A 股代码加一个 H 股代码；
-    支持美股字母代码如 AAPL；不要使用 -R、-WR 等人民币柜台代码建档，应选择主要港股代码）。
+    支持美股字母代码如 AAPL（原生股）或 NIO（ADR）；不要使用 -R、-WR 等人民币柜台代码建档，应选择主要港股代码）。
     """
     try:
         if action == "check":
@@ -80,7 +80,8 @@ def query_announcements(
 ) -> dict[str, Any]:
     """查询完整公告档案；首次全量建档，之后每次查询前自动检查新公告。
 
-    未建档代码会报错并提示 check → establish → query。market 只筛选本地结果（all/A/H），美股走 SEC EDGAR 通道（市场自动识别，不需要 market=US）。所有关联证券都会自动增量更新。
+    未建档代码会报错并提示 check → establish → query。市场按代码自动路由：数字代码走东方财富（A/B/H），美股字母代码（如 AAPL/NIO）走 SEC EDGAR，不需要显式指定 market。
+    market 只筛选本地结果（all/A/H），美股提交归入 all（不参与 A/H 筛选）。所有关联证券都会自动增量更新。
     market=A 同时包含 B 股公告（B 股不单独筛选）；market=H 只筛港股。
     每页固定 50 条；用 page 翻页，has_more 表示是否还有下一页。
     某个市场更新失败时仍返回旧缓存；可重新查询一次，第二次仍失败则停止重复尝试。
