@@ -111,6 +111,7 @@ def _expand_submissions(data: dict[str, Any]) -> dict[str, Any]:
                 "form": str(recent["form"][i]),
                 "document": str(recent["primaryDocument"][i]),
                 "description": str(recent["primaryDocDescription"][i] or ""),
+                "items": str(recent.get("items", [None] * len(recent["form"]))[i] or ""),
             }
         )
 
@@ -132,6 +133,7 @@ def _expand_submissions(data: dict[str, Any]) -> dict[str, Any]:
                     "form": str(older["form"][i]),
                     "document": str(older["primaryDocument"][i]),
                     "description": str(older["primaryDocDescription"][i] or ""),
+                    "items": str(older.get("items", [None] * len(older["form"]))[i] or ""),
                 }
             )
 
@@ -147,6 +149,48 @@ def fetch_filing_html(url: str) -> str:
     response = requests.get(url, headers=EDGAR_HEADERS, timeout=60)
     response.raise_for_status()
     return response.text
+
+
+# 8-K 披露条款编号 → 中文含义（Regulation SK Item）
+FORM8K_ITEMS: dict[str, str] = {
+    "1.01": "重大协议",
+    "1.02": "协议终止",
+    "1.03": "破产或接管",
+    "1.04": "重大债务违约",
+    "2.01": "重大资产收购/处置",
+    "2.02": "经营业绩",
+    "2.03": "重大债务",
+    "2.04": "触发加速偿债",
+    "2.05": "资产减值",
+    "2.06": "实质性减值",
+    "3.01": "退市或未达上市标准",
+    "3.02": "未登记股权出售",
+    "3.03": "优先股条款修改",
+    "4.01": "会计师变更",
+    "4.02": "不再信赖此前财报",
+    "5.01": "控制权变更",
+    "5.02": "高管离职/任命",
+    "5.03": "章程或注册地变更",
+    "5.04": "员工福利计划",
+    "5.05": "道德准则修订",
+    "5.06": "董事会变更",
+    "5.07": "股东投票结果",
+    "5.08": "股东大会",
+    "6.01": "ABS资产支持证券",
+    "7.01": "FD监管披露",
+    "8.01": "其他重大事件",
+    "9.01": "财务报表和附件",
+}
+
+
+def _translate_items(items: str) -> str:
+    """把 8-K 条款编号翻译为中文含义，如 '2.02,9.01' → '2.02经营业绩, 9.01财务报表和附件'。"""
+    parts = [p.strip() for p in str(items or "").split(",") if p.strip()]
+    translated = []
+    for part in parts:
+        meaning = FORM8K_ITEMS.get(part)
+        translated.append(f"{part}{meaning}" if meaning else part)
+    return ", ".join(translated)
 
 
 def _clean_html(html: str) -> str:

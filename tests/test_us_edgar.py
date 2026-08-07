@@ -111,10 +111,32 @@ def test_format_us_filing_builds_unified_item() -> None:
         "form": "8-K",
         "document": "aapl-20260730.htm",
         "description": "8-K",
+        "items": "5.02",
     }
     result = service._format_us_filing("AAPL", "0000320193", item)
     assert result["code"] == "0000320193-26-000018"
     assert result["display_time"] == "2026-07-30 00:00:00"
     assert result["form"] == "8-K"
     assert "sec.gov" in result["url"]
-    assert result["title"].startswith("8-K")
+    assert result["title"] == "8-K (5.02高管离职/任命)"
+    assert result["items"] == "5.02"
+
+
+def test_format_us_filing_without_items_keeps_type() -> None:
+    item = {
+        "accession": "0000320193-26-000019",
+        "filing_date": "2026-07-31",
+        "form": "10-Q",
+        "document": "aapl-20260627.htm",
+        "description": "10-Q",
+        "items": "",
+    }
+    result = service._format_us_filing("AAPL", "0000320193", item)
+    assert result["title"] == "10-Q 10-Q"
+    assert result["items"] == ""
+
+
+def test_translate_items_known_and_unknown() -> None:
+    assert us_edgar._translate_items("2.02,9.01") == "2.02经营业绩, 9.01财务报表和附件"
+    assert us_edgar._translate_items("99.99") == "99.99"
+    assert us_edgar._translate_items("") == ""

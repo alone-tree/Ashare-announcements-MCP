@@ -190,10 +190,18 @@ def sync_edgar_archive(
 
 
 def _format_us_filing(stock_code: str, cik: str, item: dict[str, Any]) -> dict[str, Any]:
-    """EDGAR 提交记录 → 统一公告 item 格式。"""
+    """EDGAR 提交记录 → 统一公告 item 格式。
+
+    title 为"表单类型 (items 中文含义)"，如 "8-K (5.02高管离职/任命)"，
+    让 AI 在列表层直接看懂公告类别；无 items 时仅表单类型。
+    """
     form = item.get("form", "")
     description = item.get("description") or ""
-    title = f"{form} {description}".strip()
+    items = str(item.get("items") or "").strip()
+    if items:
+        title = f"{form} ({us_edgar._translate_items(items)})"
+    else:
+        title = f"{form} {description}".strip()
     return {
         "code": item.get("accession", ""),
         "url": us_edgar.filing_url(cik, item["accession"], item["document"]),
@@ -202,6 +210,7 @@ def _format_us_filing(stock_code: str, cik: str, item: dict[str, Any]) -> dict[s
         "column_name": "SEC 提交",
         "short_name": stock_code,
         "form": form,
+        "items": items,
         "accession": item.get("accession", ""),
     }
 
