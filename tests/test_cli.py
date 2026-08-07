@@ -108,7 +108,7 @@ def test_query_batch_flattens_all_company_results(monkeypatch) -> None:
 
     result = cli.dispatch(
         {
-            "action": "query_batch",
+            "tool": "query_batch",
             "stock_codes": ["000001", "000002", "999999"],
             "start_date": "2026-07-30",
         }
@@ -136,7 +136,7 @@ def test_query_interactions_batch_not_applicable_is_success(monkeypatch) -> None
         },
     )
 
-    result = cli.dispatch({"action": "query_interactions_batch", "stock_codes": ["00700"]})
+    result = cli.dispatch({"tool": "query_interactions_batch", "stock_codes": ["00700"]})
 
     assert result["ok"] is True
     assert result["status"] == "success"
@@ -165,7 +165,7 @@ def test_read_batch_passes_request_options_and_returns_text(monkeypatch) -> None
     monkeypatch.setattr(cli, "_read_item", fake_read)
     result = cli.dispatch(
         {
-            "action": "read_batch",
+            "tool": "read_batch",
             "announcements": [
                 {
                     "stock_code": "000001",
@@ -195,7 +195,7 @@ def test_read_batch_defaults_to_detect_mode(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_read_item", fake_read)
     cli.dispatch(
         {
-            "action": "read_batch",
+            "tool": "read_batch",
             "announcements": [
                 {"stock_code": "000001", "url": "https://example.com/A.pdf", "code": "A", "title": "A"}
             ],
@@ -246,7 +246,7 @@ def test_search_batch_passes_keywords_and_returns_hits(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_search_item", fake_search)
     result = cli.dispatch(
         {
-            "action": "search_batch",
+            "tool": "search_batch",
             "announcements": [
                 {
                     "stock_code": "000001",
@@ -270,7 +270,7 @@ def test_search_batch_passes_keywords_and_returns_hits(monkeypatch) -> None:
 def test_search_batch_rejects_null_query() -> None:
     result = cli.dispatch(
         {
-            "action": "search_batch",
+            "tool": "search_batch",
             "announcements": [
                 {
                     "stock_code": "000001",
@@ -306,8 +306,8 @@ def test_search_item_defaults_match_mcp(monkeypatch) -> None:
 
 
 def test_main_reads_stdin_and_writes_one_json_response(monkeypatch) -> None:
-    monkeypatch.setattr(cli, "dispatch", lambda request: {"ok": True, "action": request["action"]})
-    stdin = io.StringIO('{"action":"query_batch"}')
+    monkeypatch.setattr(cli, "dispatch", lambda request: {"ok": True, "tool": request["tool"]})
+    stdin = io.StringIO('{"tool":"query_batch"}')
     stdout = io.StringIO()
     monkeypatch.setattr(cli.sys, "stdin", stdin)
     monkeypatch.setattr(cli.sys, "stdout", stdout)
@@ -316,7 +316,7 @@ def test_main_reads_stdin_and_writes_one_json_response(monkeypatch) -> None:
 
     lines = stdout.getvalue().splitlines()
     assert len(lines) == 1
-    assert json.loads(lines[0]) == {"ok": True, "action": "query_batch"}
+    assert json.loads(lines[0]) == {"ok": True, "tool": "query_batch"}
 
 
 def test_main_returns_top_level_error_for_non_object(monkeypatch) -> None:
@@ -334,18 +334,18 @@ def test_main_returns_top_level_error_for_non_object(monkeypatch) -> None:
 
 
 def test_cli_rejects_unknown_action() -> None:
-    with pytest.raises(ValueError, match="未知 action"):
-        cli.dispatch({"action": "unknown"})
+    with pytest.raises(ValueError, match="未知 tool"):
+        cli.dispatch({"tool": "unknown"})
 
 
 def test_cli_establish_check_requires_keyword() -> None:
-    with pytest.raises(ValueError, match="company_action=check 需要 keyword"):
-        cli.dispatch({"action": "establish_company", "company_action": "check"})
+    with pytest.raises(ValueError, match="action=check 需要 keyword"):
+        cli.dispatch({"tool": "establish_company", "action": "check"})
 
 
 def test_cli_establish_establish_requires_codes() -> None:
-    with pytest.raises(ValueError, match="company_action=establish 需要非空 codes 数组"):
-        cli.dispatch({"action": "establish_company", "company_action": "establish"})
+    with pytest.raises(ValueError, match="action=establish 需要非空 codes 数组"):
+        cli.dispatch({"tool": "establish_company", "action": "establish"})
 
 
 def test_cli_establish_company_delegates(monkeypatch) -> None:
@@ -360,12 +360,12 @@ def test_cli_establish_company_delegates(monkeypatch) -> None:
         lambda codes: {"company_key": codes[0], "securities": []},
     )
 
-    checked = cli.dispatch({"action": "establish_company", "keyword": "中际"})
+    checked = cli.dispatch({"tool": "establish_company", "keyword": "中际"})
     assert checked["ok"] is True
     assert checked["source_total_count"] == 1
 
     established = cli.dispatch(
-        {"action": "establish_company", "company_action": "establish", "codes": ["300308"]}
+        {"tool": "establish_company", "action": "establish", "codes": ["300308"]}
     )
     assert established["ok"] is True
     assert established["company_key"] == "300308"

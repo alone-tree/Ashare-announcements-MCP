@@ -1,7 +1,7 @@
 """供确定性批处理脚本调用的公告 JSON CLI。
 
 从 stdin 读取一个 JSON 请求，stdout 只输出一个 JSON 响应。
-action 支持：establish_company、query_batch、query_interactions_batch、search_batch、read_batch。
+tool 支持：establish_company、query_batch、query_interactions_batch、search_batch、read_batch。
 同 MCP 能力保持一致；批处理查询返回全部匹配结果，不做 MCP 的 50 条分页。
 """
 
@@ -29,11 +29,11 @@ def _status(items: list[dict[str, Any]]) -> str:
     return "partial_success" if succeeded else "failed"
 
 
-def _batch_response(action: str, items: list[dict[str, Any]], result_key: str) -> dict[str, Any]:
+def _batch_response(tool: str, items: list[dict[str, Any]], result_key: str) -> dict[str, Any]:
     succeeded = sum(bool(item.get("ok")) for item in items)
     return {
         "ok": succeeded == len(items),
-        "action": action,
+        "tool": tool,
         "status": _status(items),
         "requested": len(items),
         "succeeded": succeeded,
@@ -200,19 +200,19 @@ def query_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def establish_company_action(request: dict[str, Any]) -> dict[str, Any]:
-    """CLI 版建档：入参用 company_action=check/establish（顶层 action 已被入口占用），响应与 MCP 一致返回 action。"""
-    company_action = request.get("company_action") or request.get("action_type") or "check"
-    if company_action == "check":
+    """CLI 版建档：与 MCP 一致，action=check 用 keyword、action=establish 用 codes。"""
+    action = request.get("action") or "check"
+    if action == "check":
         keyword = request.get("keyword")
         if not keyword:
-            raise ValueError("company_action=check 需要 keyword")
-        return {"ok": True, "action": company_action, **check_company(str(keyword))}
-    if company_action == "establish":
+            raise ValueError("action=check 需要 keyword")
+        return {"ok": True, "action": action, **check_company(str(keyword))}
+    if action == "establish":
         codes = request.get("codes")
         if not isinstance(codes, list) or not codes:
-            raise ValueError("company_action=establish 需要非空 codes 数组")
-        return {"ok": True, "action": company_action, **establish_securities(codes)}
-    raise ValueError(f"未知 company_action：{company_action}")
+            raise ValueError("action=establish 需要非空 codes 数组")
+        return {"ok": True, "action": action, **establish_securities(codes)}
+    raise ValueError(f"未知 action：{action}")
 
 
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -225,10 +225,10 @@ ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 
 
 def dispatch(request: dict[str, Any]) -> dict[str, Any]:
-    action = str(request.get("action") or "")
-    handler = ACTIONS.get(action)
+    tool = str(request.get("tool") or "")
+    handler = ACTIONS.get(tool)
     if not handler:
-        raise ValueError(f"未知 action：{action or '<empty>'}")
+        raise ValueError(f"未知 tool：{tool or '<empty>'}")
     return handler(request)
 
 
