@@ -3,10 +3,10 @@
 
 用法：
     python -m market_data_mcp.cli --tool get_quote --code 300476 --start 2025-01-01 --end 2026-12-31
-    python -m market_data_mcp.cli --tool get_financials --code 300476 --periods 2025,2024
-    python -m market_data_mcp.cli --tool get_indicators --code 00700
-    python -m market_data_mcp.cli --tool get_company_info --code AAPL
-    python -m market_data_mcp.cli --batch codes=300476,00700,AAPL --tool get_financials --out DIR --format md
+    python -m market_data_mcp.cli --tool get_financial_statements --code 300476 --periods 2025,2024
+    python -m market_data_mcp.cli --tool get_financial_ratios --code 00700
+    python -m market_data_mcp.cli --tool get_company_profile --code AAPL
+    python -m market_data_mcp.cli --batch codes=300476,00700,AAPL --tool get_financial_statements --out DIR --format md
 
 请求 JSON 形态（与 MCP 工具同名）：
     {"tool": "get_quote", "code": "300476", "start": "...", "end": "...", "adjust": "qfq"}
@@ -19,13 +19,13 @@ import json
 import sys
 from typing import Any
 
-from market_data_mcp.service import get_company_info, get_financials, get_indicators, get_quote
+from market_data_mcp.service import get_company_profile, get_financial_ratios, get_financial_statements, get_quote
 
 TOOLS = {
     "get_quote": get_quote,
-    "get_financials": get_financials,
-    "get_indicators": get_indicators,
-    "get_company_info": get_company_info,
+    "get_financial_statements": get_financial_statements,
+    "get_financial_ratios": get_financial_ratios,
+    "get_company_profile": get_company_profile,
 }
 
 
@@ -90,7 +90,7 @@ def _result_to_markdown(result: dict[str, Any], code: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="market_data CLI：行情/财报/指标/公司信息")
-    parser.add_argument("--tool", help="工具名：get_quote/get_financials/get_indicators/get_company_info")
+    parser.add_argument("--tool", help="工具名：get_quote/get_financial_statements/get_financial_ratios/get_company_profile")
     parser.add_argument("--code", help="证券代码（6位A股/5位港股/美股字母）")
     parser.add_argument("--codes", help="批量：逗号分隔多个代码")
     parser.add_argument("--start", default=None, help="行情开始日期 YYYY-MM-DD")

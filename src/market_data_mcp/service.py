@@ -123,7 +123,7 @@ def get_quote(code: str, start: str, end: str, adjust: str = "qfq") -> dict[str,
     }
 
 
-def get_financials(
+def get_financial_statements(
     code: str,
     periods: list[str] | None = None,
     statements: list[str] | None = None,
@@ -184,7 +184,7 @@ def filter_by_period(df: pd.DataFrame, periods: list[str]) -> pd.DataFrame:
     return df[mask]
 
 
-def get_indicators(code: str, periods: list[str] | None = None) -> dict[str, Any]:
+def get_financial_ratios(code: str, periods: list[str] | None = None) -> dict[str, Any]:
     """获取财务衍生指标（原始，来自东财指标接口）。
 
     A股：按报告期多期；港股：仅最新；美股：年报多期。
@@ -209,7 +209,7 @@ def get_indicators(code: str, periods: list[str] | None = None) -> dict[str, Any
     return {"ok": True, "market": _market_name(market), "code": c, "rows": _df_to_records(df)}
 
 
-def get_company_info(
+def get_company_profile(
     code: str,
     sections: list[str] | None = None,
 ) -> dict[str, Any]:

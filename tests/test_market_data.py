@@ -71,14 +71,14 @@ def test_get_quote_rejects_bad_adjust():
         service.get_quote("300476", "2026-01-01", "2026-01-31", adjust="bad")
 
 
-def test_get_financials_rejects_bad_statements():
+def test_get_financial_statements_rejects_bad_statements():
     with pytest.raises(ValueError, match="statements"):
-        service.get_financials("300476", statements=["bad"])
+        service.get_financial_statements("300476", statements=["bad"])
 
 
-def test_get_company_info_rejects_bad_sections():
+def test_get_company_profile_rejects_bad_sections():
     with pytest.raises(ValueError, match="sections"):
-        service.get_company_info("300476", sections=["bad"])
+        service.get_company_profile("300476", sections=["bad"])
 
 
 def test_filter_by_period():
