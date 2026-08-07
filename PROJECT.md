@@ -43,7 +43,7 @@ query_announcements(
 
 ### `read_announcement`
 
-不传 `start_page` 时自动检测：短公告（≤10 页）直接返回全文；长公告返回文档画像（页数、profile、扫描页、文本覆盖率、推荐动作）和前 3 页正文预览。传 `start_page` 时精读指定页段：正常页通过 PyMuPDF4LLM 尽量保留标题、段落和表格；扫描页通过 RapidOCR 恢复文字。单次最多返回 `return_pages` 页（默认 20，不设上限，可一次读完全文），使用 `next_page` 继续。
+不传 `start_page` 时自动检测：短公告（≤20 页）直接返回全文；长公告返回文档画像（页数、profile、扫描页、文本覆盖率、推荐动作）和前 5 页正文预览。传 `start_page` 时精读指定页段：正常页通过 PyMuPDF4LLM 尽量保留标题、段落和表格；扫描页通过 RapidOCR 恢复文字。单次最多返回 `return_pages` 页（默认 20，不设上限，可一次读完全文），使用 `next_page` 继续。
 
 ## 数据流
 
@@ -63,7 +63,7 @@ read_announcement
   -> 下载并缓存 PDF
   -> PyMuPDF 全文快速索引
   -> 自动检测画像（页数/扫描页/覆盖率/推荐动作）
-  -> 短公告直接返回全文；长公告返回画像 + 前 3 页预览
+  -> 短公告直接返回全文；长公告返回画像 + 前 5 页预览
   -> 带 start_page 时按页精读（普通页转 Markdown，扫描页 OCR）
 
 search_announcement

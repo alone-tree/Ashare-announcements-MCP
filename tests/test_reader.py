@@ -164,7 +164,7 @@ def test_read_detect_mode_short_returns_full_text(monkeypatch) -> None:
     assert result["recommended_workflow"] == "公告较短，已直接返回全文。"
 
 
-def test_read_detect_mode_long_returns_profile_and_three_pages(monkeypatch) -> None:
+def test_read_detect_mode_long_returns_profile_and_five_pages(monkeypatch) -> None:
     index = _fake_index(native_chars=[200] * 141, needs_ocr=[False] * 141)
     _patch_read(monkeypatch, index)
 
@@ -172,8 +172,8 @@ def test_read_detect_mode_long_returns_profile_and_three_pages(monkeypatch) -> N
 
     assert result["profile"] == "long_structured"
     assert result["total_pages"] == 141
-    assert result["pages_returned"] == [1, 2, 3]
-    assert result["next_page"] == 4
+    assert result["pages_returned"] == [1, 2, 3, 4, 5]
+    assert result["next_page"] == 6
     assert "共 141 页" in result["recommended_workflow"]
     assert result["scanned_page_count"] == 0
     assert result["native_text_chars"] == 200 * 141

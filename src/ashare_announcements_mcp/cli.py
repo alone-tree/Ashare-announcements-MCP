@@ -200,19 +200,19 @@ def query_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def establish_company_action(request: dict[str, Any]) -> dict[str, Any]:
-    """CLI 版建档：兼容 action_type；优先使用与 MCP 一致的 company_action=check/establish。"""
-    action_type = request.get("company_action") or request.get("action_type") or "check"
-    if action_type == "check":
+    """CLI 版建档：入参用 company_action=check/establish（顶层 action 已被入口占用），响应与 MCP 一致返回 action。"""
+    company_action = request.get("company_action") or request.get("action_type") or "check"
+    if company_action == "check":
         keyword = request.get("keyword")
         if not keyword:
-            raise ValueError("check 需要 keyword")
-        return {"ok": True, "action_type": action_type, **check_company(str(keyword))}
-    if action_type == "establish":
+            raise ValueError("company_action=check 需要 keyword")
+        return {"ok": True, "action": company_action, **check_company(str(keyword))}
+    if company_action == "establish":
         codes = request.get("codes")
         if not isinstance(codes, list) or not codes:
-            raise ValueError("establish 需要非空 codes 数组")
-        return {"ok": True, "action_type": action_type, **establish_securities(codes)}
-    raise ValueError(f"未知 action_type：{action_type}")
+            raise ValueError("company_action=establish 需要非空 codes 数组")
+        return {"ok": True, "action": company_action, **establish_securities(codes)}
+    raise ValueError(f"未知 company_action：{company_action}")
 
 
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {

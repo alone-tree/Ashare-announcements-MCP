@@ -339,13 +339,13 @@ def test_cli_rejects_unknown_action() -> None:
 
 
 def test_cli_establish_check_requires_keyword() -> None:
-    with pytest.raises(ValueError, match="check 需要 keyword"):
-        cli.dispatch({"action": "establish_company", "action_type": "check"})
+    with pytest.raises(ValueError, match="company_action=check 需要 keyword"):
+        cli.dispatch({"action": "establish_company", "company_action": "check"})
 
 
 def test_cli_establish_establish_requires_codes() -> None:
-    with pytest.raises(ValueError, match="establish 需要非空 codes 数组"):
-        cli.dispatch({"action": "establish_company", "action_type": "establish"})
+    with pytest.raises(ValueError, match="company_action=establish 需要非空 codes 数组"):
+        cli.dispatch({"action": "establish_company", "company_action": "establish"})
 
 
 def test_cli_establish_company_delegates(monkeypatch) -> None:
@@ -365,7 +365,7 @@ def test_cli_establish_company_delegates(monkeypatch) -> None:
     assert checked["source_total_count"] == 1
 
     established = cli.dispatch(
-        {"action": "establish_company", "action_type": "establish", "codes": ["300308"]}
+        {"action": "establish_company", "company_action": "establish", "codes": ["300308"]}
     )
     assert established["ok"] is True
     assert established["company_key"] == "300308"

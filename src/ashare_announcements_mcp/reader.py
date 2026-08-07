@@ -262,7 +262,7 @@ def _build_profile(index: dict[str, Any]) -> dict[str, Any]:
         workflow = (
             f"文档共 {total_pages} 页，含扫描页。有明确问题时，"
             "先用 search_announcement 定位关键词页，再精读命中页；"
-            "没有明确问题，用 read 从第 4 页开始通读，next_page 续读。"
+            "没有明确问题，用 read 从第 6 页开始通读，next_page 续读。"
             "扫描页会在精读时自动 OCR。"
         )
     else:
@@ -270,7 +270,7 @@ def _build_profile(index: dict[str, Any]) -> dict[str, Any]:
         workflow = (
             f"文档共 {total_pages} 页。有明确问题时，"
             "先用 search_announcement 定位关键词页，再精读命中页；"
-            "没有明确问题，用 read 从第 4 页开始通读，next_page 续读。"
+            "没有明确问题，用 read 从第 6 页开始通读，next_page 续读。"
         )
     return {
         "profile": profile,
@@ -373,7 +373,7 @@ def read_pdf(
 
     检测模式（start_page=None）：
       - short（≤20 页）：直接返回全文；
-      - long：返回文档画像（profile/扫描页/覆盖率/推荐动作）+ 前 3 页正文预览。
+      - long：返回文档画像（profile/扫描页/覆盖率/推荐动作）+ 前 5 页正文预览。
     精读模式（start_page 指定）：从 start_page 起返回 return_pages 页
     （默认 20 页，可传任意大的值一次读完全文）；未读完时用 next_page 续读。
     """
@@ -389,7 +389,7 @@ def read_pdf(
         if profile["profile"] == "short":
             start_page, end_page = 1, total_pages
         else:
-            start_page, end_page = 1, 3
+            start_page, end_page = 1, 5
     else:
         if start_page < 1 or start_page > total_pages:
             raise ValueError(f"start_page 必须在 1 到 {total_pages} 之间")

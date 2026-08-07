@@ -174,7 +174,7 @@ async def read_announcement(
 ) -> dict[str, Any]:
     """阅读公告；url 必须是东方财富 pdf.dfcfw.com 公告链接。
 
-    不传 start_page 时自动检测：≤20 页短公告直接返回全文；>20 页长公告返回画像和前 3 页预览及阅读建议。
+    不传 start_page 时自动检测：≤20 页短公告直接返回全文；>20 页长公告返回画像和前 5 页预览及阅读建议。
     传 start_page 时精读指定页段：从 start_page 起返回 return_pages 页（默认 20 页，可传任意大的值一次读完全文），保留 Markdown 表格，扫描页自动 OCR，用 next_page 续读。
     本工具按 stock_code 作为 PDF 缓存目录，不要求公司已建档；公告是否存在以 url 下载结果为准。
     续读：把上次返回的 next_page 值传给 start_page（如 start_page=50），end_page 可选。
