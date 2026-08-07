@@ -129,7 +129,7 @@ def test_establish_pure_hk_uses_h_code_as_key(monkeypatch: pytest.MonkeyPatch) -
     assert saved["data"]["aliases"] == {"00700": "00700"}
     assert result["interactions"] == {
         "applicable": False,
-        "reason": "该公司无互动问答（纯港股/B 股），不适用",
+        "reason": "该公司无互动问答（纯港股/B 股/美股），不适用",
     }
 
 
@@ -156,16 +156,17 @@ def test_establish_rejects_empty_codes() -> None:
         company.establish_company([])
 
 
-def test_establish_rejects_non_numeric_code(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_establish_rejects_unknown_letter_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    """字母代码会被当作美股候选查找；查不到时报精确查询失败。"""
     _setup(monkeypatch, securities=[])
-    with pytest.raises(ValueError, match="必须是数字"):
+    with pytest.raises(ValueError, match="无法精确查询到证券"):
         company.establish_company(["ABC"])
 
 
 def test_establish_rejects_derivative(monkeypatch: pytest.MonkeyPatch) -> None:
     derivative = _security("13160", "腾讯中银六乙购B", "HK", "D-INNER", type_us="6")
     _setup(monkeypatch, securities=[derivative])
-    with pytest.raises(ValueError, match="不是普通 A/B/H 公司证券"):
+    with pytest.raises(ValueError, match="不是普通 A/B/H/US 公司证券"):
         company.establish_company(["13160"])
 
 

@@ -39,10 +39,28 @@ def download_pdf(stock_code: str, url: str) -> tuple[Path, bool]:
     """下载并按公告代码稳定命名；返回路径及是否命中缓存。
 
     本地路径（未上市公司的本地申报材料等）直接返回，不发起网络请求。
+    SEC EDGAR 链接（美股）下载 HTML 到 us_filings/，供虚拟页阅读。
     """
     local = Path(url)
     if local.is_file() and local.read_bytes()[:5] == b"%PDF-":
         return local, True
+    if url.startswith("https://www.sec.gov/Archives/edgar/"):
+        from ashare_announcements_mcp import us_edgar
+        from ashare_announcements_mcp.cache import stock_cache_dir
+
+        target_dir = stock_cache_dir(stock_code) / "us_filings"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        # 从 URL 提取 accession 作为文件名
+        match = re.search(r"edgar/data/\d+/(\d+)/([^/]+)$", url)
+        stem = match.group(1) if match else str(abs(hash(url)))
+        target = target_dir / f"{stem}.html"
+        if target.exists():
+            return target, True
+        html = us_edgar.fetch_filing_html(url)
+        temporary = target.with_suffix(".html.tmp")
+        temporary.write_text(html, encoding="utf-8")
+        temporary.replace(target)
+        return target, False
     path = pdf_dir(stock_code) / f"{_art_code(url)}.pdf"
     if path.exists() and path.read_bytes()[:5] == b"%PDF-":
         return path, True

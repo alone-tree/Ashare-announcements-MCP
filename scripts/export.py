@@ -17,6 +17,7 @@ REQUIREMENTS = (
     "pymupdf-layout>=1.28,<2\n"
     "rapidocr>=3.9,<4\n"
     "onnxruntime>=1.20,<2\n"
+    "markdownify>=0.13,<1\n"
 )
 USER_README = """# A 股公告阅读 MCP（用户版）
 

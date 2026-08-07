@@ -8,7 +8,7 @@ import requests
 
 from ashare_announcements_mcp.api import HEADERS
 from ashare_announcements_mcp.cache import load_companies, save_companies
-from ashare_announcements_mcp.service import sync_archive, sync_interactions
+from ashare_announcements_mcp.service import sync_archive, sync_edgar_archive, sync_interactions
 
 
 SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
@@ -74,12 +74,10 @@ def check_company(keyword: str) -> dict[str, Any]:
 
 
 def _resolve_security(code: str) -> dict[str, Any]:
-    """精确查询单个证券代码，返回建档所需的普通 A/H 公司证券信息。"""
+    """精确查询单个证券代码，返回建档所需的普通 A/B/H/US 公司证券信息。"""
     text = str(code).strip()
     if not text:
         raise ValueError("代码不能为空")
-    if not text.isdigit():
-        raise ValueError(f"代码必须是数字：{text}")
     candidates, _ = _search(text)
     matched = [item for item in candidates if str(item.get("Code") or "") == text]
     if not matched:
@@ -94,20 +92,28 @@ def _resolve_security(code: str) -> dict[str, Any]:
         market = "H"
     elif security_type_name in ("沪B", "深B"):
         market = "B"
+    elif classify == "UsStock" and type_us == "1":
+        # 美股正股：需要 SEC CIK 用于 EDGAR 通道
+        market = "US"
     else:
         raise ValueError(
-            f"{text} 不是普通 A/B/H 公司证券（Classify={classify} TypeUS={type_us}），拒绝建档"
+            f"{text} 不是普通 A/B/H/US 公司证券（Classify={classify} TypeUS={type_us}），拒绝建档"
         )
     inner_code = str(item.get("InnerCode") or "")
     if market in ("H", "B") and not inner_code:
         raise ValueError(f"{text} 缺少{('港股' if market == 'H' else 'B股')} InnerCode，拒绝建档")
-    return {
+    security: dict[str, Any] = {
         "code": text,
         "name": str(item.get("Name") or ""),
         "market": market,
         "classify": classify,
         "inner_code": inner_code,
     }
+    if market == "US":
+        from ashare_announcements_mcp.us_edgar import ticker_to_cik
+
+        security["cik"] = ticker_to_cik(text)
+    return security
 
 
 def establish_company(codes: list[str]) -> dict[str, Any]:
@@ -154,26 +160,30 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
     company = companies[company_key]
     for security in securities:
         if not any(item["code"] == security["code"] for item in company["securities"]):
-            company["securities"].append(
-                {
-                    "code": security["code"],
-                    "market": security["market"],
-                    "name": security["name"],
-                    "classify": security["classify"],
-                    "inner_code": security["inner_code"],
-                }
-            )
+            record = {
+                "code": security["code"],
+                "market": security["market"],
+                "name": security["name"],
+                "classify": security["classify"],
+                "inner_code": security["inner_code"],
+            }
+            if security.get("cik"):
+                record["cik"] = security["cik"]
+            company["securities"].append(record)
         aliases[security["code"]] = company_key
     save_companies({"companies": companies, "aliases": aliases})
 
     results = []
     for security in securities:
         try:
-            items, status = sync_archive(
-                security["code"],
-                ann_type="H" if security["market"] == "H" else ("B" if security["market"] == "B" else "A"),
-                inner_code=security["inner_code"] if security["market"] in ("H", "B") else None,
-            )
+            if security["market"] == "US":
+                items, status = sync_edgar_archive(security["code"], security["cik"])
+            else:
+                items, status = sync_archive(
+                    security["code"],
+                    ann_type="H" if security["market"] == "H" else ("B" if security["market"] == "B" else "A"),
+                    inner_code=security["inner_code"] if security["market"] in ("H", "B") else None,
+                )
             results.append(
                 {
                     "code": security["code"],
@@ -198,7 +208,7 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
                 }
             )
 
-    interactions_status = {"applicable": False, "reason": "该公司无互动问答（纯港股/B 股），不适用"}
+    interactions_status = {"applicable": False, "reason": "该公司无互动问答（纯港股/B 股/美股），不适用"}
     a_security = next((s for s in securities if s["market"] == "A"), None)
     if a_security:
         try:

@@ -1,0 +1,257 @@
+"""SEC EDGAR 通道：美股公司的建档、提交列表与文档处理。
+
+对外语义与东财通道一致（列公告→读公告→搜公告），内部数据源为 SEC EDGAR：
+- 建档：company_tickers.json 做 ticker→CIK 精确映射（本地缓存 24h）
+- 列表：submissions/CIK.json 返回最近 1000 条提交 + 历史分片
+- 文档：下载 HTML 正文，按 page-break 切虚拟页（无分页时按结构切块），转 Markdown
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import requests
+
+from ashare_announcements_mcp.cache import app_root, extraction_dir
+
+EDGAR_HEADERS = {"User-Agent": "A-share-announcements-MCP research contact@example.com"}
+TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{doc}"
+
+TICKERS_CACHE_TTL = timedelta(hours=24)
+PAGE_BREAK_RE = re.compile(
+    r'style="[^"]*page-break-(?:after|before)\s*:\s*(?:always|left|right)[^"]*"',
+    re.IGNORECASE,
+)
+FALLBACK_BLOCK_TARGET = 4_000
+
+
+def _tickers_cache_path() -> Path:
+    return app_root() / "cache" / "edgar" / "company_tickers.json"
+
+
+def _tickers_cache_fresh() -> bool:
+    path = _tickers_cache_path()
+    if not path.exists():
+        return False
+    mtime = datetime.fromtimestamp(path.stat().st_mtime)
+    return datetime.now() - mtime < TICKERS_CACHE_TTL
+
+
+def _load_tickers(force: bool = False) -> dict[str, dict[str, Any]]:
+    """读取 ticker→CIK 全量映射；本地缓存 24 小时，缺失或过期时重新下载。"""
+    path = _tickers_cache_path()
+    if not force and _tickers_cache_fresh():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return {str(v["ticker"]).upper(): v for v in raw.values()}
+        except (OSError, json.JSONDecodeError, KeyError):
+            pass
+    response = requests.get(TICKERS_URL, headers=EDGAR_HEADERS, timeout=30)
+    response.raise_for_status()
+    raw = response.json()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(response.text, encoding="utf-8")
+    temporary.replace(path)
+    return {str(v["ticker"]).upper(): v for v in raw.values()}
+
+
+def ticker_to_cik(ticker: str) -> str:
+    """ticker→CIK 精确匹配；缓存查不到时强制刷新一次（应对刚上市公司）。"""
+    text = str(ticker).strip().upper()
+    tickers = _load_tickers()
+    info = tickers.get(text)
+    if not info:
+        tickers = _load_tickers(force=True)
+        info = tickers.get(text)
+    if not info:
+        raise ValueError(f"SEC 未找到该美股代码：{ticker}")
+    return str(info["cik_str"]).zfill(10)
+
+
+def cik_to_ticker(cik: str) -> str | None:
+    tickers = _load_tickers()
+    for info in tickers.values():
+        if str(info["cik_str"]).zfill(10) == str(cik).zfill(10):
+            return str(info["ticker"]).upper()
+    return None
+
+
+def fetch_submissions(cik: str) -> dict[str, Any]:
+    """拉取提交列表：recent 1000 条 + 历史分片文件全部展开。"""
+    response = requests.get(
+        SUBMISSIONS_URL.format(cik=cik), headers=EDGAR_HEADERS, timeout=30
+    )
+    response.raise_for_status()
+    data = response.json()
+    return _expand_submissions(data)
+
+
+def _expand_submissions(data: dict[str, Any]) -> dict[str, Any]:
+    """把 submissions 的 recent 与历史分片合并为按时间倒序的完整列表。
+
+    主文件结构：{"filings": {"recent": {...}, "files": [...]}}
+    历史分片结构：顶层直接就是 recent 数组字段（无 filings 包装）。
+    """
+    recent = data.get("filings", {}).get("recent", {}) or data
+    merged: list[dict[str, str]] = []
+
+    for i in range(len(recent.get("form") or [])):
+        merged.append(
+            {
+                "accession": str(recent["accessionNumber"][i]),
+                "filing_date": str(recent["filingDate"][i]),
+                "form": str(recent["form"][i]),
+                "document": str(recent["primaryDocument"][i]),
+                "description": str(recent["primaryDocDescription"][i] or ""),
+            }
+        )
+
+    files = data.get("filings", {}).get("files") or []
+    for file_info in files:
+        name = file_info.get("name")
+        if not name:
+            continue
+        url = f"https://data.sec.gov/submissions/{name}"
+        response = requests.get(url, headers=EDGAR_HEADERS, timeout=30)
+        response.raise_for_status()
+        chunk = response.json()
+        older = chunk.get("filings", {}).get("recent", {}) or chunk
+        for i in range(len(older.get("form") or [])):
+            merged.append(
+                {
+                    "accession": str(older["accessionNumber"][i]),
+                    "filing_date": str(older["filingDate"][i]),
+                    "form": str(older["form"][i]),
+                    "document": str(older["primaryDocument"][i]),
+                    "description": str(older["primaryDocDescription"][i] or ""),
+                }
+            )
+
+    merged.sort(key=lambda item: item["filing_date"], reverse=True)
+    return {"items": merged, "cache_complete": True, "source": "edgar"}
+
+
+def filing_url(cik: str, accession: str, document: str) -> str:
+    return ARCHIVE_URL.format(cik=cik.lstrip("0"), accession=accession.replace("-", ""), doc=document)
+
+
+def fetch_filing_html(url: str) -> str:
+    response = requests.get(url, headers=EDGAR_HEADERS, timeout=60)
+    response.raise_for_status()
+    return response.text
+
+
+def _clean_html(html: str) -> str:
+    """清理 XBRL 元数据区、脚本和样式。"""
+    html = re.sub(r"<\?xml[^>]*\?>", "", html)
+    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.S | re.I)
+    html = re.sub(r"<ix:header.*?</ix:header>", "", html, flags=re.S | re.I)
+    html = re.sub(r"<ix:[a-zA-Z]+[^>]*>", "", html)
+    html = re.sub(r"</ix:[a-zA-Z]+>", "", html)
+    return html
+
+
+def split_html_pages(html: str) -> list[str]:
+    """按 page-break 切虚拟页；无分页标记时按 div/p 结构切块（兜底）。"""
+    cleaned = _clean_html(html)
+    parts = PAGE_BREAK_RE.split(cleaned)
+    pages = [p for p in parts if re.sub(r"<[^>]+>", "", p).strip()]
+    if len(pages) > 1:
+        return pages
+    return _split_blocks(cleaned)
+
+
+def _split_blocks(html: str, target: int = FALLBACK_BLOCK_TARGET) -> list[str]:
+    """兜底：按 div/p 文本块累积，达到目标字符数切一块。"""
+    blocks = re.findall(r"<div[^>]*>(.*?)</div>|<p[^>]*>(.*?)</p>", html, flags=re.S)
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for a, b in blocks:
+        block = a or b
+        text = re.sub(r"<[^>]+>", " ", block)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        if current_len + len(text) > target and current:
+            chunks.append(" ".join(current))
+            current = []
+            current_len = 0
+        current.append(text)
+        current_len += len(text)
+    if current:
+        chunks.append(" ".join(current))
+    return chunks or [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", html)).strip()]
+
+
+def html_to_markdown(html: str) -> str:
+    """HTML 转 Markdown（markdownify），保留标题/段落/表格。"""
+    from markdownify import markdownify as md
+
+    cleaned = _clean_html(html)
+    markdown = md(cleaned, heading_style="ATX")
+    return re.sub(r"\n{3,}", "\n\n", markdown).strip()
+
+
+def build_html_index(stock_code: str, accession: str, html: str) -> dict[str, Any]:
+    """把 HTML 转成与 PDF 索引同构的虚拟页索引，供 reader 复用。
+
+    每页: {page, native_text, native_chars, needs_ocr: False, heading}
+    """
+    pages_html = split_html_pages(html)
+    pages = []
+    for page_number, page_html in enumerate(pages_html, start=1):
+        text = html_to_markdown(page_html)
+        heading = ""
+        for line in text.splitlines():
+            if line.strip().startswith("#"):
+                heading = line.strip().lstrip("#").strip()[:60]
+                break
+        pages.append(
+            {
+                "page": page_number,
+                "native_text": text,
+                "native_chars": len(text),
+                "image_count": 0,
+                "needs_ocr": False,
+                "heading": heading,
+            }
+        )
+    return {
+        "version": 1,
+        "source_size": len(html),
+        "source_mtime_ns": 0,
+        "toc": [],
+        "pages": pages,
+        "us_edgar": {"accession": accession},
+    }
+
+
+def save_html_index(stock_code: str, html_path: Path, index: dict[str, Any]) -> Path:
+    path = extraction_dir(stock_code) / f"{html_path.stem}.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
+def cache_filing_html(stock_code: str, accession: str, url: str) -> Path:
+    """下载并缓存 EDGAR HTML 到 cache/{code}/us_filings/{accession}.html。"""
+    target_dir = app_root() / "cache" / stock_code / "us_filings"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{accession.replace('-', '')}.html"
+    if target.exists():
+        return target
+    html = fetch_filing_html(url)
+    temporary = target.with_suffix(".html.tmp")
+    temporary.write_text(html, encoding="utf-8")
+    temporary.replace(target)
+    return target
