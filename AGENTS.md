@@ -113,4 +113,4 @@ $env:PYTHONPATH = 'src'
 - 建档时用 SEC company_tickers.json 做 ticker→CIK 映射（本地缓存 24h）。
 - 美股判定：SecurityTypeName=美股 + TypeUS∉{5,6}（1=原生股、3=ADR 接受；ETF/票据拒绝）。
 - 发行类文件（424B*/FWP）默认保留不过滤（2026-08 决策：先留着，如需要研究结构化产品）。
-- 美股公告 title 只附原始信息：8-K 附 items 条款中文含义（FORM8K_ITEMS 映射）、10-Q/10-K 附财报截止日（reportDate 原样）、4/144 等补表单类型中文含义（FORM_MEANINGS）。**不推算 EDGAR 没有的信息**（如季度/财年——财年可能非自然年，10-Q 截止日 2026-03-28 不写"FY2026 Q1"），保留英文原始 description 时原样附上。
+- 美股公告 title 只做"原始信息 + 翻译"，不做推断：①EDGAR 返回的有用字段原样附上（8-K items、10-Q/10-K 财报截止日 reportDate、4 交易日期）；②固定编号→含义的映射只做翻译（FORM8K_ITEMS 条款、FORM_MEANINGS 表单类型）；③**不做额外推断**——EDGAR 没有的季度/财年不推算（财年可能非自然年，10-Q 截止日 2026-03-28 不写"FY2026 Q1"），英文原始 description 保留时原样附上。
