@@ -25,6 +25,19 @@ class _FakeDf:
     def __iter__(self):
         return iter(self._rows)
 
+    def __getitem__(self, key):
+        if key == "REPORT_DATE":
+            return _FakeSeries([r.get("REPORT_DATE") for r in self._rows])
+        if key == "date":
+            return _FakeSeries([r.get("date") for r in self._rows])
+        if key == "close_raw":
+            return _FakeSeries([r.get("close_raw", r.get("close")) for r in self._rows])
+        raise KeyError(key)
+
+    @property
+    def iloc(self):
+        return _FakeIloc(self._rows)
+
     @property
     def columns(self):
         return list(self._rows[0].keys()) if self._rows else []
@@ -35,10 +48,20 @@ class _FakeDf:
     def where(self, cond, other=None):
         return self
 
-    def __getitem__(self, key):
-        if key == "REPORT_DATE":
-            return _FakeSeries([r.get("REPORT_DATE") for r in self._rows])
-        raise KeyError(key)
+    def __getattr__(self, name):
+        if name in ("str", "astype", "replace"):
+            return lambda *a, **k: self
+        raise AttributeError(name)
+
+
+class _FakeIloc:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __getitem__(self, idx):
+        if isinstance(idx, int):
+            return self._rows[idx]
+        raise IndexError(idx)
 
 
 class _FakeSeries:
@@ -111,6 +134,44 @@ def test_get_quote_empty_raises():
 def test_get_quote_rejects_bad_period():
     with pytest.raises(ValueError, match="period"):
         service.get_quote("300476", "2026-01-01", "2026-01-31", period="yearly")
+
+
+def test_get_quote_fields_filter_without_network():
+    """fields 过滤逻辑：patch 掉 fetch_daily 后验证字段裁剪。"""
+    df_rows = [
+        {"date": "2026-07-01", "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100.0, "amount": 150.0, "source": "sina"}
+    ]
+    fake_df = _FakeDf(df_rows)
+
+    with patch("market_data_mcp.service.MARKET_MODULES") as mods, patch("market_data_mcp.service._fetch_shares", return_value=None):
+        mod = _FakeMod(fake_df)
+        mods.__getitem__ = lambda self, k: mod
+        result = service.get_quote("300476", "2026-07-01", "2026-07-05", fields=["date", "close"])
+    assert result["fields"] == ["date", "close"]
+    assert list(result["rows"][0].keys()) == ["date", "close"]
+
+
+def test_get_quote_fields_invalid_reports():
+    df_rows = [
+        {"date": "2026-07-01", "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100.0, "amount": 150.0, "source": "sina"}
+    ]
+    fake_df = _FakeDf(df_rows)
+    with patch("market_data_mcp.service.MARKET_MODULES") as mods, patch("market_data_mcp.service._fetch_shares", return_value=None):
+        mod = _FakeMod(fake_df)
+        mods.__getitem__ = lambda self, k: mod
+        with pytest.raises(ValueError, match="不可用字段"):
+            service.get_quote("300476", "2026-07-01", "2026-07-05", fields=["bogus"])
+
+
+class _FakeMod:
+    def __init__(self, df):
+        self._df = df
+
+    def fetch_daily(self, *a, **k):
+        return self._df
+
+    def fetch_raw_close(self, *a, **k):
+        return self._df
 
 
 def test_resample_ohlcv_weekly():

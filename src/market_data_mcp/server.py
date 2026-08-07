@@ -45,16 +45,19 @@ def create_server() -> Any:
         end: str,
         adjust: str = "qfq",
         period: str = "daily",
+        fields: list[str] | None = None,
     ) -> dict[str, Any]:
         """获取日线/周线/月线行情（A股/港股/美股）。
 
         code: 6位数字=A股、5位数字=港股、字母=美股；可用 A:/HK:/US: 前缀强制市场。
         adjust: qfq=前复权、hfq=后复权、none=不复权（传空字符串）。
         period: daily=日线、weekly=周线、monthly=月线。
-        返回每日/周/月 开盘/收盘/最高/最低/成交量/成交额/换手率/流通股本，及数据源。
-        notes 说明实际口径（新浪回退时周/月线由日线聚合；新浪美股 hfq 降级为 qfq）。
+        fields: 指定返回字段，如 ["date","close"] 或 ["date","total_market_cap"]；不传=全部，date 始终保留。
+        可选字段：open/high/low/close/volume/amount/turnover/outstanding_share/
+                  total_market_cap（估算值）/float_market_cap（估算值，A股）。
+        notes 说明实际口径（新浪回退时周/月线由日线聚合；新浪美股 hfq 降级为 qfq；市值为估算）。
         """
-        return _wrap(get_quote)(code=code, start=start, end=end, adjust=adjust, period=period)
+        return _wrap(get_quote)(code=code, start=start, end=end, adjust=adjust, period=period, fields=fields)
 
     @mcp.tool()
     def get_financial_statements(

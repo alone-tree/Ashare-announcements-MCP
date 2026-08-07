@@ -106,11 +106,13 @@ def get_quote(
     end: str,
     adjust: str = "qfq",
     period: str = "daily",
+    fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """获取日线/周线/月线行情（前复权/后复权/不复权），含成交量/额/流通股本。
 
-    返回 {ok, market, code, name, start, end, adjust, period, source, notes, rows: [...]}
-    notes 说明实际返回口径（如美股新浪回退时 hfq 降级为 qfq、周/月线由日线聚合）。
+    返回 {ok, market, code, name, start, end, adjust, period, source, notes, fields, rows: [...]}
+    fields: 指定返回字段（如 ["date","close"]）；不传=全部字段，date 始终保留。
+    notes 说明实际返回口径（如新浪回退时周/月线由日线聚合、hfq 降级）。
     """
     if adjust not in VALID_ADJUSTS:
         raise ValueError(f"adjust 必须是 {VALID_ADJUSTS} 之一（qfq=前复权 hfq=后复权 空=不复权）")
@@ -118,6 +120,12 @@ def get_quote(
         raise ValueError(f"period 必须是 {VALID_PERIODS} 之一（daily/weekly/monthly）")
     market, c = _resolve_market(code)
     mod = MARKET_MODULES[market]
+
+    # 需要市值时先拉股本（惰性，避免每次查询都多请求）
+    requested_caps = fields or []
+    want_cap = not fields or "total_market_cap" in fields or "float_market_cap" in fields
+    shares = _fetch_shares(market, c) if want_cap else None
+
     df = mod.fetch_daily(c, start, end, adjust=adjust, period=period)
     if df is None or len(df) == 0:
         raise ValueError(f"未获取到 {c} 的行情数据（{start}~{end}）")
@@ -127,6 +135,22 @@ def get_quote(
         notes.append(f"新浪接口仅提供日线，{period} 由日线本地聚合")
     if source == "sina" and market == "us" and adjust == "hfq":
         notes.append("新浪美股接口不支持后复权，已返回前复权数据")
+
+    rows = _df_to_records(df)
+    if shares is not None:
+        rows = _attach_market_cap(rows, shares, market, mod, c, start, end)
+        notes.append("总市值/流通市值为估算值（最新报告期股本 × 不复权收盘价，季度级精度）")
+
+    available = set(rows[0].keys()) if rows else {"date"}
+    if fields:
+        invalid = [f for f in fields if f not in available]
+        if invalid:
+            raise ValueError(
+                f"fields 含不可用字段：{invalid}（可选：{sorted(available)}）"
+            )
+        keep = ["date"] + [f for f in fields if f != "date"]
+        rows = [{k: r[k] for k in keep if k in r} for r in rows]
+
     return {
         "ok": True,
         "market": _market_name(market),
@@ -137,8 +161,79 @@ def get_quote(
         "period": period,
         "source": source,
         "notes": notes,
-        "rows": _df_to_records(df),
+        "fields": list(rows[0].keys()) if rows else [],
+        "rows": rows,
     }
+
+
+def _fetch_shares(market: str, code: str) -> dict[str, float] | None:
+    """获取最新报告期总股本/流通股本（股）。返回 None 表示该市场无股本来源。
+
+    A股：资产负债表 SHARE_CAPITAL（总股本）+ 新浪行情 outstanding_share（流通股本）
+    港股：财务指标 TTM 快照
+    美股：无股本接口（原脚本探测结论）
+    """
+    try:
+        if market == "a":
+            df = ak.stock_balance_sheet_by_report_em(symbol=_common.em_symbol_a(code))
+            if df is None or len(df) == 0 or "SHARE_CAPITAL" not in df.columns:
+                return None
+            total = float(df.iloc[0]["SHARE_CAPITAL"]) if pd.notnull(df.iloc[0]["SHARE_CAPITAL"]) else None
+            return {"total_shares": total, "float_shares": None}
+        if market == "hk":
+            df = ak.stock_hk_financial_indicator_em(symbol=code)
+            if df is None or len(df) == 0:
+                return None
+            # 港股指标列名含总股本（百万股/股），探测记录未固定列名，尽力取
+            for col in df.columns:
+                if "股本" in col or "SHARE" in str(col).upper():
+                    try:
+                        return {"total_shares": float(df.iloc[0][col]), "float_shares": None}
+                    except (TypeError, ValueError):
+                        pass
+            return None
+        return None  # 美股无股本来源
+    except Exception:
+        return None
+
+
+def _attach_market_cap(
+    rows: list[dict[str, Any]],
+    shares: dict[str, float | None],
+    market: str,
+    mod: Any,
+    code: str,
+    start: str,
+    end: str,
+) -> list[dict[str, Any]]:
+    """按不复权收盘价估算总市值/流通市值（估算值，非精确值）。
+
+    市值必须用不复权价格（复权价会随除权跳变导致市值失真），
+    因此单独拉不复权收盘序列，按日期合并。
+    """
+    try:
+        raw = mod.fetch_raw_close(code, start, end)
+        raw_map = dict(zip(raw["date"].astype(str), raw["close_raw"]))
+    except Exception:
+        raw_map = {}
+    out = []
+    for row in rows:
+        item = dict(row)
+        close = row.get("close")
+        raw_close = raw_map.get(str(row.get("date", "")), close)
+        if raw_close is None:
+            out.append(item)
+            continue
+        total = shares.get("total_shares")
+        if total:
+            item["total_market_cap"] = round(total * raw_close, 2)
+        float_shares = shares.get("float_shares")
+        if float_shares:
+            item["float_market_cap"] = round(float_shares * raw_close, 2)
+        elif market == "a" and "outstanding_share" in row and row["outstanding_share"]:
+            item["float_market_cap"] = round(row["outstanding_share"] * raw_close, 2)
+        out.append(item)
+    return out
 
 
 def get_financial_statements(
