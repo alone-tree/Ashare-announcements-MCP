@@ -192,21 +192,41 @@ def sync_edgar_archive(
 def _format_us_filing(stock_code: str, cik: str, item: dict[str, Any]) -> dict[str, Any]:
     """EDGAR 提交记录 → 统一公告 item 格式。
 
-    title 为"表单类型 (items 中文含义)"，如 "8-K (5.02高管离职/任命)"，
-    让 AI 在列表层直接看懂公告类别；无 items 时仅表单类型。
+    title 组合表单类型 + 中文含义 + 原始信息：
+    - 8-K 附 items 条款含义，如 "8-K (5.02高管离职/任命)"
+    - 10-Q/10-K 附财报期间，如 "10-Q 季报 (FY2026 Q3)"
+    - 4/144 等附中文含义，如 "4 内部人士交易 (2026-07-15)"
+    无 items/期间/含义时保持原样。
     """
     form = item.get("form", "")
     description = item.get("description") or ""
     items = str(item.get("items") or "").strip()
+    report_date = str(item.get("report_date") or "").strip()
+
+    parts = [form]
+    meaning = us_edgar.FORM_MEANINGS.get(form)
+    if meaning:
+        parts.append(meaning)
+
     if items:
-        title = f"{form} ({us_edgar._translate_items(items)})"
+        parts.append(f"({us_edgar._translate_items(items)})")
     else:
-        title = f"{form} {description}".strip()
+        period = us_edgar._fiscal_period(report_date, form)
+        if period:
+            parts.append(f"({period})")
+        elif report_date and form in ("4", "4/A", "3"):
+            # 内部人士交易：附交易日期
+            parts.append(f"({report_date})")
+        elif description and description != form:
+            parts.append(description)
+
+    title = " ".join(parts).strip()
     return {
         "code": item.get("accession", ""),
         "url": us_edgar.filing_url(cik, item["accession"], item["document"]),
         "title": title,
         "display_time": f"{item.get('filing_date', '')} 00:00:00",
+        "report_date": report_date,
         "column_name": "SEC 提交",
         "short_name": stock_code,
         "form": form,

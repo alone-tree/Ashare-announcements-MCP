@@ -108,6 +108,7 @@ def test_format_us_filing_builds_unified_item() -> None:
     item = {
         "accession": "0000320193-26-000018",
         "filing_date": "2026-07-30",
+        "report_date": "2026-07-27",
         "form": "8-K",
         "document": "aapl-20260730.htm",
         "description": "8-K",
@@ -116,9 +117,10 @@ def test_format_us_filing_builds_unified_item() -> None:
     result = service._format_us_filing("AAPL", "0000320193", item)
     assert result["code"] == "0000320193-26-000018"
     assert result["display_time"] == "2026-07-30 00:00:00"
+    assert result["report_date"] == "2026-07-27"
     assert result["form"] == "8-K"
     assert "sec.gov" in result["url"]
-    assert result["title"] == "8-K (5.02高管离职/任命)"
+    assert result["title"] == "8-K 重大事件公告 (5.02高管离职/任命)"
     assert result["items"] == "5.02"
 
 
@@ -126,17 +128,39 @@ def test_format_us_filing_without_items_keeps_type() -> None:
     item = {
         "accession": "0000320193-26-000019",
         "filing_date": "2026-07-31",
+        "report_date": "2026-06-27",
         "form": "10-Q",
         "document": "aapl-20260627.htm",
         "description": "10-Q",
         "items": "",
     }
     result = service._format_us_filing("AAPL", "0000320193", item)
-    assert result["title"] == "10-Q 10-Q"
+    assert result["title"] == "10-Q 季报 (FY2026 Q2)"
     assert result["items"] == ""
+
+
+def test_format_us_filing_insider_trade_has_date() -> None:
+    item = {
+        "accession": "A-4",
+        "filing_date": "2026-07-16",
+        "report_date": "2026-07-15",
+        "form": "4",
+        "document": "form4.xml",
+        "description": "",
+        "items": "",
+    }
+    result = service._format_us_filing("AAPL", "0000320193", item)
+    assert result["title"] == "4 内部人士交易 (2026-07-15)"
 
 
 def test_translate_items_known_and_unknown() -> None:
     assert us_edgar._translate_items("2.02,9.01") == "2.02经营业绩, 9.01财务报表和附件"
     assert us_edgar._translate_items("99.99") == "99.99"
     assert us_edgar._translate_items("") == ""
+
+
+def test_fiscal_period_labels() -> None:
+    assert us_edgar._fiscal_period("2026-03-28", "10-Q") == "FY2026 Q1"
+    assert us_edgar._fiscal_period("2025-06-28", "10-K") == "FY2025"
+    assert us_edgar._fiscal_period("2026-07-15", "4") == ""
+    assert us_edgar._fiscal_period("", "10-Q") == ""

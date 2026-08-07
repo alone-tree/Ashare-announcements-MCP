@@ -112,6 +112,7 @@ def _expand_submissions(data: dict[str, Any]) -> dict[str, Any]:
                 "document": str(recent["primaryDocument"][i]),
                 "description": str(recent["primaryDocDescription"][i] or ""),
                 "items": str(recent.get("items", [None] * len(recent["form"]))[i] or ""),
+                "report_date": str(recent.get("reportDate", [None] * len(recent["form"]))[i] or ""),
             }
         )
 
@@ -134,6 +135,7 @@ def _expand_submissions(data: dict[str, Any]) -> dict[str, Any]:
                     "document": str(older["primaryDocument"][i]),
                     "description": str(older["primaryDocDescription"][i] or ""),
                     "items": str(older.get("items", [None] * len(older["form"]))[i] or ""),
+                    "report_date": str(older.get("reportDate", [None] * len(older["form"]))[i] or ""),
                 }
             )
 
@@ -183,6 +185,48 @@ FORM8K_ITEMS: dict[str, str] = {
 }
 
 
+# 常见 SEC 表单类型 → 中文含义（不覆盖的类型保持原样）
+FORM_MEANINGS: dict[str, str] = {
+    "10-K": "年报",
+    "10-Q": "季报",
+    "8-K": "重大事件公告",
+    "20-F": "外国公司年报",
+    "6-K": "外国公司报告",
+    "4": "内部人士交易",
+    "4/A": "内部人士交易(修正)",
+    "3": "内部人士初始持股",
+    "144": "拟出售股份",
+    "SC 13D": "大股东持股披露(主动)",
+    "SC 13D/A": "大股东持股披露(主动,修正)",
+    "SC 13G": "大股东持股披露",
+    "SC 13G/A": "大股东持股披露(修正)",
+    "SCHEDULE 13D": "大股东持股披露(主动)",
+    "SCHEDULE 13D/A": "大股东持股披露(主动,修正)",
+    "SCHEDULE 13G": "大股东持股披露",
+    "SCHEDULE 13G/A": "大股东持股披露(修正)",
+    "DEF 14A": "股东委托书",
+    "DEFA14A": "委托书补充材料",
+    "DEF 14C": "股东信息声明",
+    "S-1": "IPO招股书",
+    "S-1/A": "IPO招股书(修正)",
+    "S-4": "并购注册声明",
+    "S-8": "股权激励注册",
+    "424B1": "招股书补充",
+    "424B2": "债券/票据发行说明书",
+    "424B3": "招股书补充",
+    "424B4": "招股书",
+    "F-1": "外国公司IPO招股书",
+    "SD": "冲突矿产披露",
+    "ARS": "致股东年度报告",
+    "8-K/A": "重大事件公告(修正)",
+    "10-K/A": "年报(修正)",
+    "10-Q/A": "季报(修正)",
+    "425": "并购相关披露",
+    "CORRESP": "SEC问询函回复",
+    "UPLOAD": "SEC问询函",
+}
+
+
 def _translate_items(items: str) -> str:
     """把 8-K 条款编号翻译为中文含义，如 '2.02,9.01' → '2.02经营业绩, 9.01财务报表和附件'。"""
     parts = [p.strip() for p in str(items or "").split(",") if p.strip()]
@@ -191,6 +235,25 @@ def _translate_items(items: str) -> str:
         meaning = FORM8K_ITEMS.get(part)
         translated.append(f"{part}{meaning}" if meaning else part)
     return ", ".join(translated)
+
+
+def _fiscal_period(report_date: str, form: str) -> str:
+    """从财报截止日推导期间标签，如 10-Q (FY2026 Q3)。非财报表单返回空。"""
+    if not report_date or form not in ("10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "6-K"):
+        return ""
+    try:
+        from datetime import datetime
+
+        month = datetime.strptime(report_date, "%Y-%m-%d").month
+        year = datetime.strptime(report_date, "%Y-%m-%d").year
+        if form.startswith("10-Q"):
+            quarter = (month - 1) // 3 + 1
+            return f"FY{year} Q{quarter}"
+        if form == "10-K":
+            return f"FY{year}"
+        return str(year)
+    except ValueError:
+        return ""
 
 
 def _clean_html(html: str) -> str:
