@@ -170,6 +170,66 @@ def test_establish_rejects_derivative(monkeypatch: pytest.MonkeyPatch) -> None:
         company.establish_company(["13160"])
 
 
+def test_establish_rejects_hk_leveraged_etf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """港股 type_us=1 是杠杆 ETF（如南方两倍做空特斯拉），必须拒绝。"""
+    etf = _security("07366", "南方两倍做空特斯拉", "HK", "E-INNER", type_us="1")
+    _setup(monkeypatch, securities=[etf])
+    with pytest.raises(ValueError, match="不是普通 A/B/H/US 公司证券"):
+        company.establish_company(["07366"])
+
+
+def test_establish_accepts_hk_unknown_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """港股未知 type_us（东财未来可能新增编码）默认接受，避免误伤。"""
+    unknown = _security("01234", "未来新类型港股", "HK", "U-INNER", type_us="9", security_type_name="港股")
+    monkeypatch.setattr(company, "_search", lambda _kw: ([unknown], 1))
+    monkeypatch.setattr(company, "load_companies", lambda: _empty_registry())
+    monkeypatch.setattr(company, "save_companies", lambda data: None)
+    monkeypatch.setattr(company, "sync_archive", _ok_sync)
+
+    result = company.establish_company(["01234"])
+
+    assert result["securities"][0]["market"] == "H"
+
+
+def test_establish_accepts_us_adr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """美股 type_us=3 是 ADR（BABA/NIO/TSM），必须接受。"""
+    adr = _security("BABA", "阿里巴巴", "UsStock", "US-INNER", type_us="3", security_type_name="美股")
+    monkeypatch.setattr(company, "_search", lambda _kw: ([adr], 1))
+    monkeypatch.setattr(company, "load_companies", lambda: _empty_registry())
+    saved: dict[str, Any] = {}
+    monkeypatch.setattr(company, "save_companies", lambda data: saved.update(data=data))
+    monkeypatch.setattr(company, "sync_edgar_archive", _ok_sync)
+    monkeypatch.setattr("ashare_announcements_mcp.us_edgar.ticker_to_cik", lambda _t: "0001652044")
+
+    result = company.establish_company(["BABA"])
+
+    assert result["securities"][0]["market"] == "US"
+    # cik 保存在注册表证券记录里
+    assert saved["data"]["companies"]["BABA"]["securities"][0]["cik"] == "0001652044"
+
+
+def test_establish_rejects_us_etf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """美股 type_us=5 是 ETF，必须拒绝。"""
+    etf = _security("AAPW", "苹果周收益ETF", "UsStock", "ETF-INNER", type_us="5", security_type_name="美股")
+    _setup(monkeypatch, securities=[etf])
+    with pytest.raises(ValueError, match="不是普通 A/B/H/US 公司证券"):
+        company.establish_company(["AAPW"])
+
+
+def test_establish_accepts_us_unknown_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """美股未知 type_us 默认接受，避免东财编码变化导致无法建档。"""
+    unknown = _security("FUTUR", "未来新类型美股", "UsStock", "F-INNER", type_us="9", security_type_name="美股")
+    monkeypatch.setattr(company, "_search", lambda _kw: ([unknown], 1))
+    monkeypatch.setattr(company, "load_companies", lambda: _empty_registry())
+    monkeypatch.setattr(company, "save_companies", lambda data: None)
+    monkeypatch.setattr(company, "sync_edgar_archive", _ok_sync)
+    monkeypatch.setattr("ashare_announcements_mcp.us_edgar.ticker_to_cik", lambda _t: "0000000001")
+
+    result = company.establish_company(["FUTUR"])
+
+    assert result["securities"][0]["market"] == "US"
+
+
 def test_establish_accepts_b_share(monkeypatch: pytest.MonkeyPatch) -> None:
     b_share = _security("900901", "云赛B股", "BStock", "B-INNER", type_us="3", security_type_name="沪B")
     monkeypatch.setattr(

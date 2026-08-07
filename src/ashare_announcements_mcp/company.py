@@ -74,7 +74,12 @@ def check_company(keyword: str) -> dict[str, Any]:
 
 
 def _resolve_security(code: str) -> dict[str, Any]:
-    """精确查询单个证券代码，返回建档所需的普通 A/B/H/US 公司证券信息。"""
+    """精确查询单个证券代码，返回建档所需的普通 A/B/H/US 公司证券信息。
+
+    判定策略：以 security_type_name（中文语义标签，最稳定）为主，
+    type_us 只做黑名单排除（已确认的衍生品/ETF/票据），未知类型默认接受，
+    避免因东财编码变化导致真实公司无法建档（历史教训：科创板/北交所曾被误拒）。
+    """
     text = str(code).strip()
     if not text:
         raise ValueError("代码不能为空")
@@ -86,19 +91,22 @@ def _resolve_security(code: str) -> dict[str, Any]:
     classify = str(item.get("Classify") or "")
     type_us = str(item.get("TypeUS") or "")
     security_type_name = str(item.get("SecurityTypeName") or "")
+
     if classify == "AStock" or security_type_name in ("沪A", "深A", "科创板", "京A"):
         market = "A"
-    elif classify == "HK" and type_us == "3":
+    elif security_type_name == "港股" and type_us not in ("1", "6"):
+        # 港股：type_us=1 杠杆ETF（如南方两倍做空特斯拉）、type_us=6 权证（如腾讯法兴购A）；
+        # 3=普通股/人民币柜台/同股不同权，均接受；其他未知类型默认接受
         market = "H"
     elif security_type_name in ("沪B", "深B"):
         market = "B"
-    elif classify == "UsStock" and type_us in ("1", "3"):
-        # 美股：type_us=1 原生正股（AAPL），type_us=3 ADR（NIO/BABA/PDD）；
-        # 排除 type_us=5/6 的 ETF/票据/衍生品
+    elif security_type_name == "美股" and type_us not in ("5", "6"):
+        # 美股：type_us=1 原生正股（AAPL）、3 ADR（BABA/NIO）；5 ETF、6 票据排除；未知类型默认接受
         market = "US"
     else:
         raise ValueError(
-            f"{text} 不是普通 A/B/H/US 公司证券（Classify={classify} TypeUS={type_us}），拒绝建档"
+            f"{text} 不是普通 A/B/H/US 公司证券（Classify={classify} TypeUS={type_us} "
+            f"SecurityTypeName={security_type_name}），拒绝建档"
         )
     inner_code = str(item.get("InnerCode") or "")
     if market in ("H", "B") and not inner_code:
