@@ -55,6 +55,7 @@ STATEMENT_FUNCS: dict[str, dict[str, Any]] = {
 
 VALID_STATEMENTS = ("income", "balance", "cash_flow")
 VALID_ADJUSTS = ("qfq", "hfq", "")
+VALID_PERIODS = ("daily", "weekly", "monthly")
 
 
 def _resolve_market(code: str) -> tuple[str, str]:
@@ -99,18 +100,33 @@ def _df_to_records(df: pd.DataFrame, limit: int | None = None) -> list[dict[str,
     return cleaned
 
 
-def get_quote(code: str, start: str, end: str, adjust: str = "qfq") -> dict[str, Any]:
-    """获取日线行情（前复权/后复权/不复权），含市值估算列。
+def get_quote(
+    code: str,
+    start: str,
+    end: str,
+    adjust: str = "qfq",
+    period: str = "daily",
+) -> dict[str, Any]:
+    """获取日线/周线/月线行情（前复权/后复权/不复权），含成交量/额/流通股本。
 
-    返回 {ok, market, code, name, start, end, adjust, source, rows: [...]}
+    返回 {ok, market, code, name, start, end, adjust, period, source, notes, rows: [...]}
+    notes 说明实际返回口径（如美股新浪回退时 hfq 降级为 qfq、周/月线由日线聚合）。
     """
     if adjust not in VALID_ADJUSTS:
         raise ValueError(f"adjust 必须是 {VALID_ADJUSTS} 之一（qfq=前复权 hfq=后复权 空=不复权）")
+    if period not in VALID_PERIODS:
+        raise ValueError(f"period 必须是 {VALID_PERIODS} 之一（daily/weekly/monthly）")
     market, c = _resolve_market(code)
     mod = MARKET_MODULES[market]
-    df = mod.fetch_daily(c, start, end)
+    df = mod.fetch_daily(c, start, end, adjust=adjust, period=period)
     if df is None or len(df) == 0:
         raise ValueError(f"未获取到 {c} 的行情数据（{start}~{end}）")
+    notes: list[str] = []
+    source = str(df.iloc[0].get("source", ""))
+    if source == "sina" and period != "daily":
+        notes.append(f"新浪接口仅提供日线，{period} 由日线本地聚合")
+    if source == "sina" and market == "us" and adjust == "hfq":
+        notes.append("新浪美股接口不支持后复权，已返回前复权数据")
     return {
         "ok": True,
         "market": _market_name(market),
@@ -118,7 +134,9 @@ def get_quote(code: str, start: str, end: str, adjust: str = "qfq") -> dict[str,
         "start": start,
         "end": end,
         "adjust": adjust or "none",
-        "source": str(df.iloc[0].get("source", "")),
+        "period": period,
+        "source": source,
+        "notes": notes,
         "rows": _df_to_records(df),
     }
 

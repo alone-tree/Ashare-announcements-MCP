@@ -12,6 +12,7 @@ import os
 import pandas as pd
 
 from ._common import (
+    resample_ohlcv,
     save, log,
 )
 
@@ -25,14 +26,17 @@ except ImportError:
 # 行情
 # ============================================
 
-def fetch_daily(code: str, start: str, end: str) -> pd.DataFrame:
-    """日线（前复权）。东财 → 新浪回退。"""
+def fetch_daily(code: str, start: str, end: str, adjust: str = "qfq", period: str = "daily") -> pd.DataFrame:
+    """日线/周线/月线（复权可选）。东财 → 新浪回退。
+
+    注意：新浪美股接口不支持后复权（hfq），请求 hfq 且回退新浪时自动降级为前复权。
+    """
     try:
         df = ak.stock_us_hist(
-            symbol=code, period="daily",
+            symbol=code, period=period,
             start_date=start.replace("-", ""),
             end_date=end.replace("-", ""),
-            adjust="qfq",
+            adjust=adjust,
         )
         df = df.rename(columns={
             "日期": "date", "开盘": "open", "收盘": "close", "最高": "high",
@@ -45,7 +49,7 @@ def fetch_daily(code: str, start: str, end: str) -> pd.DataFrame:
         return df
     except Exception as e:
         log(f"东财美股行情失败({type(e).__name__})，回退新浪: {str(e)[:80]}")
-        df = ak.stock_us_daily(symbol=code, adjust="qfq")
+        df = ak.stock_us_daily(symbol=code, adjust="qfq" if adjust == "hfq" else adjust)
         df = df.rename(columns={
             "date": "date", "open": "open", "high": "high",
             "low": "low", "close": "close", "volume": "volume",

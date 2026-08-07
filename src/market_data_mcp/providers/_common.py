@@ -71,3 +71,39 @@ def save(df: pd.DataFrame, path: str) -> None:
 
 def log(msg: str) -> None:
     print(msg, flush=True)
+
+
+def resample_ohlcv(df: pd.DataFrame, period: str) -> pd.DataFrame:
+    """把日线聚合为周线/月线（OHLCV 标准重采样）。
+
+    period: weekly / monthly。
+    open=周期首日开盘、high=周期最高、low=周期最低、close=周期末日收盘、
+    volume/amount=周期累计；其他列（如换手率）取周期末值。
+    仅用于新浪回退路径（新浪接口只提供日线，周/月线由本地聚合）。
+    """
+    if period == "daily" or df is None or len(df) == 0:
+        return df
+    rule = {"weekly": "W-FRI", "monthly": "ME"}[period]
+    work = df.copy()
+    work["date"] = pd.to_datetime(work["date"])
+    work = work.set_index("date").sort_index()
+
+    agg: dict[str, str] = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+        "amount": "sum",
+    }
+    # 其余数值列（换手率/涨跌幅等）取周期末值，避免无意义求和
+    for col in work.columns:
+        if col not in agg and col != "source":
+            agg[col] = "last"
+
+    out = work.resample(rule).agg(agg).dropna(subset=["close"])
+    out["date"] = out.index.strftime("%Y-%m-%d")
+    out = out.reset_index(drop=True)
+    if "source" in work.columns:
+        out["source"] = work["source"].iloc[0]
+    return out

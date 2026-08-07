@@ -12,7 +12,7 @@ import os
 import pandas as pd
 
 from ._common import (
-    em_symbol_a, save, log,
+    em_symbol_a, resample_ohlcv, save, log,
 )
 
 try:
@@ -25,14 +25,18 @@ except ImportError:
 # 行情
 # ============================================
 
-def fetch_daily(code: str, start: str, end: str) -> pd.DataFrame:
-    """日线（前复权）。东财 → 新浪回退。"""
+def fetch_daily(code: str, start: str, end: str, adjust: str = "qfq", period: str = "daily") -> pd.DataFrame:
+    """日线/周线/月线（复权可选）。东财 → 新浪回退。
+
+    adjust: qfq=前复权 hfq=后复权 ""=不复权
+    period: daily/weekly/monthly；新浪回退时周/月线由日线本地聚合。
+    """
     try:
         df = ak.stock_zh_a_hist(
-            symbol=code, period="daily",
+            symbol=code, period=period,
             start_date=start.replace("-", ""),
             end_date=end.replace("-", ""),
-            adjust="qfq",
+            adjust=adjust,
         )
         df = df.rename(columns={
             "日期": "date", "开盘": "open", "收盘": "close", "最高": "high",
@@ -49,7 +53,7 @@ def fetch_daily(code: str, start: str, end: str) -> pd.DataFrame:
             symbol=("sh" if code.startswith("6") else ("bj" if code.startswith(("4", "8")) else "sz")) + code,
             start_date=start.replace("-", ""),
             end_date=end.replace("-", ""),
-            adjust="qfq",
+            adjust=adjust,
         )
         df = df.rename(columns={
             "date": "date", "open": "open", "high": "high",
@@ -58,6 +62,8 @@ def fetch_daily(code: str, start: str, end: str) -> pd.DataFrame:
         })
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
         df["source"] = "sina"
+        if period != "daily":
+            df = resample_ohlcv(df, period)
         return df
 
 

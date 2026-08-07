@@ -96,6 +96,7 @@ def main() -> None:
     parser.add_argument("--start", default=None, help="行情开始日期 YYYY-MM-DD")
     parser.add_argument("--end", default=None, help="行情结束日期 YYYY-MM-DD")
     parser.add_argument("--adjust", default="qfq", help="qfq/hfq/none")
+    parser.add_argument("--period", default="daily", help="daily/weekly/monthly")
     parser.add_argument("--periods", default=None, help="报告期年份，逗号分隔（如 2025,2024）")
     parser.add_argument("--statements", default=None, help="报表范围：income/balance/cash_flow，逗号分隔")
     parser.add_argument("--sections", default=None, help="公司信息部分：profile/dividends/forecast")
@@ -115,6 +116,8 @@ def main() -> None:
             req["end"] = args.end
         if args.adjust != "qfq":
             req["adjust"] = args.adjust
+        if args.period != "daily":
+            req["period"] = args.period
         if args.periods:
             req["periods"] = [p.strip() for p in args.periods.split(",")]
         if args.statements:
