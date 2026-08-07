@@ -50,7 +50,7 @@ def fetch_daily(code: str, start: str, end: str, adjust: str = "qfq", period: st
     except Exception as e:
         log(f"东财行情失败({type(e).__name__})，回退新浪: {str(e)[:80]}")
         df = ak.stock_zh_a_daily(
-            symbol=("sh" if code.startswith("6") else ("bj" if code.startswith(("4", "8")) else "sz")) + code,
+            symbol=("sh" if (code.startswith("6") or code.startswith("900")) else ("bj" if code.startswith(("4", "8")) else "sz")) + code,
             start_date=start.replace("-", ""),
             end_date=end.replace("-", ""),
             adjust=adjust,
@@ -80,7 +80,7 @@ def fetch_raw_close(code: str, start: str, end: str) -> pd.DataFrame:
     except Exception as e:
         log(f"东财不复权失败({type(e).__name__})，回退新浪: {str(e)[:80]}")
         df = ak.stock_zh_a_daily(
-            symbol=("sh" if code.startswith("6") else ("bj" if code.startswith(("4", "8")) else "sz")) + code,
+            symbol=("sh" if (code.startswith("6") or code.startswith("900")) else ("bj" if code.startswith(("4", "8")) else "sz")) + code,
             start_date=start.replace("-", ""),
             end_date=end.replace("-", ""),
             adjust="",

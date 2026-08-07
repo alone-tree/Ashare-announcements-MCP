@@ -46,8 +46,8 @@ def normalize_a_code(code: str) -> str:
 
 
 def em_symbol_a(code: str) -> str:
-    """东财 A股报表接口代码：SH/SZ/BJ 前缀（探测记录：6开头=沪、4/8开头=京、其余=深）"""
-    if code.startswith("6"):
+    """东财 A股报表接口代码：SH/SZ/BJ 前缀（探测记录：6开头=沪、900开头=沪B、4/8开头=京、其余=深含200深B）"""
+    if code.startswith("6") or code.startswith("900"):
         return f"SH{code}"
     if code.startswith(("4", "8")):
         return f"BJ{code}"
