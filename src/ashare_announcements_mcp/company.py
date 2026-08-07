@@ -8,7 +8,7 @@ import requests
 
 from ashare_announcements_mcp.api import HEADERS
 from ashare_announcements_mcp.cache import load_companies, save_companies
-from ashare_announcements_mcp.service import sync_archive, sync_interactions
+from ashare_announcements_mcp.service import sync_archive, sync_edgar_archive, sync_interactions
 
 
 SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
@@ -73,41 +73,67 @@ def check_company(keyword: str) -> dict[str, Any]:
     return result
 
 
+def _reject_reason(type_us: str) -> str:
+    """把 TypeUS 转成人类可读的拒绝原因，帮助 AI 理解为什么不能建档。"""
+    reason_map = {
+        "1": "港股 TypeUS=1 为杠杆 ETF",
+        "5": "美股 TypeUS=5 为 ETF",
+        "6": "TypeUS=6 为权证/票据等衍生品",
+    }
+    return reason_map.get(type_us, f"该证券类型（TypeUS={type_us}）不支持")
+
+
 def _resolve_security(code: str) -> dict[str, Any]:
-    """精确查询单个证券代码，返回建档所需的普通 A/H 公司证券信息。"""
+    """精确查询单个证券代码，返回建档所需的普通 A/B/H/US 公司证券信息。
+
+    判定策略：以 security_type_name（中文语义标签，最稳定）为主，
+    type_us 只做黑名单排除（已确认的衍生品/ETF/票据），未知类型默认接受，
+    避免因东财编码变化导致真实公司无法建档（历史教训：科创板/北交所曾被误拒）。
+    """
     text = str(code).strip()
     if not text:
         raise ValueError("代码不能为空")
-    if not text.isdigit():
-        raise ValueError(f"代码必须是数字：{text}")
     candidates, _ = _search(text)
     matched = [item for item in candidates if str(item.get("Code") or "") == text]
     if not matched:
-        raise ValueError(f"无法精确查询到证券：{text}")
+        raise ValueError(f"无法精确查询到证券：{text}（请用 action=check + keyword 搜索候选代码后重试）")
     item = matched[0]
     classify = str(item.get("Classify") or "")
     type_us = str(item.get("TypeUS") or "")
     security_type_name = str(item.get("SecurityTypeName") or "")
+
     if classify == "AStock" or security_type_name in ("沪A", "深A", "科创板", "京A"):
         market = "A"
-    elif classify == "HK" and type_us == "3":
+    elif security_type_name == "港股" and type_us not in ("1", "6"):
+        # 港股：type_us=1 杠杆ETF（如南方两倍做空特斯拉）、type_us=6 权证（如腾讯法兴购A）；
+        # 3=普通股/人民币柜台/同股不同权，均接受；其他未知类型默认接受
         market = "H"
     elif security_type_name in ("沪B", "深B"):
         market = "B"
+    elif security_type_name == "美股" and type_us not in ("5", "6"):
+        # 美股：type_us=1 原生正股（AAPL）、3 ADR（BABA/NIO）；5 ETF、6 票据排除；未知类型默认接受
+        market = "US"
     else:
+        reason = _reject_reason(type_us)
         raise ValueError(
-            f"{text} 不是普通 A/B/H 公司证券（Classify={classify} TypeUS={type_us}），拒绝建档"
+            f"{text} 不是普通 A/B/H/US 公司证券（Classify={classify} TypeUS={type_us} "
+            f"SecurityTypeName={security_type_name}，{reason}），拒绝建档"
         )
     inner_code = str(item.get("InnerCode") or "")
     if market in ("H", "B") and not inner_code:
         raise ValueError(f"{text} 缺少{('港股' if market == 'H' else 'B股')} InnerCode，拒绝建档")
-    return {
+    security: dict[str, Any] = {
         "code": text,
         "name": str(item.get("Name") or ""),
         "market": market,
         "classify": classify,
         "inner_code": inner_code,
     }
+    if market == "US":
+        from ashare_announcements_mcp.us_edgar import ticker_to_cik
+
+        security["cik"] = ticker_to_cik(text)
+    return security
 
 
 def establish_company(codes: list[str]) -> dict[str, Any]:
@@ -154,26 +180,30 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
     company = companies[company_key]
     for security in securities:
         if not any(item["code"] == security["code"] for item in company["securities"]):
-            company["securities"].append(
-                {
-                    "code": security["code"],
-                    "market": security["market"],
-                    "name": security["name"],
-                    "classify": security["classify"],
-                    "inner_code": security["inner_code"],
-                }
-            )
+            record = {
+                "code": security["code"],
+                "market": security["market"],
+                "name": security["name"],
+                "classify": security["classify"],
+                "inner_code": security["inner_code"],
+            }
+            if security.get("cik"):
+                record["cik"] = security["cik"]
+            company["securities"].append(record)
         aliases[security["code"]] = company_key
     save_companies({"companies": companies, "aliases": aliases})
 
     results = []
     for security in securities:
         try:
-            items, status = sync_archive(
-                security["code"],
-                ann_type="H" if security["market"] == "H" else ("B" if security["market"] == "B" else "A"),
-                inner_code=security["inner_code"] if security["market"] in ("H", "B") else None,
-            )
+            if security["market"] == "US":
+                items, status = sync_edgar_archive(security["code"], security["cik"])
+            else:
+                items, status = sync_archive(
+                    security["code"],
+                    ann_type="H" if security["market"] == "H" else ("B" if security["market"] == "B" else "A"),
+                    inner_code=security["inner_code"] if security["market"] in ("H", "B") else None,
+                )
             results.append(
                 {
                     "code": security["code"],
@@ -198,7 +228,7 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
                 }
             )
 
-    interactions_status = {"applicable": False, "reason": "该公司无互动问答（纯港股/B 股），不适用"}
+    interactions_status = {"applicable": False, "reason": "该公司无互动问答（纯港股/B 股/美股），不适用"}
     a_security = next((s for s in securities if s["market"] == "A"), None)
     if a_security:
         try:

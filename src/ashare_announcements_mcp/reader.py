@@ -89,15 +89,25 @@ def _load_index(stock_code: str, pdf_path: Path) -> tuple[Path, dict[str, Any]]:
                 previous = data
         except (OSError, json.JSONDecodeError):
             pass
-    data = _build_index(pdf_path)
-    if previous:
-        for page, old_page in zip(
-            data["pages"],
-            previous.get("pages") or [],
-        ):
-            for key in ("ocr_text", "ocr_attempted"):
-                if key in old_page:
-                    page[key] = old_page[key]
+    if pdf_path.suffix.lower() == ".html":
+        from ashare_announcements_mcp import us_edgar
+
+        html = pdf_path.read_text(encoding="utf-8", errors="replace")
+        data = us_edgar.build_html_index(stock_code, pdf_path.stem, html)
+        data["version"] = INDEX_VERSION
+        data["source_size"] = stat.st_size
+        data["source_mtime_ns"] = stat.st_mtime_ns
+        data["us_edgar"] = {"accession": pdf_path.stem}
+    else:
+        data = _build_index(pdf_path)
+        if previous:
+            for page, old_page in zip(
+                data["pages"],
+                previous.get("pages") or [],
+            ):
+                for key in ("ocr_text", "ocr_attempted"):
+                    if key in old_page:
+                        page[key] = old_page[key]
     _save_index(path, data)
     return path, data
 

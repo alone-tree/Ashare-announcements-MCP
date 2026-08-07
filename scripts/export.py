@@ -17,6 +17,7 @@ REQUIREMENTS = (
     "pymupdf-layout>=1.28,<2\n"
     "rapidocr>=3.9,<4\n"
     "onnxruntime>=1.20,<2\n"
+    "markdownify>=0.13,<1\n"
 )
 USER_README = """# A 股公告阅读 MCP（用户版）
 
@@ -39,9 +40,9 @@ python -m pip install -r requirements.txt
 MCP 使用 stdio 传输，客户端 command 指向安装了上述依赖的 Python，args 指向入口文件。
 运行缓存保存在本目录的 `cache/{股票代码}/`。
 
-`establish_company` 用明确代码建档（支持 A/H 公司，先 `action=check` 查候选）；`query_announcements` 查询完整公告档案，支持 `market=all/A/H` 筛选；`query_interactions` 查询 A 股互动问答。首次查询会建立完整档案，之后每次查询前自动补充最新公告。每页固定最多返回 50 条；关键词之间用空格表示 OR，用大写或小写 `AND` 表示 AND。未建档代码会报错并提示 check → establish → query。
+`establish_company` 用明确代码建档（支持 A/H/B/US 公司：A/H/B 走东方财富，美股字母代码如 AAPL/NIO 走 SEC EDGAR，先 `action=check` 查候选）；`query_announcements` 查询完整公告档案，支持 `market=all/A/H` 筛选（美股提交归入 all）；`query_interactions` 查询 A 股互动问答。首次查询会建立完整档案，之后每次查询前自动补充最新公告。每页固定最多返回 50 条；关键词之间用空格表示 OR，用大写或小写 `AND` 表示 AND。未建档代码会报错并提示 check → establish → query。
 
-阅读公告直接调用 `read_announcement`：不传 `start_page` 时自动检测（短公告直接返回全文，长公告返回画像和前 3 页预览及阅读建议）；传 `start_page` 时精读指定页段，用 `next_page` 续读。需要定位主题时用 `search_announcement` 检索正文。原生页面使用 PyMuPDF Layout 分批转为 Markdown，并自动排除页眉页脚；扫描页按需使用 RapidOCR，结果会缓存。扫描页检索每次最多处理 3 页，若 `search_complete=false`，请用相同参数继续调用。
+阅读公告直接调用 `read_announcement`：不传 `start_page` 时自动检测（短公告直接返回全文，长公告返回画像和前 5 页预览及阅读建议）；传 `start_page` 时精读指定页段，用 `next_page` 续读。需要定位主题时用 `search_announcement` 检索正文。美股文档（SEC EDGAR HTML）自动按虚拟页切分，阅读体验与 A/H 股一致。原生页面使用 PyMuPDF Layout 分批转为 Markdown，并自动排除页眉页脚；扫描页按需使用 RapidOCR，结果会缓存。扫描页检索每次最多处理 3 页，若 `search_complete=false`，请用相同参数继续调用。
 """
 
 

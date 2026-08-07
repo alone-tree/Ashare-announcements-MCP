@@ -20,6 +20,7 @@ from ashare_announcements_mcp.cache import (
     save_cache,
     save_interactions,
 )
+from ashare_announcements_mcp import us_edgar
 
 PAGE_SIZE = 50
 
@@ -27,14 +28,18 @@ PAGE_SIZE = 50
 def normalize_stock_code(value: str) -> str:
     """兼容 002271、SZ002271、002271.SZ、HK03308 等常见格式；不自动补零。
 
-    本地公司使用非数字代码（如 LOCAL-YYYY），允许直接透传——前提是它已建档。
+    本地公司使用非数字代码（如 LOCAL-YYYY）与美股代码（如 AAPL）：
+    先在 companies.json 注册表精确匹配，命中则直接透传。
     """
     text = str(value).strip()
     if "LOCAL-" in text.upper():
         return text.upper()
+    registry = load_companies()
+    if text.upper() in registry["aliases"]:
+        return text.upper()
     matches = re.findall(r"(?<!\d)(\d{5,6})(?!\d)", text.upper())
     if len(matches) != 1:
-        raise ValueError("stock_code 必须包含一个五或六位证券代码，或已建档的 LOCAL- 本地公司代码")
+        raise ValueError("stock_code 必须包含一个五或六位证券代码，或已建档的 LOCAL-/美股代码")
     return matches[0]
 
 
@@ -128,6 +133,108 @@ def sync_archive(
         raise RuntimeError(f"无法建立完整公告档案：{exc}") from exc
 
 
+def sync_edgar_archive(
+    code: str,
+    cik: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """维护美股 EDGAR 提交档案；首次全量（含历史分片），之后增量拉 recent 前若干条。
+
+    提交列表与东财公告统一为 items 格式：code=accession、title=表单+描述、
+    display_time=提交日期、url=EDGAR 文档链接。
+    """
+    cached = load_cache(code)
+    items = cached.get("items") or []
+    meta = cached.get("meta") or {}
+    archive_was_complete = bool(items) and bool(meta.get("cache_complete"))
+    try:
+        if not archive_was_complete:
+            submissions = us_edgar.fetch_submissions(cik)
+            fetched = [_format_us_filing(code, cik, item) for item in submissions["items"]]
+            if not submissions.get("cache_complete"):
+                raise RuntimeError("首次建档未能获取全部提交")
+            items = fetched
+            new_count = len(items)
+            fetch_meta = {"total": len(fetched)}
+        else:
+            submissions = us_edgar.fetch_submissions(cik)
+            known = {str(item.get("code") or "") for item in items}
+            fresh = [
+                _format_us_filing(code, cik, item)
+                for item in submissions["items"]
+                if str(item["accession"]) not in known
+            ]
+            new_count = len(fresh)
+            if not fresh:
+                return items, {
+                    "update_check_ok": True,
+                    "new_announcements": 0,
+                    "update_error": None,
+                }
+            items = merge_items(items, fresh)
+            fetch_meta = {"total": len(items)}
+        meta = {**meta, **fetch_meta, "cache_complete": True}
+        save_cache(code, items, meta)
+        return items, {
+            "update_check_ok": True,
+            "new_announcements": new_count,
+            "update_error": None,
+        }
+    except Exception as exc:
+        if archive_was_complete:
+            return items, {
+                "update_check_ok": False,
+                "new_announcements": 0,
+                "update_error": str(exc),
+            }
+        raise RuntimeError(f"无法建立完整 EDGAR 档案：{exc}") from exc
+
+
+def _format_us_filing(stock_code: str, cik: str, item: dict[str, Any]) -> dict[str, Any]:
+    """EDGAR 提交记录 → 统一公告 item 格式。
+
+    title 组合表单类型 + 中文含义 + 原始信息：
+    - 8-K 附 items 条款含义，如 "8-K (5.02高管离职/任命)"
+    - 10-Q/10-K 附财报截止日（EDGAR 原始字段，不推算期间），如 "10-Q 季报 (财报截至2026-03-28)"
+    - 4/144 等附中文含义，如 "4 内部人士交易 (2026-07-15)"
+    无 items/含义时保持原样。
+    """
+    form = item.get("form", "")
+    description = item.get("description") or ""
+    items = str(item.get("items") or "").strip()
+    report_date = str(item.get("report_date") or "").strip()
+
+    parts = [form]
+    meaning = us_edgar.FORM_MEANINGS.get(form)
+    if meaning:
+        parts.append(meaning)
+
+    if items:
+        parts.append(f"({us_edgar._translate_items(items)})")
+    else:
+        if report_date and form in ("10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "6-K"):
+            # 财报截止日原样附上，不推算季度（财年可能非自然年）
+            parts.append(f"(财报截至{report_date})")
+        elif report_date and form in ("4", "4/A", "3"):
+            # 内部人士交易：附交易日期
+            parts.append(f"({report_date})")
+        elif description and description != form:
+            parts.append(description)
+
+    title = " ".join(parts).strip()
+    return {
+        "code": item.get("accession", ""),
+        "url": us_edgar.filing_url(cik, item["accession"], item["document"]),
+        "title": title,
+        "display_time": f"{item.get('filing_date', '')} 00:00:00",
+        "report_date": report_date,
+        "column_name": "SEC 提交",
+        "short_name": stock_code,
+        "form": form,
+        "items": items,
+        "accession": item.get("accession", ""),
+    }
+
+
 def query_archive(
     stock_code: str,
     start_date: str | None = None,
@@ -161,6 +268,12 @@ def query_archive(
                 cached = load_cache(security["code"])
                 items = cached.get("items") or []
                 update_status = {"update_check_ok": True, "new_announcements": 0, "update_error": None}
+            elif market_code == "US":
+                # 美股：SEC EDGAR 提交档案
+                items, update_status = sync_edgar_archive(
+                    security["code"],
+                    security.get("cik", ""),
+                )
             else:
                 items, update_status = sync_archive(
                     security["code"],
