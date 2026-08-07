@@ -135,8 +135,23 @@ def test_format_us_filing_without_items_keeps_type() -> None:
         "items": "",
     }
     result = service._format_us_filing("AAPL", "0000320193", item)
-    assert result["title"] == "10-Q 季报 (FY2026 Q2)"
+    assert result["title"] == "10-Q 季报 (财报截至2026-06-27)"
     assert result["items"] == ""
+
+
+def test_format_us_filing_10k_shows_report_date() -> None:
+    item = {
+        "accession": "A-10K",
+        "filing_date": "2025-08-19",
+        "report_date": "2025-06-28",
+        "form": "10-K",
+        "document": "lite-20250628.htm",
+        "description": "10-K",
+        "items": "",
+    }
+    result = service._format_us_filing("LITE", "0001633978", item)
+    # 只附原始截止日，不推算财年/季度
+    assert result["title"] == "10-K 年报 (财报截至2025-06-28)"
 
 
 def test_format_us_filing_insider_trade_has_date() -> None:
@@ -157,10 +172,3 @@ def test_translate_items_known_and_unknown() -> None:
     assert us_edgar._translate_items("2.02,9.01") == "2.02经营业绩, 9.01财务报表和附件"
     assert us_edgar._translate_items("99.99") == "99.99"
     assert us_edgar._translate_items("") == ""
-
-
-def test_fiscal_period_labels() -> None:
-    assert us_edgar._fiscal_period("2026-03-28", "10-Q") == "FY2026 Q1"
-    assert us_edgar._fiscal_period("2025-06-28", "10-K") == "FY2025"
-    assert us_edgar._fiscal_period("2026-07-15", "4") == ""
-    assert us_edgar._fiscal_period("", "10-Q") == ""

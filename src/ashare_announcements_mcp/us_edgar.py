@@ -237,25 +237,6 @@ def _translate_items(items: str) -> str:
     return ", ".join(translated)
 
 
-def _fiscal_period(report_date: str, form: str) -> str:
-    """从财报截止日推导期间标签，如 10-Q (FY2026 Q3)。非财报表单返回空。"""
-    if not report_date or form not in ("10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "6-K"):
-        return ""
-    try:
-        from datetime import datetime
-
-        month = datetime.strptime(report_date, "%Y-%m-%d").month
-        year = datetime.strptime(report_date, "%Y-%m-%d").year
-        if form.startswith("10-Q"):
-            quarter = (month - 1) // 3 + 1
-            return f"FY{year} Q{quarter}"
-        if form == "10-K":
-            return f"FY{year}"
-        return str(year)
-    except ValueError:
-        return ""
-
-
 def _clean_html(html: str) -> str:
     """清理 XBRL 元数据区、脚本和样式。"""
     html = re.sub(r"<\?xml[^>]*\?>", "", html)

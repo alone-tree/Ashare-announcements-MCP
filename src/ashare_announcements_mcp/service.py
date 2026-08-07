@@ -194,9 +194,9 @@ def _format_us_filing(stock_code: str, cik: str, item: dict[str, Any]) -> dict[s
 
     title 组合表单类型 + 中文含义 + 原始信息：
     - 8-K 附 items 条款含义，如 "8-K (5.02高管离职/任命)"
-    - 10-Q/10-K 附财报期间，如 "10-Q 季报 (FY2026 Q3)"
+    - 10-Q/10-K 附财报截止日（EDGAR 原始字段，不推算期间），如 "10-Q 季报 (财报截至2026-03-28)"
     - 4/144 等附中文含义，如 "4 内部人士交易 (2026-07-15)"
-    无 items/期间/含义时保持原样。
+    无 items/含义时保持原样。
     """
     form = item.get("form", "")
     description = item.get("description") or ""
@@ -211,9 +211,9 @@ def _format_us_filing(stock_code: str, cik: str, item: dict[str, Any]) -> dict[s
     if items:
         parts.append(f"({us_edgar._translate_items(items)})")
     else:
-        period = us_edgar._fiscal_period(report_date, form)
-        if period:
-            parts.append(f"({period})")
+        if report_date and form in ("10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "6-K"):
+            # 财报截止日原样附上，不推算季度（财年可能非自然年）
+            parts.append(f"(财报截至{report_date})")
         elif report_date and form in ("4", "4/A", "3"):
             # 内部人士交易：附交易日期
             parts.append(f"({report_date})")
