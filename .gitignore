@@ -5,3 +5,4 @@ cache/
 src/cache/
 tmp/
 .secrets/
+.codex-temp/
