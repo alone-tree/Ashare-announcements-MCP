@@ -28,6 +28,10 @@ python scripts\export.py "D:\path\to\ashare-announcements-user"
 
 导出目录包含运行源码、`requirements.txt`、使用说明和独立缓存目录。安装依赖后，MCP 客户端直接以对应 Python 启动 `ashare_announcements_mcp/server.py`。
 
+## 凭据位置
+
+- EODHD API key：`.secrets/eodhd_api_key.txt`（Google 账号 zkbai66 注册的免费版；该目录已 gitignore，不上 git）
+
 ```yaml
 mcpServers:
   ashare-announcements:

@@ -4,3 +4,4 @@ __pycache__/
 cache/
 src/cache/
 tmp/
+.secrets/
