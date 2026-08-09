@@ -30,24 +30,26 @@ _PRICE_FIELDS = ("open", "high", "low", "close", "volume", "amount")
 
 
 def _field_chains(mc: MarketCode) -> dict[str, list]:
-    """字段 → 来源链（顺序即优先级）。按市场路由。"""
+    """字段 → 来源链。**每字段唯一源（2026-08-09 用户拍板：先不做来源回退，
+    单一来源不够再增加；不同源数据可能不完全一致，混放需额外处理，且回退=重复请求浪费）**。"""
     if mc.market == "US":
         raw_chain = [sina.fetch_raw]
-        amount_chain = [ifind.fetch_us_amount]  # 美股 amount=iFinD 单源
-        hfq_chain = [ifind.fetch_us_hfq]        # 美股 hfq=iFinD 单源
+        amount_chain = [ifind.fetch_us_amount]  # 美股 amount=ifind 唯一源
+        hfq_chain = [ifind.fetch_us_hfq]        # 美股 hfq=ifind 唯一源
     else:
         raw_chain = [sina.fetch_raw]
         amount_chain = [sina.fetch_raw]         # A/港 amount 在新浪 raw 宽写列
         hfq_chain = [sina.fetch_hfq]
-    shares_chain = [ifind.fetch_shares] + ([yfinance.fetch_shares] if mc.market in ("HK", "US") else [])
     chains = {f: list(raw_chain) for f in _PRICE_FIELDS}
     chains["amount"] = amount_chain
     chains["close_hfq"] = hfq_chain
-    chains["total_shares"] = list(shares_chain)
-    chains["floating_shares"] = list(shares_chain)
-    if mc.market == "A":
-        # A 股流通股本另有新浪 raw 附带的 outstanding_share 来源
-        chains["floating_shares"] = [sina.fetch_raw] + list(shares_chain)
+    chains["total_shares"] = [ifind.fetch_shares]  # 全市场唯一源 ifind（无回退）
+    if mc.market in ("A", "BJ"):
+        # A/北交所流通股本唯一源 = 新浪 outstanding_share（全历史逐日）
+        chains["floating_shares"] = [sina.fetch_raw]
+    else:
+        # 港美股流通股本唯一源 = iFinD
+        chains["floating_shares"] = [ifind.fetch_shares]
     return chains
 
 

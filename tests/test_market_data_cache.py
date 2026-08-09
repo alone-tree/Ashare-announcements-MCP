@@ -73,13 +73,6 @@ class TestCoverage:
     def test_missing_start(self):
         assert not cache.coverage(self._meta("2026-03-01", "2026-12-31"), "2026-01-01", "2026-06-30")
 
-    def test_end_gap_within_7_days_ok(self):
-        """周末/节假日：end=今天而缓存到最近交易日（≤7 天缺口）视为覆盖。"""
-        assert cache.coverage(self._meta("2026-01-01", "2026-08-07"), "2026-03-01", "2026-08-09")
-
-    def test_end_gap_over_7_days_not_covered(self):
-        assert not cache.coverage(self._meta("2026-01-01", "2026-06-30"), "2026-03-01", "2026-08-09")
-
     def test_exact_boundary_ok(self):
         assert cache.coverage(self._meta("2026-01-01", "2026-12-31"), "2026-01-01", "2026-12-31")
 

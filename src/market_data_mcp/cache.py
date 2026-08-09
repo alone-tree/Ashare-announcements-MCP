@@ -119,7 +119,6 @@ def _shape_of(items: Any) -> dict[str, Any]:
 
 def coverage(meta: dict[str, Any], start: str | None, end: str | None) -> bool:
     """覆盖判定：缓存完整覆盖请求日期段才算够（c_start ≤ start 且 c_end ≥ end）。
-    末尾容忍 ≤7 天缺口（周末/节假日无交易数据：end=今天而缓存到最近交易日是常态）。
     meta 无 date_range 或日期缺失视为不覆盖。"""
     dr = meta.get("date_range") or {}
     c_start, c_end = dr.get("start"), dr.get("end")
@@ -130,8 +129,5 @@ def coverage(meta: dict[str, Any], start: str | None, end: str | None) -> bool:
     if start is not None and c_start > start:
         return False
     if end is not None and c_end < end:
-        from datetime import date
-        gap = (date.fromisoformat(end) - date.fromisoformat(c_end)).days
-        if gap > 7:
-            return False
+        return False
     return True

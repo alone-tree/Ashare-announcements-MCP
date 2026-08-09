@@ -125,7 +125,8 @@ class TestFetchUsAmount:
 
 
 class TestFetchShares:
-    def test_writes_two_share_fields(self, tmp_path, monkeypatch):
+    def test_a_share_writes_total_shares_only(self, tmp_path, monkeypatch):
+        """A 股股本：只写 total_shares（floating_shares 唯一归属=新浪，避免双写）。"""
         monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)
         df = pd.DataFrame({"time": ["2026-08-06", "2026-08-07"],
                            "thscode": ["600519.SH"] * 2,
@@ -135,12 +136,25 @@ class TestFetchShares:
         root = str(tmp_path)
         r = ifind.fetch_shares(root, parse_code("600519.SH"), start="2026-08-01")
         assert r["ok"] is True
-        assert set(r["fields"]) == {"total_shares", "floating_shares"}
+        assert r["fields"] == {"total_shares": {"start": "2026-08-06", "end": "2026-08-07"}}
         ts = cache.read_cache(root, "600519.SH", "total_shares")
-        fs = cache.read_cache(root, "600519.SH", "floating_shares")
         assert ts["meta"]["source"] == "ifind"
         assert ts["items"][0] == {"date": "2026-08-06", "value": 1250081601.0, "source": "ifind"}
-        assert fs["items"][0]["value"] == 1250081601.0
+        # A 股 floating_shares 不写（唯一源=新浪 outstanding_share）
+        assert cache.read_cache(root, "600519.SH", "floating_shares") is None
+
+    def test_hk_us_writes_both_share_fields(self, tmp_path, monkeypatch):
+        """港美股股本：写 total_shares + floating_shares（唯一源 iFinD）。"""
+        monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)
+        monkeypatch.setattr(ifind.ths, "THS_HQ",
+                            lambda *a, **k: _r(pd.DataFrame({"time": ["2026-08-07"], "close": [1.0]})))
+        df = pd.DataFrame({"time": ["2026-08-07"], "thscode": ["AAPL.O"],
+                           "total_shares": [1.459418e10], "floating_shares": [1.4e10]})
+        monkeypatch.setattr(ifind.ths, "THS_DS", lambda *a, **k: _r(df))
+        root = str(tmp_path)
+        r = ifind.fetch_shares(root, parse_code("AAPL.US"), start="2026-08-01")
+        assert set(r["fields"]) == {"total_shares", "floating_shares"}
+        assert cache.read_cache(root, "AAPL.US", "floating_shares")["meta"]["source"] == "ifind"
 
     def test_hk_code_format(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)

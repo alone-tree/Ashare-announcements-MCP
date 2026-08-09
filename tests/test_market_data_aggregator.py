@@ -34,15 +34,15 @@ class TestEnsure:
         assert r["ok"] is True and r["source"] == "sina"
         assert f.calls == []  # 未触发补拉
 
-    def test_end_gap_within_7_days_no_fetch(self, tmp_path):
-        """末尾 ≤7 天缺口（周末）视为覆盖，不补拉。"""
+    def test_end_gap_not_covered(self, tmp_path):
+        """严格覆盖判定：end 超出缓存末尾（即使 1 天）→ 不覆盖，触发补拉。"""
         root = str(tmp_path)
         _write_field(root, "600519.SH", "close", [{"date": "2026-08-07", "value": 1.0, "source": "sina"}],
                      "2026-08-03", "2026-08-07")
         f = _fetcher({"ok": True, "source": "sina", "fields": {}})
         r = aggregator.ensure(root, parse_code("600519.SH"), "close", [f],
                               start="2026-08-03", end="2026-08-09")
-        assert f.calls == []
+        assert f.calls  # 严格判定：不覆盖 → 补拉
 
     def test_chain_tries_next_source(self, tmp_path):
         """第一源失败（或不覆盖字段）→ 尝试第二源。"""
@@ -76,3 +76,29 @@ class TestEnsure:
                               start="2026-08-01")
         assert r["ok"] is False
         assert "登录失败" in r["error"]
+
+    def test_one_call_covers_multiple_fields(self, tmp_path):
+        """用户强调（2026-08-09）：缺多个字段时一次调用拿全部，不重复调用。
+        逐个检验：要的字段缓存有就不调用；没有就调用一次（顺带写其他字段），
+        回来继续检验时其余字段已覆盖，不再调用。"""
+        root = str(tmp_path)
+        calls = []
+        def fetcher(root, mc, start=None, end=None):
+            calls.append(f"{mc.code}.{mc.suffix}")
+            # 模拟 sina.fetch_raw：一次上游请求写多个字段
+            for f in ("open", "high", "low", "close", "volume"):
+                cache.write_cache(root, f"{mc.code}.{mc.suffix}", f,
+                                  meta={"code": f"{mc.code}.{mc.suffix}", "market": mc.market,
+                                        "field": f, "source": "sina",
+                                        "date_range": {"start": "2026-08-06", "end": "2026-08-07"}},
+                                  items=[{"date": "2026-08-06", "value": 1.0, "source": "sina"},
+                                         {"date": "2026-08-07", "value": 2.0, "source": "sina"}])
+            return {"ok": True, "source": "sina",
+                    "fields": {f: {"start": "2026-08-06", "end": "2026-08-07"}
+                               for f in ("open", "high", "low", "close", "volume")}}
+        mc = parse_code("600519.SH")
+        # 逐个检验 5 个缺失字段
+        for f in ("open", "high", "low", "close", "volume"):
+            aggregator.ensure(root, mc, f, [fetcher], start="2026-08-06", end="2026-08-07")
+        # 只有第一次检验触发调用；后续字段命中缓存零调用
+        assert len(calls) == 1

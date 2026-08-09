@@ -345,9 +345,13 @@ def fetch_shares(
     fields = {
         "total_shares": _write_field(root, code, mc.market, "total_shares",
                                      [{"date": r["date"], "value": r["total_shares"]} for r in fresh]),
-        "floating_shares": _write_field(root, code, mc.market, "floating_shares",
-                                        [{"date": r["date"], "value": r["floating_shares"]} for r in fresh]),
     }
+    # floating_shares 字段归属：A/北交所 = sina（outstanding_share，全历史逐日，用户拍板口径）；
+    # 港美股 = iFinD（新浪港股/美股无股本列）。避免同字段同日期双写（2026-08-09 用户指出）。
+    if mc.market in ("HK", "US"):
+        fields["floating_shares"] = _write_field(
+            root, code, mc.market, "floating_shares",
+            [{"date": r["date"], "value": r["floating_shares"]} for r in fresh])
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields="total_shares;floating_shares", start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
