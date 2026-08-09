@@ -6,3 +6,6 @@ src/cache/
 tmp/
 .secrets/
 .codex-temp/
+
+# market-data 审计日志（每次上游请求，本地评估用）
+logs/
