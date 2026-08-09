@@ -35,7 +35,7 @@ CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）�
 
 | 工具 | 要点 |
 |---|---|
-| `get_quote` | 行情；code 带后缀、vars 字段列表（date 恒留）、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、超长(>200 行)自动导出、export_path 指定 CSV |
+| `get_quote` | 行情；code 带后缀、vars 字段列表（date 恒留）、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、超长(>200 行)自动导出、export_path 指定 CSV。**缓存为字段级 9 个 json**（open/high/low/close/close_hfq/volume/amount/total_shares/floating_shares，items `[{date,value,source}]` 每字段同日期仅一条），**每字段唯一数据源**（A/北交所流通股本=新浪、港美股=ifind 等），派生（qfq/市值/换手率/周月/hfq OHL 还原）全现算；**覆盖判定带探测状态机**（盘后 verified_until 覆盖周末/节假日、盘中续探零请求，见架构文档 §1.8） |
 | `get_financial_statements` | 三表；统一形状 `{report_date, item_name, amount, source}`、**科目名原样不翻译、不做跨市场映射** |
 | `get_financial_ratios` | 财务衍生指标，东财英文列名原样 |
 | `get_company_profile` | 概况/分红/盈利预测，sections 可选 |
