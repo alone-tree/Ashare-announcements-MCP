@@ -2,6 +2,7 @@
 """缓存模块测试：9 字段文件、items [{date,value,source}]、merge 多源并存、覆盖判定。"""
 
 import json
+from datetime import datetime
 
 from market_data_mcp import cache
 
@@ -81,5 +82,61 @@ class TestCoverage:
         assert cache.coverage(self._meta("2026-01-01", "2026-12-31"), "2026-06-01", None)
         assert cache.coverage(self._meta("2026-01-01", "2026-12-31"), None, "2026-06-30")
 
+    def test_verified_until_covers_end(self):
+        """探测验证：verified_until ≥ end → 视为覆盖（周末场景零请求）。"""
+        meta = self._meta("2026-01-01", "2026-08-07")
+        meta["verified_until"] = "2026-08-09"
+        meta["verified_at"] = "2026-08-09T10:00:00"
+        assert cache.coverage(meta, "2026-03-01", "2026-08-09")
+
+    def test_verified_until_not_enough(self):
+        meta = self._meta("2026-01-01", "2026-08-07")
+        meta["verified_until"] = "2026-08-09"
+        assert not cache.coverage(meta, "2026-03-01", "2026-08-10")  # 超出验证范围 → 补拉
+
+    def test_verified_without_meta_field(self):
+        assert not cache.coverage(self._meta("2026-01-01", "2026-08-07"), "2026-03-01", "2026-08-09")
+
     def test_no_date_range(self):
-        assert not cache.coverage({"source": "sina"}, "2026-01-01", "2026-12-31")
+        assert not cache.coverage({"x": 1}, "2026-01-01", "2026-06-30")
+
+
+class TestSetVerified:
+    def _write(self, root, code="600519.SH"):
+        cache.write_cache(root, code, "close",
+                          meta={"code": code, "market": "A", "field": "close", "source": "sina",
+                                "date_range": {"start": "2026-08-06", "end": "2026-08-07"}},
+                          items=[{"date": "2026-08-06", "value": 1.0, "source": "sina"}])
+
+    def test_friday_probe_extends_to_sunday(self, tmp_path):
+        """周五收盘后探测 → verified_until 延伸到周日（周末确定无数据）。"""
+        root = str(tmp_path)
+        self._write(root)
+        cache.set_verified(root, "600519.SH", "close", "2026-08-07",
+                           now=datetime(2026, 8, 7, 15, 30))
+        meta = cache.read_cache(root, "600519.SH", "close")["meta"]
+        assert meta["verified_until"] == "2026-08-09"
+        assert meta["verified_at"] == "2026-08-07T15:30:00"
+        # 周六/周日请求命中（零请求）；周一不命中 → 补拉
+        assert cache.coverage(meta, "2026-08-06", "2026-08-08") is True
+        assert cache.coverage(meta, "2026-08-06", "2026-08-09") is True
+        assert cache.coverage(meta, "2026-08-06", "2026-08-10") is False
+
+    def test_monday_probe_no_extension(self, tmp_path):
+        """周一~周四不延伸（次日可能出数据）。"""
+        root = str(tmp_path)
+        self._write(root)
+        cache.set_verified(root, "600519.SH", "close", "2026-08-10",
+                           now=datetime(2026, 8, 10, 15, 30))
+        meta = cache.read_cache(root, "600519.SH", "close")["meta"]
+        assert meta["verified_until"] == "2026-08-10"
+        assert cache.coverage(meta, "2026-08-06", "2026-08-10") is True
+        assert cache.coverage(meta, "2026-08-06", "2026-08-11") is False
+
+    def test_preserves_items(self, tmp_path):
+        root = str(tmp_path)
+        self._write(root)
+        cache.set_verified(root, "600519.SH", "close", "2026-08-09",
+                           now=datetime(2026, 8, 9, 12, 0))
+        data = cache.read_cache(root, "600519.SH", "close")
+        assert data["items"] == [{"date": "2026-08-06", "value": 1.0, "source": "sina"}]

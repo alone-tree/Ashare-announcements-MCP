@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
 
 # 后缀 → 市场通道（B 股与 A 股同通道，不细分）
 _SUFFIX_MARKET = {"SH": "A", "SZ": "A", "BJ": "BJ", "HK": "HK", "US": "US"}
@@ -25,6 +26,45 @@ MARKET_NAMES = {"A": "A股", "BJ": "北交所", "HK": "港股", "US": "美股"}
 
 # 各市场标准代码位数（用于校验）
 _CODE_LEN = {"A": 6, "BJ": 6, "HK": 5}
+
+# 市场收盘时间（A/BJ/HK 按北京时间判断；US 按美东时间判断）
+MARKET_CLOSE = {"A": time(15, 0), "BJ": time(15, 0), "HK": time(16, 0), "US": time(16, 0)}
+
+
+def _us_dst(d: date) -> bool:
+    """美东夏令时（EDT = UTC-4）：3 月第二个周日 02:00 ~ 11 月第一个周日 02:00。"""
+    march = date(d.year, 3, 1)
+    dst_start = march + timedelta(days=(6 - march.weekday()) % 7 + 7)
+    nov = date(d.year, 11, 1)
+    dst_end = nov + timedelta(days=(6 - nov.weekday()) % 7)
+    return dst_start <= d < dst_end
+
+
+def _beijing_time(now: datetime) -> time:
+    """北京时间（UTC+8 固定，无夏令时），不依赖本机时区。"""
+    return (now.astimezone(timezone.utc) + timedelta(hours=8)).time()
+
+
+def _us_eastern_time(now: datetime) -> time:
+    """美东时间（EDT=UTC-4 / EST=UTC-5）。"""
+    offset = 4 if _us_dst(now.date()) else 5
+    return (now.astimezone(timezone.utc) - timedelta(hours=offset)).time()
+
+
+def is_market_closed(market: str, now: datetime | None = None) -> bool:
+    """当前时刻该市场是否已收盘（决定"探测无数据"可否写 verified_until）。
+
+    - 周六/周日：视为已收盘（周末不交易，数据不会再有）
+    - 工作日：A/BJ 北京时间 ≥15:00；HK 北京时间 ≥16:00；US 美东时间 ≥16:00
+    """
+    now = now or datetime.now()
+    if now.date().weekday() >= 5:
+        return True
+    if market in ("A", "BJ", "HK"):
+        return _beijing_time(now) >= MARKET_CLOSE[market]
+    if market == "US":
+        return _us_eastern_time(now) >= MARKET_CLOSE["US"]
+    return True  # 未知市场保守视为已收盘
 
 
 @dataclass(frozen=True)

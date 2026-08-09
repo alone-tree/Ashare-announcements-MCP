@@ -28,6 +28,7 @@ import json
 import os
 import tempfile
 import time
+from datetime import date, datetime, timedelta
 from typing import Any
 
 # 字段 → 缓存文件名（2026-08-09 用户拍板）
@@ -119,7 +120,12 @@ def _shape_of(items: Any) -> dict[str, Any]:
 
 def coverage(meta: dict[str, Any], start: str | None, end: str | None) -> bool:
     """覆盖判定：缓存完整覆盖请求日期段才算够（c_start ≤ start 且 c_end ≥ end）。
-    meta 无 date_range 或日期缺失视为不覆盖。"""
+
+    探测验证（2026-08-09 用户拍板：探测 + 已收盘判断，无交易日历）：
+    末尾不足时若 meta.verified_until ≥ end → 视为覆盖（已探测确认到该日期为止
+    无更多已收盘数据；周末探测自动延伸到周日）。verified_at 记录探测时刻（秒级），
+    盘中探测不写 verified（未收盘可能出数据），盘后探测才写。
+    """
     dr = meta.get("date_range") or {}
     c_start, c_end = dr.get("start"), dr.get("end")
     if start is not None and c_start is None:
@@ -129,5 +135,34 @@ def coverage(meta: dict[str, Any], start: str | None, end: str | None) -> bool:
     if start is not None and c_start > start:
         return False
     if end is not None and c_end < end:
-        return False
+        v = meta.get("verified_until")
+        return v is not None and v >= end
     return True
+
+
+def set_verified(root: str, code: str, field: str, end: str, now: datetime | None = None) -> None:
+    """记录"探测确认"：请求段末尾（end）之前无更多已收盘数据。
+
+    - verified_until：探测确认的日期上界，**周五~周日的探测延伸到所在周末的周日**
+      （周末确定无数据：周五收盘后探测 → 覆盖周六/周日；周六探测 → 覆盖周日）
+    - verified_at：探测时刻（YYYY-MM-DDTHH:MM:SS 秒级，区分盘中/盘后检查）
+    仅当市场已收盘时由请求模块调用（盘中不写，避免当日数据收盘后出现被误缓存）。
+    """
+    data = read_cache(root, code, field)
+    if data is None:
+        return
+    now = now or datetime.now()
+    meta = dict(data["meta"])
+    meta["verified_until"] = _extend_verified(end)
+    meta["verified_at"] = now.strftime("%Y-%m-%dT%H:%M:%S")
+    write_cache(root, code, field, meta=meta, items=data["items"])
+
+
+def _extend_verified(end: str) -> str:
+    """周五~周日的探测日期延伸到所在周末的周日（周末确定无数据）。"""
+    d = date.fromisoformat(end)
+    if d.weekday() == 4:  # 周五 → 周日
+        return (d + timedelta(days=2)).isoformat()
+    if d.weekday() == 5:  # 周六 → 周日
+        return (d + timedelta(days=1)).isoformat()
+    return end  # 周一~周四不延伸（次日可能出数据）

@@ -27,7 +27,7 @@ from datetime import date, timedelta
 import iFinDPy as ths
 
 from market_data_mcp import audit, cache
-from market_data_mcp.routing import MarketCode
+from market_data_mcp.routing import MarketCode, is_market_closed
 
 # iFinD 为国内服务：清代理直连（与新浪/东财一致）
 for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
@@ -203,6 +203,9 @@ def _fetch_us_daily(
         return {"ok": True, "source": SOURCE, "fields": {}, "error": None, "notes": notes or None}
 
     date_range = _write_field(root, code, mc.market, field, fresh)
+    # 探测验证（2026-08-09 用户拍板）：返回末日 < end 且美东已收盘 → 写 verified
+    if end is not None and is_market_closed(mc.market) and max(r["date"] for r in fresh) < end:
+        cache.set_verified(root, code, field, end)
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields=f"{indicator}({param})", adjust=adjust, start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
@@ -352,6 +355,10 @@ def fetch_shares(
         fields["floating_shares"] = _write_field(
             root, code, mc.market, "floating_shares",
             [{"date": r["date"], "value": r["floating_shares"]} for r in fresh])
+    # 探测验证（2026-08-09 用户拍板）：返回末日 < end 且市场已收盘 → 写 verified
+    if end is not None and is_market_closed(mc.market) and max(r["date"] for r in fresh) < end:
+        for f in fields:
+            cache.set_verified(root, code, f, end)
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields="total_shares;floating_shares", start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
