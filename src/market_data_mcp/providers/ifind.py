@@ -305,6 +305,9 @@ def fetch_shares(
                 "date_range": None, "error": None, "notes": notes or None}
 
     existing = cache.read_cache(root, code, "shares")
+    # 仅与同源缓存合并，不跨源填充（iFinD total_shares 与 yfinance 扣库存股口径不同）
+    if existing and existing.get("meta", {}).get("source") != SOURCE:
+        existing = None
     existing_items = existing["items"] if existing else None
     merged = _merge(existing_items, fresh)
     date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
