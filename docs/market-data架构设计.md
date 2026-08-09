@@ -26,7 +26,7 @@
 
 | 工具                         | 参数                                                  | 缓存文件                                       |
 | ---------------------------- | ----------------------------------------------------- | ---------------------------------------------- |
-| `get_quote`                | code, vars, adjust, start_date, end_date, period, export_path | quote_daily_raw / quote_daily_hfq / shares |
+| `get_quote`                | code, vars, adjust, start_date, end_date, period, export_path | **字段级 9 个 json**：open/high/low/close/close_hfq/volume/amount/total_shares/floating_shares |
 | `get_financial_statements` | code, periods[], statements[]                         | financial_income / balance / cash_flow         |
 | `get_financial_ratios`     | code, periods[]                                       | ratios                                         |
 | `get_company_profile`      | code, sections[]                                      | profile                                        |
@@ -72,9 +72,9 @@
 
 ### 1.5 缓存与更新策略
 
-- 缓存存 `cache/{代码}/` 下，JSON 格式 `{meta, items}`：meta 含 code/market/data_type/source/updated_at/date_range/shape；items 为数据本体。
-- **行情只缓存除权（raw，OHLC 四列）+ 后复权（hfq，仅 close）两个文件，均为静态历史永不过期**；前复权随分红变动，现算不落盘。
-- **市值现算不落盘**（缓存 raw close + 股本，逐日相乘）；股本低频变化，单独缓存 shares（月频/日频并存，同源不冲突）。
+- 缓存存 `cache/{代码}/` 下，JSON 格式 `{meta, items}`：meta 含 code/market/field/source/updated_at/date_range/shape；**items 为 `[{date, value, source}]`——每条带 source，同字段不同来源记录并存（便于追踪与后期加源），读取按字段链优先级取**。
+- **行情缓存为字段级独立 json（2026-08-09 用户拍板）**：高开低收原值 open/high/low/close、后复权 close_hfq（仅 close）、成交额 amount、成交量 volume、总股本 total_shares、流通股本 floating_shares——9 个文件；均为静态历史永不过期。**前复权随分红变动，现算不落盘**。
+- **市值现算不落盘**（close.json × 股本字段，逐日前置填充相乘）；股本低频变化，total_shares/floating_shares 月频/日频并存，同源不冲突。
 - **首次全量、之后增量**：行情拉 last_date 之后新交易日；财报拉新报告期。
 - **失败 = 缓存未更新**：直接返回"缓存获取失败，请重试"，不记录失败过程；重试时自动跳过已完成部分。
 - 周/月线由日线现算，不落盘（聚合规则：open=周期首日、high=周期最高、low=周期最低、close=周期末日、volume/amount=周期累计；weekly 用 W-FRI、monthly 用 ME）。
@@ -129,12 +129,12 @@
 
 - **请求模块粒度 = 源 × 市场 × 复权档**：如 `新浪×A/B股×raw`、`新浪×港股×raw`、`iFinD×美股×hfq`。**不是按单字段切**——各源一次请求物理上返回整组（新浪A股=OHLC+量额+outstanding_share+换手率；新浪港股=OHLC+量额；新浪美股=OHLC+量；iFinD THS_DS=指标序列），按字段切会导致同一请求被多个模块重复执行。
 - **代码格式转换放统一适配层（2026-08-08 用户拍板）**：入口只认标准代码（300476.SZ / 00700.HK / AAPL.US），路由层做"后缀→市场→各源格式转换表"（新浪 sz300476/00700、iFinD 300476.SZ/0700.HK/AAPL.O）；请求模块只接收已转换好的源格式字符串，内部不再做任何格式处理。新增数据源 = 写请求模块 + 转换表加一行。
-- **宽写窄读**：请求模块把该档全部列一次写入缓存；字段层按列名从缓存消费（如股本字段消费新浪A股模块写入的 outstanding_share），避免重复请求。
-- **字段链按字段独立定义**：可得性不同则链不同（美股 amount 链=仅东财；美股 OHLC 链=新浪）。字段聚合器补拉时按自己链调对应请求模块。
+- **拉到什么写什么（2026-08-09 用户拍板，取代"宽写窄读"）**：请求模块一次上游请求返回整组数据，**按字段拆分写入各自独立 json**（新浪A股一次写 7 字段含 floating_shares、美股 5 字段无 amount、股本 2 字段）；字段层按字段名从缓存消费，避免重复请求。
+- **字段链按字段独立定义**：可得性不同则链不同（美股 amount 链=仅 iFinD；美股 OHLC 链=新浪；股本链 iFinD→yfinance 回退）。字段聚合器补拉时按自己链调对应请求模块。
 - **缺字段补拉语义（决策 A，2026-08-08 用户拍板）**：字段缺数据时，字段链总是从第一源开始重试，**接受对刚失败源的重复请求**（东财限流是间歇性的，重试可能撞上恢复窗口）；**不记录失败状态**（维持"失败=缓存未更新，提示重试"的简单策略）。
-- **模块接口契约（决策 A，2026-08-08 用户拍板）**：全部**结构化返回，不抛异常**——请求模块内部 try/except，统一返回 `{ok, source, path, new_items, date_range, error}`；字段聚合器根据 ok 决定是否试下一源（链式尝试逻辑在聚合器内）。失败原因可读（如"东方财富请求超时"），便于 notes 记录与测试。
+- **模块接口契约（决策 A，2026-08-08 用户拍板；2026-08-09 字段级后更新）**：全部**结构化返回，不抛异常**——请求模块内部 try/except，统一返回 `{ok, source, fields, error, notes}`（fields 为本次更新的字段名 → date_range 映射；美股 amount 链=仅 iFinD 等字段链见 1.4/2.3）；字段聚合器根据 ok 与 fields 决定是否试下一源（链式尝试逻辑在聚合器内）。失败原因可读（如"东方财富请求超时"），便于 notes 记录与测试。
 - **运行日志（审计，2026-08-08 用户拍板）**：**每次对上游的请求都记一条日志**——时间、请求什么源的什么数据（市场/代码/接口/字段/档位）、运行是否成功、报错信息、耗时。目的：评估数据源可靠性。日志是 append-only 审计，**不参与任何决策逻辑**。落点：`logs/requests.jsonl`（JSON Lines，一行一条；建议字段：ts/source/market/code/api/fields/adjust/start/end/ok/elapsed/error）。
-- **缓存覆盖判定（2026-08-08 用户拍板）**：**必须缓存完整覆盖请求日期段才算够**——`c_start ≤ start 且 c_end ≥ end`（双向段覆盖）才直接返回缓存；其他情况缺什么补什么：终点不足 → 增量补拉（c_end+1 到 end）；起点不足 → 按字段链补早期段；补拉后仍覆盖不了的部分 → 标注缺失范围。
+- **缓存覆盖判定（2026-08-08 用户拍板；2026-08-09 补末尾容忍）**：**必须缓存完整覆盖请求日期段才算够**——`c_start ≤ start 且 c_end ≥ end`（双向段覆盖）才直接返回缓存；**末尾容忍 ≤7 天缺口**（end=今天而缓存到最近交易日是常态，周末/节假日无数据，2026-08-09 实测否则每次调用都触发补拉）；其他情况缺什么补什么：终点不足 → 增量补拉（c_end+1 到 end）；起点不足 → 按字段链补早期段；补拉后仍覆盖不了的部分 → 标注缺失范围。
 - **派生字段无请求模块**：市值 = 字段聚合器读缓存（股本 + raw close）现算，不落盘。
 - **调整顺序/新增来源/修 bug**：改字段链注册或单个请求模块，不影响其他模块。
 
@@ -173,7 +173,7 @@
   - 源失败 = 缓存未更新，提示重试，**不跨源补缺**；重试时自动跳过已完成部分。
 - **c. 前复权价**：**本地计算，不缓存**。`前复权(t) = 后复权(t) × (最新不复权收盘 / 最新后复权收盘)`，除权因子取同一交易日（日期对齐），随分红自动更新。
 - 请求前复权时：自动获取后复权 + 除权的高开低收到缓存，再从缓存读取并计算前复权。
-- 缓存只存不复权（raw，OHLC 四列）+ 后复权（hfq，仅 close）两个文件，均为静态历史永不过期。
+- 缓存只存字段级 9 个 json（open/high/low/close/close_hfq/volume/amount/total_shares/floating_shares，见 1.5），均为静态历史永不过期；新浪 A 股 outstanding_share 写入 floating_shares.json（source=sina，A 股流通股本口径）；turnover 换手率不缓存、派生算（volume ÷ 流通股本）。
 - 新浪回退且请求周/月线：本地把日线聚合成周/月线（规则见 1.5），返回 `notes` 提示"新浪接口仅提供日线，weekly/monthly 由日线本地聚合"。
 
 ### 2.3 字段获取方式（决策）
@@ -316,6 +316,7 @@ items: [{"report_date", "item_name", "amount", "source"}, ...]
 | 08-09 | 美股后缀 THS_HQ 探测（.O/.N）；纽交所交易日历 THS_Date_Query 212010 | ✅ 有效 |
 | 08-09 | 美股 hfq 覆盖边界（COHR 等）：上游问题不修复，有就接受 | ✅ 有效 |
 | 08-09 | **美股 amount = iFinD 单源**（用户提供官方公式 `amt,OC`：近 5 年序列 + 更早交易日历单点逐日补全；单点非交易日返回空值）；东财美股 amount 废弃（限流从未实测成功） | ✅ 有效 |
+| 08-09 | **缓存改字段级独立 json**（用户拍板）：9 个文件 items `[{date,value,source}]` 多源并存可追踪；请求模块"拉到什么写什么"（一次请求更新多个字段 json）；派生全现算（hfq OHL 因子还原/qfq/市值/换手率/周月）；覆盖判定末尾容忍 ≤7 天（周末无数据不再每次补拉）；美股 amount 链=仅 iFinD | ✅ 有效 |
 | 08-09 | EODHD 付费版评估取消；腾讯退出行情链 | ✅ 有效 |
 
 ## 9. 待办
