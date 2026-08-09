@@ -33,13 +33,20 @@ def ensure(
 
     notes = []
     last_error = None
+    cur_before = cur
     for fetcher in chain:
         r = fetcher(root, mc, start=start, end=end)
         if r.get("ok") and r.get("path") is not None:
             cur = cache.read_cache(root, f"{mc.code}.{mc.suffix}", data_type)
-            if cur is not None:
+            # 确认缓存真实更新（fetcher 返回 path 但未写入/写失败时 updated_at 不变）
+            if cur is not None and (
+                cur_before is None
+                or cur["meta"].get("updated_at") != cur_before["meta"].get("updated_at")
+            ):
                 return {"ok": True, "items": cur["items"], "meta": cur["meta"],
                         "source": cur["meta"].get("source"), "notes": r.get("notes")}
+            # 缓存未被更新：不当作成功，继续链上下一源
+            cur = cur_before
         if r.get("ok"):
             # 请求成功但无新数据（无 path）：继续下一源或返回现有缓存
             last_error = None
