@@ -298,17 +298,49 @@ cache/{code}/financial_statements/
 
 ## 5. 公司信息获取工具 `get_company_profile`
 
-### 5.1 定位（决策）
+### 5.1 定位（决策，2026-08-09 讨论定稿）
 
-公司概况/分红/盈利预测，一个缓存文件（profile.json），`sections` 可选（profile/dividends/forecast，空=全部）。数据源=东财 datacenter；美股缺失类别（概况/分红/十大股东/主营构成/IPO）**从公告原文获取**——对应公告 MCP（美股走 SEC EDGAR）。
+公司概况/IPO/分红/盈利预测/股东（首版五类），**按 section 分缓存文件**（profile.json / ipo.json / dividends.json / forecast.json / holders.json），`sections` 可选（空=全部）。**主营构成归属财报工具**（get_financial_statements 扩展：利润表科目的业务线细分，同报告期同金额体系可交叉验证），当前不实现、之后完善。回购是独立全市场接口（stock_repurchase_em 全市场 5455 条按代码过滤），不是分红子项，首版不纳入。
 
-### 5.2 参数
+### 5.2 多源合并策略（决策 A，2026-08-09 用户拍板）
 
-`code`（必填）、`sections[]`（profile/dividends/forecast，空=全部）。
+**主源优先，缺的信息从其他渠道补充**——与行情"每字段唯一数据源"同原则：每个字段只有一个来源值，主源没有该字段时才从补充源取；同一字段绝不出现两个来源的值。
 
-### 5.3 数据可得性
+| section | 市场 | 主源 | 补充源（主源缺字段时） |
+|---|---|---|---|
+| profile | A股 | 巨潮 stock_profile_cninfo（26 字段） | 东财 stock_individual_info_em（push2his 间歇，仅主源失败时） |
+| | 港股 | 东财 stock_hk_company_profile_em（17 字段）**+ stock_hk_security_profile_em（14 字段）合并字段并集**（ISIN/每手股数/沪深港通标识在证券接口，两接口字段互补无重叠） | — |
+| | 美股 | ❌ 无结构化 → 返回"用公告 MCP 查 SEC"提示 | — |
+| ipo | A股 | 巨潮 stock_ipo_summary_cninfo（宽表 15 字段） | 新浪 stock_ipo_info（key-value 17 项） |
+| | 港股/美股 | ❌ → 公告提示 | — |
+| dividends | A股 | 东财 stock_fhps_detail_em（18期×19字段最全，含股息率/EPS/总股本） | 同花顺 stock_fhps_detail_ths（独有股利支付率/税前分红率/不分配记录）；巨潮（年度/中期类型）；新浪（精简）——仅取主源缺失字段 |
+| | 港股 | 东财 stock_hk_dividend_payout_em（27期） | — |
+| | 美股 | ❌ → 公告提示 | — |
+| forecast | A股 | 东财 stock_profit_forecast_em（一致预期+评级分布，全市场拉取后按代码筛） | 同花顺 stock_profit_forecast_ths（min/max/行业均值） |
+| | 港股 | 经济通 stock_hk_profit_forecast_et（分券商明细） | — |
+| | 美股 | ❌ | — |
+| holders | A股 | 新浪 stock_main_stock_holder（历史序列，多期叠加） | 东财 stock_gdfx_free_top_10_em（实测 KeyError 'sdltgd'，格式待验证） |
+| | 港股/美股 | ❌ → 公告提示 | — |
+
+### 5.3 参数
+
+`code`（必填）、`sections[]`（profile/ipo/dividends/forecast/holders，空=全部）。
+
+### 5.4 缓存与返回
+
+- 每个 section 一个 JSON 缓存文件，**快照性质**（meta 含 updated_at/source/market），无行情式日期段覆盖概念；刷新策略待定（见 §7 待决）。
+- 返回：`{ok, code, sections: {...}, notes}`——每个 section 返回其对象/列表；美股 section 返回 `{"available": false, "reason": "美股无结构化公司信息，请用公告 MCP 查询 SEC 提交"}`（不是错误）。
+- 港股 profile 返回两接口字段并集（公司 17 + 证券 14，去重）。
+
+### 5.5 数据可得性
 
 客观可得性见 `字段与数据源支持情况.md` §5。
+
+### 5.6 待办
+
+- [ ] 主营构成（stock_zygc_em 行业/产品/地区三维度）→ 财报工具扩展（statements 加 zygc），当前不实现
+- [ ] 刷新策略定稿（TTL vs 每次刷新 vs 快照永续）
+- [ ] 东财股东接口 stock_gdfx_free_top_10_em 格式验证（KeyError 'sdltgd' 待解）
 
 ## 6. 明确不做（边界）
 
