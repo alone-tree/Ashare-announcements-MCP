@@ -203,9 +203,9 @@ def _fetch_us_daily(
         return {"ok": True, "source": SOURCE, "fields": {}, "error": None, "notes": notes or None}
 
     date_range = _write_field(root, code, mc.market, field, fresh)
-    # 探测验证（2026-08-09 用户拍板）：返回末日 < end 且美东已收盘 → 写 verified
-    if end is not None and is_market_closed(mc.market) and max(r["date"] for r in fresh) < end:
-        cache.set_verified(root, code, field, end)
+    # 探测（2026-08-09 用户拍板）：返回末日 < end → 记探测结果（closed/intraday）
+    if end is not None and fresh and max(r["date"] for r in fresh) < end:
+        cache.probe_result(root, code, field, end, closed=is_market_closed(mc.market))
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields=f"{indicator}({param})", adjust=adjust, start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
@@ -355,10 +355,11 @@ def fetch_shares(
         fields["floating_shares"] = _write_field(
             root, code, mc.market, "floating_shares",
             [{"date": r["date"], "value": r["floating_shares"]} for r in fresh])
-    # 探测验证（2026-08-09 用户拍板）：返回末日 < end 且市场已收盘 → 写 verified
-    if end is not None and is_market_closed(mc.market) and max(r["date"] for r in fresh) < end:
+    # 探测（2026-08-09 用户拍板）：返回末日 < end → 记探测结果（closed/intraday）
+    if end is not None and fresh and max(r["date"] for r in fresh) < end:
+        closed = is_market_closed(mc.market)
         for f in fields:
-            cache.set_verified(root, code, f, end)
+            cache.probe_result(root, code, f, end, closed=closed)
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields="total_shares;floating_shares", start=start, end=end,
                       ok=True, elapsed=time.time() - t0)

@@ -176,13 +176,13 @@ def _fetch(
         fields = _write_fields(root, code, mc.market, fresh, field_map)
 
     elapsed = time.time() - t0
-    # 探测验证（2026-08-09 用户拍板）：返回末日 < end 且市场已收盘 → 写 verified
-    # （confirmed: end 之前无更多已收盘数据；周末自动延伸；盘中不写，防当日数据被误缓存）
-    if end is not None and is_market_closed(mc.market):
-        last = fresh[-1]["date"] if fresh else None
-        if last is None or last < end:
-            for f in fields:
-                cache.set_verified(root, code, f, end)
+    # 探测（2026-08-09 用户拍板）：返回末日 < end → 记探测结果
+    # closed（市场已收盘）→ verified_until+verified_at（周末延伸，节假日覆盖）；
+    # intraday（盘中）→ last_probe=intraday（同天盘中续探零请求，盘后自动失效补拉）
+    if end is not None and fresh and fresh[-1]["date"] < end:
+        closed = is_market_closed(mc.market)
+        for f in fields:
+            cache.probe_result(root, code, f, end, closed=closed)
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
                       fields=",".join(df.columns), adjust=adjust, start=start, end=end,
                       ok=True, elapsed=elapsed)

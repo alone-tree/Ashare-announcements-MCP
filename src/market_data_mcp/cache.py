@@ -31,6 +31,8 @@ import time
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from market_data_mcp.routing import is_market_closed
+
 # 字段 → 缓存文件名（2026-08-09 用户拍板）
 DATA_FILES = {
     "open": "open.json",
@@ -118,13 +120,16 @@ def _shape_of(items: Any) -> dict[str, Any]:
     return {}
 
 
-def coverage(meta: dict[str, Any], start: str | None, end: str | None) -> bool:
+def coverage(meta: dict[str, Any], start: str | None, end: str | None,
+             market: str | None = None, now: datetime | None = None) -> bool:
     """覆盖判定：缓存完整覆盖请求日期段才算够（c_start ≤ start 且 c_end ≥ end）。
 
     探测验证（2026-08-09 用户拍板：探测 + 已收盘判断，无交易日历）：
-    末尾不足时若 meta.verified_until ≥ end → 视为覆盖（已探测确认到该日期为止
-    无更多已收盘数据；周末探测自动延伸到周日）。verified_at 记录探测时刻（秒级），
-    盘中探测不写 verified（未收盘可能出数据），盘后探测才写。
+    1. 末尾不足时若 meta.verified_until ≥ end → 视为覆盖（盘后探测确认到该日期
+       为止无更多已收盘数据；周五~周日探测自动延伸到周日）
+    2. 盘中续探：上次探测是盘中（last_probe.state=intraday）且与本次请求同一天
+       且当前仍未收盘 → 视为覆盖（盘中"最新收盘日"不会变，不重复请求；
+       收盘后（本次盘后）→ 不覆盖 → 补拉当天数据）
     """
     dr = meta.get("date_range") or {}
     c_start, c_end = dr.get("start"), dr.get("end")
@@ -136,25 +141,37 @@ def coverage(meta: dict[str, Any], start: str | None, end: str | None) -> bool:
         return False
     if end is not None and c_end < end:
         v = meta.get("verified_until")
-        return v is not None and v >= end
+        if v is not None and v >= end:
+            return True
+        lp = meta.get("last_probe") or {}
+        if (lp.get("state") == "intraday" and lp.get("date") == end
+                and market is not None and not is_market_closed(market, now)):
+            return True
+        return False
     return True
 
 
-def set_verified(root: str, code: str, field: str, end: str, now: datetime | None = None) -> None:
-    """记录"探测确认"：请求段末尾（end）之前无更多已收盘数据。
+def probe_result(root: str, code: str, field: str, end: str, closed: bool,
+                 now: datetime | None = None) -> None:
+    """记录探测结果（每次补拉后调用）。
 
-    - verified_until：探测确认的日期上界，**周五~周日的探测延伸到所在周末的周日**
-      （周末确定无数据：周五收盘后探测 → 覆盖周六/周日；周六探测 → 覆盖周日）
-    - verified_at：探测时刻（YYYY-MM-DDTHH:MM:SS 秒级，区分盘中/盘后检查）
-    仅当市场已收盘时由请求模块调用（盘中不写，避免当日数据收盘后出现被误缓存）。
+    - closed=True（市场已收盘）：写 verified_until（周五~周日延伸到周末周日）
+      + verified_at（秒级，区分盘中/盘后检查）+ last_probe={state: closed}
+    - closed=False（盘中）：只写 last_probe={state: intraday}（同天盘中续探不重复请求）；
+      不写 verified_until（当日收盘后可能出数据，不能被误缓存）
     """
     data = read_cache(root, code, field)
     if data is None:
         return
     now = now or datetime.now()
     meta = dict(data["meta"])
-    meta["verified_until"] = _extend_verified(end)
-    meta["verified_at"] = now.strftime("%Y-%m-%dT%H:%M:%S")
+    meta["last_probe"] = {"state": "closed" if closed else "intraday", "date": end}
+    if closed:
+        meta["verified_until"] = _extend_verified(end)
+        meta["verified_at"] = now.strftime("%Y-%m-%dT%H:%M:%S")
+    else:
+        # 盘中探测不写 verified（旧 verified 保留：盘后确认比盘中更新，仍有效）
+        meta.pop("verified_at", None)
     write_cache(root, code, field, meta=meta, items=data["items"])
 
 

@@ -30,7 +30,7 @@ def ensure(
     """
     code = f"{mc.code}.{mc.suffix}"
     cur = cache.read_cache(root, code, field)
-    if cur is not None and cache.coverage(cur.get("meta", {}), start, end):
+    if cur is not None and cache.coverage(cur["meta"], start, end, market=mc.market):
         return {"ok": True, "items": cur["items"], "source": cur["meta"].get("source"),
                 "notes": None}
 

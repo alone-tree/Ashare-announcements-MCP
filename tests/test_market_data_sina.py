@@ -77,8 +77,7 @@ class TestFetchRaw:
         assert last["ok"] is False and last["source"] == "sina"
 
     def test_probe_writes_verified_after_close(self, tmp_path, monkeypatch):
-        """探测验证（2026-08-09 用户拍板）：返回末日 < end 且市场已收盘 → 写 verified。
-        覆盖判定随之命中（周末场景第二次调用零请求）。"""
+        """探测（2026-08-09 用户拍板）：返回末日 < end 且市场已收盘 → verified_until/verified_at/last_probe。"""
         df = _df(["2026-08-07"], {"close": [10.0], "volume": [100]})
         monkeypatch.setattr("akshare.stock_zh_a_daily", lambda **kw: df)
         monkeypatch.setattr("market_data_mcp.providers.sina.is_market_closed", lambda m: True)
@@ -89,18 +88,21 @@ class TestFetchRaw:
             meta = cache.read_cache(root, "600519.SH", f)["meta"]
             assert meta["verified_until"] == "2026-08-09"  # 周日探测（延伸=本身）
             assert meta["verified_at"]  # 秒级时间戳（区分盘中/盘后检查）
+            assert meta["last_probe"] == {"state": "closed", "date": "2026-08-09"}
         meta = cache.read_cache(root, "600519.SH", "close")["meta"]
         assert cache.coverage(meta, "2026-08-07", "2026-08-09") is True
 
-    def test_probe_skipped_when_market_open(self, tmp_path, monkeypatch):
-        """盘中（未收盘）不写 verified：防当日数据收盘后出现被误缓存。"""
+    def test_probe_intraday_writes_last_probe(self, tmp_path, monkeypatch):
+        """盘中探测：不写 verified_until，只记 last_probe=intraday（同天盘中续探零请求）。"""
         df = _df(["2026-08-07"], {"close": [10.0], "volume": [100]})
         monkeypatch.setattr("akshare.stock_zh_a_daily", lambda **kw: df)
         monkeypatch.setattr("market_data_mcp.providers.sina.is_market_closed", lambda m: False)
-        r = sina.fetch_raw(str(tmp_path), parse_code("600519.SH"), start="2026-08-01", end="2026-08-09")
+        root = str(tmp_path)
+        r = sina.fetch_raw(root, parse_code("600519.SH"), start="2026-08-01", end="2026-08-09")
         assert r["ok"] is True
-        meta = cache.read_cache(str(tmp_path), "600519.SH", "close")["meta"]
+        meta = cache.read_cache(root, "600519.SH", "close")["meta"]
         assert "verified_until" not in meta
+        assert meta["last_probe"] == {"state": "intraday", "date": "2026-08-09"}
 
 
 class TestFetchHfq:
