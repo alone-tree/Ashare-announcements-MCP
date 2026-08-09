@@ -192,14 +192,17 @@ def get_quote(
     if adjust in ("hfq", "qfq"):
         need_fields.add("close_hfq")
 
-    # 2. 逐字段 ensure（缓存复用）
+    # 2. 逐字段 ensure（缓存复用）；字段级失败→部分成功：失败字段无数据 + notes 标注，不整单拒绝
     results = _ensure_fields(root, mc, need_fields, start, end)
     failed = {f: r for f, r in results.items() if not r["ok"]}
-    if failed:
+    ok_fields = [f for f, r in results.items() if r["ok"]]
+    if not ok_fields:
         parts = []
         for f, r in failed.items():
             parts.append(f + ": " + str(r.get("error") or r.get("notes")))
         return {"ok": False, "error": "字段获取失败：" + "；".join(parts)}
+    for f, r in failed.items():
+        notes.append(f"字段 {f} 获取失败（{r.get('error') or r.get('notes')}），该列无数据")
     for f, r in results.items():
         for n in (r.get("notes") or []):
             if n and n not in notes:
@@ -305,17 +308,25 @@ def get_quote(
     sources = sorted({r.get("source") for r in results.values() if r.get("source")})
     source = ",".join(sources) if sources else None
 
+    # 数据起点晚于请求起点（上游数据源范围所限/新股上市）→ 通用提示，不涉及具体个股
+    if start_date and out_rows[0]["date"] > start_date:
+        notes.append(f"数据自 {out_rows[0]['date']} 起（上游数据源实际可用范围）")
+
     cols = ["date"] + vars
     # 9. 导出
     if export_path:
         _export_csv(export_path, out_rows, cols)
-        return {"ok": True, "path": export_path, "total_items": len(out_rows),
+        return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
+                "start": start, "end": end, "adjust": adjust, "period": period,
+                "vars": vars, "path": export_path, "total_items": len(out_rows),
                 "date_range": date_range, "source": source, "notes": notes or None}
     if len(out_rows) > 200:
         auto_path = os.path.join(root, "cache", "_auto_export",
                                  f"{mc.code}.{mc.suffix}_{adjust}_{period}_{start}_{end}.csv")
         _export_csv(auto_path, out_rows, cols)
-        return {"ok": True, "auto_exported": True, "path": auto_path,
+        return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
+                "start": start, "end": end, "adjust": adjust, "period": period,
+                "vars": vars, "auto_exported": True, "path": auto_path,
                 "total_items": len(out_rows), "date_range": date_range,
                 "source": source, "notes": notes + [f"数据超过 200 行，已自动导出到 {auto_path}"]}
 

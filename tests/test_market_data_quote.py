@@ -112,6 +112,45 @@ class TestGetQuote:
         assert r["rows"][0]["amount"] == 1.08e10
         assert "ifind" in r["source"]
 
+    def test_partial_field_failure(self, tmp_path, monkeypatch):
+        """字段级失败→部分成功：失败字段无数据+notes 标注，其余字段照常返回。"""
+        data = _default_data()
+        data["close"] = (_field_items(2, base=11.0), "sina")
+
+        def failing(root, mc, field, chain, start, end):
+            if field == "amount":
+                return {"ok": False, "items": [], "source": None,
+                        "error": "上游无该市场成交额数据", "notes": None}
+            return _FakeEnsure(data)(root, mc, field, chain, start, end)
+
+        from types import SimpleNamespace
+        monkeypatch.setattr(service, "aggregator", SimpleNamespace(ensure=failing))
+        r = service.get_quote(str(tmp_path), "AAPL.US", vars=["close", "amount"],
+                              start_date="2026-08-06", end_date="2026-08-07")
+        assert r["ok"] is True
+        assert r["rows"][0]["close"] == 11.0
+        assert r["rows"][0]["amount"] is None
+        assert any("amount" in n and "获取失败" in n for n in r["notes"])
+
+    def test_all_fields_fail(self, tmp_path, monkeypatch):
+        def failing(root, mc, field, chain, start, end):
+            return {"ok": False, "items": [], "source": None, "error": "全挂", "notes": None}
+        from types import SimpleNamespace
+        monkeypatch.setattr(service, "aggregator", SimpleNamespace(ensure=failing))
+        r = service.get_quote(str(tmp_path), "AAPL.US", vars=["close"],
+                              start_date="2026-08-06", end_date="2026-08-07")
+        assert r["ok"] is False and "字段获取失败" in r["error"]
+
+    def test_data_start_hint(self, tmp_path, monkeypatch):
+        """请求起点早于数据起点（新股/上游范围）→ notes 通用提示。"""
+        items = [{"date": "2026-07-27", "value": 49.0, "source": "sina"}]
+        monkeypatch.setattr(service, "aggregator",
+                            type("A", (), {"ensure": _FakeEnsure({"close": (items, "sina")})})())
+        r = service.get_quote(str(tmp_path), "688825.SH", vars=["close"],
+                              start_date="2026-07-01", end_date="2026-07-31")
+        assert r["ok"] is True
+        assert any("2026-07-27" in n and "数据自" in n for n in r["notes"])
+
     def test_invalid_params(self, tmp_path, monkeypatch):
         fake = _FakeEnsure(_default_data())
         monkeypatch.setattr(service, "aggregator", type("A", (), {"ensure": fake})())
