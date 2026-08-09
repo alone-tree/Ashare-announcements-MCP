@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""market_data MCP 服务器：三市场（A股/港股/美股）行情与基本面数据。
+"""market_data MCP 服务器：三市场（A股/北交所/港股/美股）行情与基本面数据。
 
 工具：
-- get_quote:          日线行情（前复权/后复权/不复权 + 成交量/额/流通股本）
-- get_financial_statements: 原始财务报表（三表，多报告期 × 报表范围可选）
-- get_financial_ratios:     财务衍生指标（ROE/毛利率等，多报告期）
-- get_company_profile:      公司基本信息（概况/分红/盈利预测，sections 可选）
+- get_quote: 日/周/月线行情（raw/hfq/qfq + 量额/股本/市值，超长自动导出）
 
-代码自动路由：6位数字=A股、5位数字=港股、字母=美股；可加 A:/HK:/US: 前缀强制。
+代码强制市场后缀（600519.SH / 920002.BJ / 00700.HK / AAPL.US），程序按后缀路由市场。
+数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录），缓存与自动导出均在根目录下。
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any
 
@@ -20,15 +19,28 @@ try:
 except ImportError:
     FastMCP = None  # type: ignore[assignment]
 
-from market_data_mcp.service import get_company_profile, get_financial_ratios, get_financial_statements, get_quote
+# FastMCP 严格参数模式：任何未声明参数显式报错（Extra inputs are not permitted）
+try:
+    from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
+    from pydantic import ConfigDict
+
+    ArgModelBase.model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+except Exception:  # 兼容 mcp 版本差异
+    pass
+
+from market_data_mcp.service import get_quote as get_quote_service
+
+
+def _data_root() -> str:
+    return os.environ.get("MARKET_DATA_ROOT") or os.getcwd()
 
 
 def _wrap(fn):
-    """把 service 函数包成工具；ValueError 转为 ok=false 返回。"""
+    """把 service 函数包成工具；异常转为 ok=false 返回（service 已结构化，此处兜底）。"""
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
     wrapper.__name__ = fn.__name__
     wrapper.__doc__ = fn.__doc__
@@ -41,64 +53,31 @@ def create_server() -> Any:
     @mcp.tool()
     def get_quote(
         code: str,
-        start: str,
-        end: str,
-        adjust: str = "qfq",
+        vars: list[str] | None = None,
+        adjust: str = "raw",
+        start_date: str | None = None,
+        end_date: str | None = None,
         period: str = "daily",
-        fields: list[str] | None = None,
+        export_path: str | None = None,
     ) -> dict[str, Any]:
-        """获取日线/周线/月线行情（A股/港股/美股）。
+        """获取日/周/月线行情（A股/北交所/港股/美股）。
 
-        code: 6位数字=A股、5位数字=港股、字母=美股；可用 A:/HK:/US: 前缀强制市场。
-        adjust: qfq=前复权、hfq=后复权、none=不复权（传空字符串）。
-        period: daily=日线、weekly=周线、monthly=月线。
-        fields: 指定返回字段，如 ["date","close"] 或 ["date","total_market_cap"]；不传=全部，date 始终保留。
-        可选字段：open/high/low/close/volume/amount/turnover/outstanding_share/
-                  total_market_cap（估算值）/float_market_cap（估算值，A股）。
-        notes 说明实际口径（新浪回退时周/月线由日线聚合；新浪美股 hfq 降级为 qfq；市值为估算）。
+        code: 带市场后缀代码（600519.SH / 920002.BJ / 00700.HK / AAPL.US）。
+        vars: 返回字段列表（date 恒保留），可选 open/high/low/close/volume/amount/turnover/
+              outstanding_share/total_market_cap/float_market_cap；不传默认 close。
+        adjust: raw=除权价、hfq=后复权、qfq=前复权（本地现算）。
+        start_date/end_date: YYYY-MM-DD；空 = 最近 10 个交易日 / 当天。
+        period: daily/weekly/monthly（周/月由日线本地聚合）。
+        export_path: 空 = 直接返回数据（超过 200 行自动导出到缓存目录并返回路径）；
+                     指定 = 导出 CSV 并返回元信息。
+        返回 rows 为数据本体；notes 说明降级/聚合/估算（市值为股本×收盘估算值；
+        美股 amount 来自 iFinD；后复权美股为分红再投口径）。
         """
-        return _wrap(get_quote)(code=code, start=start, end=end, adjust=adjust, period=period, fields=fields)
-
-    @mcp.tool()
-    def get_financial_statements(
-        code: str,
-        periods: list[str] | None = None,
-        statements: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """获取原始财务报表（利润表/资产负债表/现金流量表）。
-
-        code: 同 get_quote 的市场路由。
-        periods: 报告期年份列表（如 ["2025","2024"]），匹配该年份所有季度报告期；不传=全部。
-        statements: 报表范围 ["income","balance","cash_flow"]；不传=三张表全部。
-        返回按报告期组织的原始报表数据（字段为东财原始列名）。
-        """
-        return _wrap(get_financial_statements)(code=code, periods=periods, statements=statements)
-
-    @mcp.tool()
-    def get_financial_ratios(
-        code: str,
-        periods: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """获取财务衍生指标（ROE/毛利率/负债率等，东财原始指标）。
-
-        code: 同 get_quote 的市场路由。
-        periods: 报告期年份列表；不传=全部。
-        A股按报告期多期；港股仅最新；美股按年报多期。
-        """
-        return _wrap(get_financial_ratios)(code=code, periods=periods)
-
-    @mcp.tool()
-    def get_company_profile(
-        code: str,
-        sections: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """获取公司基本信息：公司概况 / 分红历史 / 盈利预测。
-
-        code: 同 get_quote 的市场路由。
-        sections: ["profile","dividends","forecast"]；不传=全部。
-        港股/美股缺失的类别（如美股概况/分红）返回 note 提示从公告获取。
-        """
-        return _wrap(get_company_profile)(code=code, sections=sections)
+        return _wrap(get_quote_service)(
+            _data_root(), code, vars=vars, adjust=adjust,
+            start_date=start_date, end_date=end_date, period=period,
+            export_path=export_path,
+        )
 
     return mcp
 
