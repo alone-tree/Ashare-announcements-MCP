@@ -107,14 +107,24 @@ def _merge(existing: list[dict] | None, fresh: list[dict]) -> list[dict]:
     return sorted(by_date.values(), key=lambda r: r["date"])
 
 
-def fetch_us_hfq(
+def _fetch_us_daily(
     root: str,
     mc: MarketCode,
+    *,
+    indicator: str,
+    param: str,
+    data_type: str,
+    field_key: str,
+    adjust: str | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """请求美股后复权 close（iFinD，分红再投）并写缓存（date+close）。
-    返回 {ok, source, path, new_items, date_range, error, notes}；单点补全部分失败不丢弃（notes 标注）。"""
+    """iFinD 美股逐日序列通用链路（hfq close / amount 共用）：
+
+    ① THS_HQ 探测 .O/.N 后缀 → ② THS_DS 近 5 年序列（窗口从今天倒推，服务端视角）
+    → ③ THS_BD 单点按纽交所交易日历（THS_Date_Query 212010）逐日补 5 年前，先近后远。
+    返回 {ok, source, path, new_items, date_range, error, notes}；部分失败不丢弃。
+    """
     code = f"{mc.code}.{mc.suffix}"
     t0 = time.time()
     try:
@@ -123,7 +133,8 @@ def fetch_us_hfq(
     except Exception as exc:  # noqa: BLE001
         elapsed = time.time() - t0
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_HQ/THS_iFinDLogin",
-                          adjust="hfq", start=start, end=end, ok=False, elapsed=elapsed, error=str(exc))
+                          fields=indicator, adjust=adjust, start=start, end=end,
+                          ok=False, elapsed=elapsed, error=str(exc))
         return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
                 "date_range": None, "error": str(exc), "notes": None}
 
@@ -136,38 +147,40 @@ def fetch_us_hfq(
     # ② THS_DS 近 5 年序列（仅当请求段与 5 年窗口有交集）
     if end_d >= ds_start.isoformat():
         ds_beg = max(start or ds_start.isoformat(), ds_start.isoformat())
-        r = ths.THS_DS(full, "close_price", "107,OC", "", ds_beg, end_d)
+        r = ths.THS_DS(full, indicator, param, "", ds_beg, end_d)
         if r.errorcode != 0:
             elapsed = time.time() - t0
             audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS",
-                              adjust="hfq", start=ds_beg, end=end_d, ok=False, elapsed=elapsed,
-                              error=str(r.errmsg))
+                              fields=indicator, adjust=adjust, start=ds_beg, end=end_d,
+                              ok=False, elapsed=elapsed, error=str(r.errmsg))
             return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
                     "date_range": None, "error": f"iFinD THS_DS 请求失败：{r.errmsg}", "notes": None}
         if r.data is not None and len(r.data):
             for _, row in r.data.iterrows():
-                fresh.append({"date": str(row["time"]), "close": _clean_value(row["close_price"])})
+                fresh.append({"date": str(row["time"]), field_key: _clean_value(row[indicator])})
             audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS",
-                              fields="close_price(107,OC)", adjust="hfq", start=ds_beg, end=end_d,
+                              fields=f"{indicator}({param})", adjust=adjust, start=ds_beg, end=end_d,
                               ok=True, elapsed=time.time() - t0)
 
-    # ③ THS_BD 单点补 5 年前（先近后远；跳过缓存已覆盖日期）
+    # ③ THS_BD 单点补 5 年前（严格按交易日历，先近后远；跳过缓存已覆盖日期）
     if start is not None and start < ds_start.isoformat():
-        existing = cache.read_cache(root, code, DATA_TYPE)
-        covered = {r["date"] for r in existing["items"]} if existing else set()
-        days = [d for d in _trade_days(start, (ds_start - timedelta(days=1)).isoformat()) if d not in covered]
+        existing = cache.read_cache(root, code, data_type)
+        covered = {r["date"] for r in existing["items"]} if existing else None
+        days = [d for d in _trade_days(start, (ds_start - timedelta(days=1)).isoformat())]
+        if covered:
+            days = [d for d in days if d not in covered]
         fail = 0
         for d in reversed(days):  # 先近后远：中断只丢最老数据
-            r = ths.THS_BD(full, "close_price", f"{d},107,OC")
+            r = ths.THS_BD(full, indicator, f"{d},{param}")
             if r.errorcode != 0 or r.data is None or len(r.data) == 0:
                 fail += 1
                 if fail <= 3:
                     notes.append(f"{d} 单点失败")
                 continue
-            fresh.append({"date": d, "close": _clean_value(r.data.iloc[0]["close_price"])})
+            fresh.append({"date": d, field_key: _clean_value(r.data.iloc[0][indicator])})
             time.sleep(0.05)  # 串行限速，防配额过快
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_BD",
-                          fields="close_price(107,OC)", adjust="hfq", start=start,
+                          fields=f"{indicator}({param})", adjust=adjust, start=start,
                           end=(ds_start - timedelta(days=1)).isoformat(), ok=fail == 0,
                           elapsed=time.time() - t0, error=f"失败 {fail} 个单点" if fail else None)
         if fail:
@@ -176,25 +189,55 @@ def fetch_us_hfq(
     if not fresh:
         elapsed = time.time() - t0
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
-                          adjust="hfq", start=start, end=end, ok=True, elapsed=elapsed)
+                          fields=indicator, adjust=adjust, start=start, end=end,
+                          ok=True, elapsed=elapsed)
         return {"ok": True, "source": SOURCE, "path": None, "new_items": 0,
                 "date_range": None, "error": None, "notes": notes or None}
 
-    existing = cache.read_cache(root, code, DATA_TYPE)
+    existing = cache.read_cache(root, code, data_type)
     existing_items = existing["items"] if existing else None
     merged = _merge(existing_items, fresh)
     date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
     path = cache.write_cache(
-        root, code, DATA_TYPE,
-        meta={"code": code, "market": mc.market, "data_type": DATA_TYPE,
+        root, code, data_type,
+        meta={"code": code, "market": mc.market, "data_type": data_type,
               "source": SOURCE, "date_range": date_range},
         items=merged,
     )
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
-                      fields="close_price(107,OC)", adjust="hfq", start=start, end=end,
+                      fields=f"{indicator}({param})", adjust=adjust, start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
     return {"ok": True, "source": SOURCE, "path": path, "new_items": len(fresh),
             "date_range": date_range, "error": None, "notes": notes or None}
+
+
+def fetch_us_hfq(
+    root: str,
+    mc: MarketCode,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict:
+    """请求美股后复权 close（iFinD，分红再投）并写缓存（date+close）。"""
+    return _fetch_us_daily(root, mc, indicator="close_price", param="107,OC",
+                           data_type="quote_daily_hfq", field_key="close",
+                           adjust="hfq", start=start, end=end)
+
+
+def fetch_us_amount(
+    root: str,
+    mc: MarketCode,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict:
+    """请求美股成交额 amt（iFinD，单源无回退）并写缓存（date+amt）。
+
+    公式（用户提供官方版，2026-08-09 实测）：THS_DS('AAPL.O','amt','OC','',...) 近 5 年
+    仅交易日行；THS_BD('AAPL.O','amt','日期,OC') 单点，非交易日返回空值——
+    5 年前补全必须严格按交易日历逐日（不能用股本方案的日历月末采样）。
+    """
+    return _fetch_us_daily(root, mc, indicator="amt", param="OC",
+                           data_type="quote_daily_amount", field_key="amt",
+                           start=start, end=end)
 
 
 def _month_ends(start: str, end: str) -> list[str]:

@@ -182,3 +182,48 @@ class TestFetchShares:
         r = ifind.fetch_shares(str(tmp_path), parse_code("00700.HK"), start="2026-08-01")
         assert r["ok"] is True
         assert captured["code"] == "0700.HK"
+
+
+class TestFetchUsAmount:
+    def test_amount_writes_own_cache(self, tmp_path, monkeypatch):
+        """美股成交额写独立 quote_daily_amount.json（date+amt，不混入 raw）。"""
+        monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)
+        monkeypatch.setattr(ifind.ths, "THS_HQ", lambda *a, **k: _r(pd.DataFrame({"time": ["2026-08-07"], "close": [1.0]})))
+        df = pd.DataFrame({"time": ["2026-08-06", "2026-08-07"],
+                           "thscode": ["AAPL.O"] * 2, "amt": [1.44e10, 1.08e10]})
+        captured = {}
+        def fake_ds(code, ind, param, *a, **k):
+            captured["ind"] = ind
+            captured["param"] = param
+            return _r(df)
+        monkeypatch.setattr(ifind.ths, "THS_DS", fake_ds)
+        root = str(tmp_path)
+        r = ifind.fetch_us_amount(root, parse_code("AAPL.US"), start="2026-08-01")
+        assert r["ok"] is True
+        assert captured["ind"] == "amt" and captured["param"] == "OC"
+        data = cache.read_cache(root, "AAPL.US", "quote_daily_amount")
+        assert data["meta"]["data_type"] == "quote_daily_amount"
+        assert data["items"] == [
+            {"date": "2026-08-06", "amt": 1.44e10},
+            {"date": "2026-08-07", "amt": 1.08e10},
+        ]
+        # 不污染 raw 缓存
+        assert cache.read_cache(root, "AAPL.US", "quote_daily_raw") is None
+
+    def test_amount_backfill_uses_trade_days(self, tmp_path, monkeypatch):
+        """5 年前单点补全严格按交易日历（非交易日返回空值，不能日历月末采样）。"""
+        monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)
+        monkeypatch.setattr(ifind.ths, "THS_HQ", lambda *a, **k: _r(pd.DataFrame({"time": ["2026-08-07"], "close": [1.0]})))
+        monkeypatch.setattr(ifind.ths, "THS_DS", lambda *a, **k: _r(pd.DataFrame({
+            "time": ["2021-08-09"], "thscode": ["AAPL.O"], "amt": [7.14e9]})))
+        monkeypatch.setattr(ifind.ths, "THS_Date_Query", lambda *a, **k: _r("2021-08-06"))
+        def fake_bd(code, ind, param):
+            assert param == "2021-08-06,OC"
+            return _r(pd.DataFrame({"thscode": [code], "amt": [7.91e9]}))
+        monkeypatch.setattr(ifind.ths, "THS_BD", fake_bd)
+        r = ifind.fetch_us_amount(str(tmp_path), parse_code("AAPL.US"), start="2021-08-01", end="2021-08-10")
+        data = cache.read_cache(str(tmp_path), "AAPL.US", "quote_daily_amount")
+        # 2021-08-06 已覆盖（缓存跳过），只补 2021-08-09 前未覆盖的交易日
+        assert data["items"][0]["date"] == "2021-08-06"
+        assert data["items"][0]["amt"] == 7.91e9
+        assert data["items"][-1]["date"] == "2021-08-09"

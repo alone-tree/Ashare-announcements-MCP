@@ -25,6 +25,7 @@ from typing import Any
 DATA_FILES = {
     "quote_daily_raw": "quote_daily_raw.json",      # get_quote raw（OHLC 四列）
     "quote_daily_hfq": "quote_daily_hfq.json",      # get_quote hfq（仅 close）
+    "quote_daily_amount": "quote_daily_amount.json",  # 美股成交额（iFinD 单源，date+amt）
     "shares": "shares.json",                        # 股本（市值现算用）
     "financial_income": "financial_income.json",    # 利润表
     "financial_balance": "financial_balance.json",  # 资产负债表
