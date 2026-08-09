@@ -104,3 +104,40 @@ class TestFetchRaw:
         r = sina.fetch_raw(str(tmp_path), parse_code("920002.BJ"), start="2026-08-01")
         assert captured["symbol"] == "bj920002"
         assert r["ok"] is True
+
+
+class TestFetchHfq:
+    def test_a_share_stores_close_only(self, tmp_path, monkeypatch):
+        """hfq 缓存只存 date+close 一列。"""
+        df = _df(["2026-08-06", "2026-08-07"], {
+            "open": [10.0, 11.0], "high": [11.0, 12.0], "low": [9.0, 9.5],
+            "close": [120.0, 121.5], "volume": [1000, 2000], "amount": [1, 2],
+        })
+        captured = {}
+        def fake(symbol=None, adjust=None, **kw):
+            captured["adjust"] = adjust
+            return df
+        monkeypatch.setattr("akshare.stock_zh_a_daily", fake)
+        root = str(tmp_path)
+        r = sina.fetch_hfq(root, parse_code("600519.SH"), start="2026-08-01")
+        assert r["ok"] is True
+        assert captured["adjust"] == "hfq"
+        data = cache.read_cache(root, "600519.SH", "quote_daily_hfq")
+        assert data["meta"]["data_type"] == "quote_daily_hfq"
+        assert data["items"][0] == {"date": "2026-08-06", "close": 120.0}
+        # 未请求 raw 时 raw 缓存不存在
+        assert cache.read_cache(root, "600519.SH", "quote_daily_raw") is None
+
+    def test_hk_hfq(self, tmp_path, monkeypatch):
+        df = _df(["2026-08-06", "2026-08-07"], {"close": [2730.0, 2672.93], "volume": [1, 2]})
+        monkeypatch.setattr("akshare.stock_hk_daily", lambda **kw: df)
+        r = sina.fetch_hfq(str(tmp_path), parse_code("00700.HK"), start="2026-08-07")
+        assert r["ok"] is True
+        data = cache.read_cache(str(tmp_path), "00700.HK", "quote_daily_hfq")
+        assert data["items"][0]["close"] == 2672.93
+
+    def test_us_hfq_structured_failure(self, tmp_path):
+        """美股新浪无 hfq：结构化失败，不抛异常、不发请求。"""
+        r = sina.fetch_hfq(str(tmp_path), parse_code("AAPL.US"), start="2026-08-01")
+        assert r["ok"] is False
+        assert "iFinD" in r["error"]

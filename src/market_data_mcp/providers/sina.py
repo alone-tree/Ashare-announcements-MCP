@@ -108,6 +108,62 @@ def _standard_code(mc: MarketCode) -> str:
     return f"{mc.code}.{mc.suffix}"
 
 
+def _fetch(
+    root: str,
+    mc: MarketCode,
+    start: str | None,
+    end: str | None,
+    adjust: str,
+) -> dict:
+    """新浪行情请求（raw/hfq 共用）。raw 宽写全部列；hfq 只存 date+close。"""
+    api_name, need_filter = _APIS[mc.market]
+    if adjust == "hfq" and mc.market == "US":
+        return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
+                "date_range": None,
+                "error": "新浪美股接口无 hfq（实测 TypeError），美股后复权走 iFinD 请求模块"}
+    fn = getattr(ak, api_name)
+    code = _standard_code(mc)
+    t0 = time.time()
+    try:
+        if mc.market in ("A", "BJ"):
+            df = fn(symbol=_sina_symbol(mc), start_date=_fmt(start, "19900101"), end_date=_fmt(end, "21000101"),
+                    adjust=adjust)
+        else:
+            df = fn(symbol=_sina_symbol(mc), adjust=adjust)
+    except Exception as exc:  # noqa: BLE001 —— 契约：结构化返回不抛异常
+        elapsed = time.time() - t0
+        audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
+                          adjust=adjust, start=start, end=end, ok=False, elapsed=elapsed,
+                          error=str(exc))
+        return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
+                "date_range": None, "error": f"新浪 {api_name} 请求失败：{exc}"}
+
+    records = _rows_to_records(df)
+    fresh = _filter_range(records, start, end)
+    if adjust == "hfq":
+        # hfq 缓存只存 date+close 一列（架构 §2.2：逐日因子由 hfq_close/raw_close 还原）
+        fresh = [{"date": r["date"], "close": r.get("close")} for r in fresh]
+    data_type = "quote_daily_hfq" if adjust == "hfq" else "quote_daily_raw"
+    existing = cache.read_cache(root, code, data_type)
+    existing_items = existing["items"] if existing else None
+    merged = _merge(existing_items, fresh)
+    date_range = None
+    if merged:
+        date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
+    path = cache.write_cache(
+        root, code, data_type,
+        meta={"code": code, "market": mc.market, "data_type": data_type,
+              "source": SOURCE, "date_range": date_range},
+        items=merged,
+    )
+    elapsed = time.time() - t0
+    audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
+                      fields=",".join(df.columns), adjust=adjust, start=start, end=end,
+                      ok=True, elapsed=elapsed)
+    return {"ok": True, "source": SOURCE, "path": path, "new_items": len(fresh),
+            "date_range": date_range, "error": None}
+
+
 def fetch_raw(
     root: str,
     mc: MarketCode,
@@ -115,40 +171,15 @@ def fetch_raw(
     end: str | None = None,
 ) -> dict:
     """请求新浪 raw 并写缓存（宽写全部列）。返回 {ok, source, path, new_items, date_range, error}。"""
-    api_name, need_filter = _APIS[mc.market]
-    fn = getattr(ak, api_name)
-    code = _standard_code(mc)
-    t0 = time.time()
-    try:
-        if mc.market in ("A", "BJ"):
-            df = fn(symbol=_sina_symbol(mc), start_date=_fmt(start, "19900101"), end_date=_fmt(end, "21000101"))
-        else:
-            df = fn(symbol=_sina_symbol(mc))
-    except Exception as exc:  # noqa: BLE001 —— 契约：结构化返回不抛异常
-        elapsed = time.time() - t0
-        audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
-                          adjust="raw", start=start, end=end, ok=False, elapsed=elapsed,
-                          error=str(exc))
-        return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
-                "date_range": None, "error": f"新浪 {api_name} 请求失败：{exc}"}
+    return _fetch(root, mc, start, end, adjust="")
 
-    records = _rows_to_records(df)
-    fresh = _filter_range(records, start, end)
-    existing = cache.read_cache(root, code, DATA_TYPE)
-    existing_items = existing["items"] if existing else None
-    merged = _merge(existing_items, fresh)
-    date_range = None
-    if merged:
-        date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
-    path = cache.write_cache(
-        root, code, DATA_TYPE,
-        meta={"code": code, "market": mc.market, "data_type": DATA_TYPE,
-              "source": SOURCE, "date_range": date_range},
-        items=merged,
-    )
-    elapsed = time.time() - t0
-    audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
-                      fields=",".join(df.columns), adjust="raw", start=start, end=end,
-                      ok=True, elapsed=elapsed)
-    return {"ok": True, "source": SOURCE, "path": path, "new_items": len(fresh),
-            "date_range": date_range, "error": None}
+
+def fetch_hfq(
+    root: str,
+    mc: MarketCode,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict:
+    """请求新浪 hfq（A/B/北交所/港股，仅存 close）并写缓存。
+    美股无此能力（新浪美股接口实测 TypeError），走 iFinD 请求模块。"""
+    return _fetch(root, mc, start, end, adjust="hfq")
