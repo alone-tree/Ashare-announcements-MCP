@@ -1,396 +1,276 @@
 # -*- coding: utf-8 -*-
-"""market_data_mcp 数据服务层：三市场行情/财报/指标/公司信息。
+"""market_data_mcp 工具层（service）：组装字段聚合器与请求模块，实现工具契约。
 
-复用 providers/（自包含，从 A股数据基础设施 AKShare 脚本复制）：
-- a_share.py / hk.py / us.py：各市场行情与财报接口（含东财→新浪回退）
-- _common.py：市场识别 / 代码规范化
-
-所有接口统一：自动识别市场（6位数字=A股、5位数字=港股、字母=美股），
-可加 A:/HK:/US: 前缀强制市场。
+工具契约见 docs/market-data架构设计.md（§1.6/§2）。三层结构：本文件=工具层，
+aggregator.py=字段聚合器，providers/=请求模块（源 × 市场 × 档位）。
 """
 
 from __future__ import annotations
 
-import math
+import csv
 import os
-from typing import Any
+import time
+from datetime import date, timedelta
 
-import akshare as ak
-import pandas as pd
+from market_data_mcp import aggregator, cache
+from market_data_mcp.providers import ifind, sina, yfinance
+from market_data_mcp.routing import MARKET_NAMES, MarketCode, parse_code
 
-from market_data_mcp.providers import _common, a_share, hk, us
-
-MARKET_MODULES = {"a": a_share, "hk": hk, "us": us}
-MARKET_NAMES = {"a": "A股", "hk": "港股", "us": "美股"}
-
-# 清理代理环境变量（Hermes 终端注入的代理对数据接口反而致 ProxyError/SSLError）
-def _clear_proxy_env() -> None:
-    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
-        os.environ.pop(k, None)
-
-
-_clear_proxy_env()
-
-# 报表范围 → 各市场数据获取函数
-STATEMENT_FUNCS: dict[str, dict[str, Any]] = {
-    "income": {
-        "label": "利润表",
-        "a": lambda code, em: ak.stock_profit_sheet_by_report_em(symbol=em),
-        "hk": lambda code, em: ak.stock_financial_hk_report_em(stock=code, symbol="利润表", indicator="年度"),
-        "us": lambda code, em: ak.stock_financial_us_report_em(stock=code, symbol="综合损益表", indicator="年报"),
-    },
-    "balance": {
-        "label": "资产负债表",
-        "a": lambda code, em: ak.stock_balance_sheet_by_report_em(symbol=em),
-        "hk": lambda code, em: ak.stock_financial_hk_report_em(stock=code, symbol="资产负债表", indicator="年度"),
-        "us": lambda code, em: ak.stock_financial_us_report_em(stock=code, symbol="资产负债表", indicator="年报"),
-    },
-    "cash_flow": {
-        "label": "现金流量表",
-        "a": lambda code, em: ak.stock_cash_flow_sheet_by_report_em(symbol=em),
-        "hk": lambda code, em: ak.stock_financial_hk_report_em(stock=code, symbol="现金流量表", indicator="年度"),
-        "us": lambda code, em: ak.stock_financial_us_report_em(stock=code, symbol="现金流量表", indicator="年报"),
-    },
-}
-
-VALID_STATEMENTS = ("income", "balance", "cash_flow")
-VALID_ADJUSTS = ("qfq", "hfq", "")
+VALID_ADJUSTS = ("raw", "hfq", "qfq")
 VALID_PERIODS = ("daily", "weekly", "monthly")
+VALID_VARS = ("open", "high", "low", "close", "volume", "amount",
+              "turnover", "outstanding_share", "total_market_cap", "float_market_cap")
+
+# 返回结构里 vars 顺序：date 恒首列，其余按 vars 传入顺序
+_RAW_KEYS = ("open", "high", "low", "close", "volume", "amount", "turnover", "outstanding_share")
 
 
-def _resolve_market(code: str) -> tuple[str, str]:
-    """识别市场并返回规范化代码。返回 (market, code)。"""
-    market = _common.detect_market(code)
-    code = _common.strip_market_prefix(code)
-    return market, code
+def _ensure_raw(root: str, mc: MarketCode, start: str | None, end: str | None) -> dict:
+    return aggregator.ensure(root, mc, "quote_daily_raw", [sina.fetch_raw], start, end)
 
 
-def _market_name(market: str) -> str:
-    return MARKET_NAMES.get(market, market)
+def _ensure_hfq(root: str, mc: MarketCode, start: str | None, end: str | None) -> dict:
+    chain = [ifind.fetch_us_hfq] if mc.market == "US" else [sina.fetch_hfq]
+    return aggregator.ensure(root, mc, "quote_daily_hfq", chain, start, end)
 
 
-def _em_symbol(market: str, code: str) -> str:
-    if market == "a":
-        return _common.em_symbol_a(code)
-    if market == "hk":
-        return _common.em_symbol_hk(code)
-    return code
+def _ensure_amount(root: str, mc: MarketCode, start: str | None, end: str | None) -> dict:
+    """美股 amount 单源（iFinD）；A/港 amount 在新浪 raw 宽写列里。"""
+    if mc.market == "US":
+        return aggregator.ensure(root, mc, "quote_daily_amount", [ifind.fetch_us_amount], start, end)
+    return {"ok": True, "items": None, "meta": None, "source": "sina", "notes": None}
 
 
-def _df_to_records(df: pd.DataFrame, limit: int | None = None) -> list[dict[str, Any]]:
-    """DataFrame → 记录列表（MCP JSON 友好）。NaN/NaT 转 None。"""
-    if df is None or len(df) == 0:
-        return []
-    records = df.to_dict(orient="records")
-    cleaned = []
-    for record in records:
-        item: dict[str, Any] = {}
-        for key, value in record.items():
-            if value is None:
-                item[key] = None
-            elif isinstance(value, float) and math.isnan(value):
-                item[key] = None
-            elif value is pd.NaT:
-                item[key] = None
-            else:
-                item[key] = value
-        cleaned.append(item)
-    if limit:
-        cleaned = cleaned[:limit]
-    return cleaned
+def _ensure_shares(root: str, mc: MarketCode, start: str | None, end: str | None) -> dict:
+    chain = [ifind.fetch_shares, yfinance.fetch_shares] if mc.market in ("HK", "US") else [ifind.fetch_shares]
+    return aggregator.ensure(root, mc, "shares", chain, start, end)
 
 
-def get_quote(
-    code: str,
-    start: str,
-    end: str,
-    adjust: str = "qfq",
-    period: str = "daily",
-    fields: list[str] | None = None,
-) -> dict[str, Any]:
-    """获取日线/周线/月线行情（前复权/后复权/不复权），含成交量/额/流通股本。
-
-    返回 {ok, market, code, name, start, end, adjust, period, source, notes, fields, rows: [...]}
-    fields: 指定返回字段（如 ["date","close"]）；不传=全部字段，date 始终保留。
-    notes 说明实际返回口径（如新浪回退时周/月线由日线聚合、hfq 降级）。
-    """
-    if adjust not in VALID_ADJUSTS:
-        raise ValueError(f"adjust 必须是 {VALID_ADJUSTS} 之一（qfq=前复权 hfq=后复权 空=不复权）")
-    if period not in VALID_PERIODS:
-        raise ValueError(f"period 必须是 {VALID_PERIODS} 之一（daily/weekly/monthly）")
-    market, c = _resolve_market(code)
-    mod = MARKET_MODULES[market]
-
-    # 需要市值时先拉股本（惰性，避免每次查询都多请求）
-    requested_caps = fields or []
-    want_cap = not fields or "total_market_cap" in fields or "float_market_cap" in fields
-    shares = _fetch_shares(market, c) if want_cap else None
-
-    df = mod.fetch_daily(c, start, end, adjust=adjust, period=period)
-    if df is None or len(df) == 0:
-        raise ValueError(f"未获取到 {c} 的行情数据（{start}~{end}）")
-    notes: list[str] = []
-    source = str(df.iloc[0].get("source", ""))
-    if source == "sina" and period != "daily":
-        notes.append(f"新浪接口仅提供日线，{period} 由日线本地聚合")
-    if source == "sina" and market == "us" and adjust == "hfq":
-        notes.append("新浪美股接口不支持后复权，已返回前复权数据")
-
-    rows = _df_to_records(df)
-    if shares is not None:
-        rows = _attach_market_cap(rows, shares, market, mod, c, start, end)
-        notes.append("总市值/流通市值为估算值（最新报告期股本 × 不复权收盘价，季度级精度）")
-
-    available = set(rows[0].keys()) if rows else {"date"}
-    if fields:
-        invalid = [f for f in fields if f not in available]
-        if invalid:
-            raise ValueError(
-                f"fields 含不可用字段：{invalid}（可选：{sorted(available)}）"
-            )
-        keep = ["date"] + [f for f in fields if f != "date"]
-        rows = [{k: r[k] for k in keep if k in r} for r in rows]
-
-    return {
-        "ok": True,
-        "market": _market_name(market),
-        "code": c,
-        "start": start,
-        "end": end,
-        "adjust": adjust or "none",
-        "period": period,
-        "source": source,
-        "notes": notes,
-        "fields": list(rows[0].keys()) if rows else [],
-        "rows": rows,
-    }
+def _by_date(items: list[dict] | None) -> dict[str, dict]:
+    return {r["date"]: r for r in (items or [])}
 
 
-def _fetch_shares(market: str, code: str) -> dict[str, float] | None:
-    """获取最新报告期总股本/流通股本（股）。返回 None 表示该市场无股本来源。
-
-    A股：资产负债表 SHARE_CAPITAL（总股本）+ 新浪行情 outstanding_share（流通股本）
-    港股：财务指标 TTM 快照
-    美股：无股本接口（原脚本探测结论）
-    """
-    try:
-        if market == "a":
-            df = ak.stock_balance_sheet_by_report_em(symbol=_common.em_symbol_a(code))
-            if df is None or len(df) == 0 or "SHARE_CAPITAL" not in df.columns:
-                return None
-            total = float(df.iloc[0]["SHARE_CAPITAL"]) if pd.notnull(df.iloc[0]["SHARE_CAPITAL"]) else None
-            return {"total_shares": total, "float_shares": None}
-        if market == "hk":
-            df = ak.stock_hk_financial_indicator_em(symbol=code)
-            if df is None or len(df) == 0:
-                return None
-            # 港股指标列名含总股本（百万股/股），探测记录未固定列名，尽力取
-            for col in df.columns:
-                if "股本" in col or "SHARE" in str(col).upper():
-                    try:
-                        return {"total_shares": float(df.iloc[0][col]), "float_shares": None}
-                    except (TypeError, ValueError):
-                        pass
-            return None
-        return None  # 美股无股本来源
-    except Exception:
-        return None
+def _default_start(end: str) -> str:
+    """end 为空时默认起点：最近 10 个交易日（≈14 自然日）。"""
+    return (date.fromisoformat(end) - timedelta(days=14)).isoformat()
 
 
-def _attach_market_cap(
-    rows: list[dict[str, Any]],
-    shares: dict[str, float | None],
-    market: str,
-    mod: Any,
-    code: str,
-    start: str,
-    end: str,
-) -> list[dict[str, Any]]:
-    """按不复权收盘价估算总市值/流通市值（估算值，非精确值）。
-
-    市值必须用不复权价格（复权价会随除权跳变导致市值失真），
-    因此单独拉不复权收盘序列，按日期合并。
-    """
-    try:
-        raw = mod.fetch_raw_close(code, start, end)
-        raw_map = dict(zip(raw["date"].astype(str), raw["close_raw"]))
-    except Exception:
-        raw_map = {}
-    out = []
-    for row in rows:
-        item = dict(row)
-        close = row.get("close")
-        raw_close = raw_map.get(str(row.get("date", "")), close)
-        if raw_close is None:
-            out.append(item)
+def _market_cap(raw_by_date: dict, shares_by_date: dict, mc: MarketCode,
+                raw_items: list[dict]) -> tuple[dict, dict]:
+    """市值现算：total = total_shares × close；float = 流通股本 × close。
+    A/B 股流通股本用新浪 outstanding_share（raw 列）；港美股用 iFinD floating_shares。"""
+    total, float_ = {}, {}
+    # 逐日对齐：close 取 raw，股本取该日最近的 shares 点（前置填充）
+    share_dates = sorted(shares_by_date)
+    for r in raw_items:
+        d = r["date"]
+        close = r.get("close")
+        if close is None:
             continue
-        total = shares.get("total_shares")
-        if total:
-            item["total_market_cap"] = round(total * raw_close, 2)
-        float_shares = shares.get("float_shares")
-        if float_shares:
-            item["float_market_cap"] = round(float_shares * raw_close, 2)
-        elif market == "a" and "outstanding_share" in row and row["outstanding_share"]:
-            item["float_market_cap"] = round(row["outstanding_share"] * raw_close, 2)
-        out.append(item)
+        # 前置填充：取 ≤ d 的最近股本点
+        near = [sd for sd in share_dates if sd <= d]
+        sr = shares_by_date[near[-1]] if near else None
+        total_shares = (sr or {}).get("total_shares")
+        if total_shares is not None:
+            total[d] = total_shares * close
+        if mc.market == "A":
+            fs = r.get("outstanding_share")  # 新浪流通股本
+        else:
+            fs = (sr or {}).get("floating_shares")
+        if fs is not None:
+            float_[d] = fs * close
+    return total, float_
+
+
+def _resample(rows: list[dict], period: str, keys: tuple) -> list[dict]:
+    """周/月线由日线本地聚合（open=周期首日、high=最高、low=最低、close=末日、
+    volume/amount=累计；weekly 用 W-FRI、monthly 用 ME）。返回升序周期行。"""
+    if period == "daily" or not rows:
+        return rows
+    from datetime import datetime
+
+    def bucket(d: str) -> str:
+        dt = datetime.fromisoformat(d)
+        if period == "weekly":
+            # W-FRI：本周五
+            friday = dt + timedelta(days=(4 - dt.weekday()) % 7)
+            return friday.date().isoformat()
+        return f"{dt.year:04d}-{dt.month:02d}"
+
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(bucket(r["date"]), []).append(r)
+    out = []
+    for b in sorted(groups):
+        g = groups[b]
+        row: dict = {"date": b}
+        for k in keys:
+            vals = [x.get(k) for x in g if x.get(k) is not None]
+            if k in ("open",):
+                row[k] = vals[0] if vals else None
+            elif k in ("high",):
+                row[k] = max(vals) if vals else None
+            elif k in ("low",):
+                row[k] = min(vals) if vals else None
+            elif k in ("close",):
+                row[k] = g[-1].get(k)
+            elif k in ("volume", "amount"):
+                row[k] = sum(vals) if vals else None
+            else:  # 其他（turnover/outstanding_share 等）取末日
+                row[k] = g[-1].get(k)
+        out.append(row)
     return out
 
 
-def get_financial_statements(
+def _export_csv(path: str, rows: list[dict], cols: list[str]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def get_quote(
+    root: str,
     code: str,
-    periods: list[str] | None = None,
-    statements: list[str] | None = None,
-) -> dict[str, Any]:
-    """获取原始财务报表（三表，按报告期）。
-
-    periods: 报告期年份列表（如 ["2025", "2024"]）；None=全部报告期。
-    statements: 报表范围 ["income","balance","cash_flow"]；None=全部三表。
-    返回 {ok, market, code, statements: {income: {label, rows}, ...}}
-    """
-    if statements is None:
-        statements = list(VALID_STATEMENTS)
-    invalid = [s for s in statements if s not in VALID_STATEMENTS]
-    if invalid:
-        raise ValueError(f"statements 只支持 {list(VALID_STATEMENTS)}（income/balance/cash_flow），收到 {invalid}")
-
-    market, c = _resolve_market(code)
-    em = _em_symbol(market, c)
-    result: dict[str, Any] = {"ok": True, "market": _market_name(market), "code": c, "statements": {}}
-
-    for stmt in statements:
-        func = STATEMENT_FUNCS[stmt]["a" if market == "a" else ("hk" if market == "hk" else "us")]
-        try:
-            df = func(c, em)
-            if df is None or len(df) == 0:
-                result["statements"][stmt] = {"label": STATEMENT_FUNCS[stmt]["label"], "rows": [], "note": "无数据"}
-                continue
-            if periods:
-                df = filter_by_period(df, periods)
-            result["statements"][stmt] = {
-                "label": STATEMENT_FUNCS[stmt]["label"],
-                "rows": _df_to_records(df),
-            }
-        except Exception as e:
-            result["statements"][stmt] = {
-                "label": STATEMENT_FUNCS[stmt]["label"],
-                "rows": [],
-                "note": f"获取失败：{type(e).__name__}: {str(e)[:120]}",
-            }
-    return result
-
-
-def _period_column(df: pd.DataFrame) -> str | None:
-    """找到报告期列（REPORT_DATE / REPORT_DATE_NAME 等）。"""
-    for col in ("REPORT_DATE", "REPORT_DATE_NAME", "报告期", "日期"):
-        if col in df.columns:
-            return col
-    return None
-
-
-def filter_by_period(df: pd.DataFrame, periods: list[str]) -> pd.DataFrame:
-    """按报告期年份过滤（匹配 '2025' 前缀的任意季度报告期）。"""
-    col = _period_column(df)
-    if col is None:
-        return df
-    dates = df[col].astype(str)
-    mask = dates.str.startswith(tuple(periods))
-    return df[mask]
-
-
-def get_financial_ratios(code: str, periods: list[str] | None = None) -> dict[str, Any]:
-    """获取财务衍生指标（原始，来自东财指标接口）。
-
-    A股：按报告期多期；港股：仅最新；美股：年报多期。
-    返回 {ok, market, code, rows: [...]}
-    """
-    market, c = _resolve_market(code)
+    vars: list[str] | None = None,
+    adjust: str = "raw",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    period: str = "daily",
+    export_path: str | None = None,
+) -> dict:
+    """获取日/周/月线行情。返回 {ok, market, code, start, end, adjust, period, vars, source, notes, rows}；
+    超长自动导出 / 指定 export_path 时返回元信息不含 rows。"""
     try:
-        if market == "a":
-            sec_code = f"{c}.{'SH' if c.startswith('6') else 'SZ'}"
-            df = ak.stock_financial_analysis_indicator_em(symbol=sec_code, indicator="按报告期")
-        elif market == "hk":
-            df = ak.stock_hk_financial_indicator_em(symbol=c)
-        else:
-            df = ak.stock_financial_us_analysis_indicator_em(symbol=c, indicator="年报")
-    except Exception as e:
-        raise ValueError(f"{_market_name(market)} 财务指标获取失败：{type(e).__name__}: {str(e)[:120]}")
+        mc = parse_code(code)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if adjust not in VALID_ADJUSTS:
+        return {"ok": False, "error": f"不支持的复权方式 {adjust}（支持 raw/hfq/qfq）"}
+    if period not in VALID_PERIODS:
+        return {"ok": False, "error": f"不支持的周期 {period}（支持 daily/weekly/monthly）"}
+    if vars is None:
+        vars = ["close"]
+    unknown = [v for v in vars if v not in VALID_VARS]
+    if unknown:
+        return {"ok": False, "error": f"未知字段 {unknown}（支持 {sorted(VALID_VARS)}，date 恒保留）"}
 
-    if df is None or len(df) == 0:
-        return {"ok": True, "market": _market_name(market), "code": c, "rows": []}
-    if periods:
-        df = filter_by_period(df, periods)
-    return {"ok": True, "market": _market_name(market), "code": c, "rows": _df_to_records(df)}
+    end = end_date or date.today().isoformat()
+    start = start_date or _default_start(end)
+    notes: list[str] = []
 
+    # 1. 字段链补拉
+    need_raw = bool(set(vars) & set(_RAW_KEYS)) or "total_market_cap" in vars or "float_market_cap" in vars
+    need_hfq = adjust in ("hfq", "qfq")
+    need_amount = "amount" in vars and mc.market == "US"
+    need_shares = "total_market_cap" in vars or "float_market_cap" in vars
 
-def get_company_profile(
-    code: str,
-    sections: list[str] | None = None,
-) -> dict[str, Any]:
-    """获取公司基本信息：profile 概况 / dividends 分红 / forecast 盈利预测。
+    rr = _ensure_raw(root, mc, start, end) if need_raw else {"ok": True, "items": None}
+    if not rr["ok"]:
+        return {"ok": False, "error": f"行情获取失败：{'；'.join(rr['notes'] or [rr.get('error', '')])}"}
+    hr = _ensure_hfq(root, mc, start, end) if need_hfq else {"ok": True, "items": None}
+    if not hr["ok"]:
+        return {"ok": False, "error": f"后复权获取失败：{'；'.join(hr['notes'] or [hr.get('error', '')])}"}
+    ar = _ensure_amount(root, mc, start, end) if need_amount else {"ok": True, "items": None}
+    if not ar["ok"]:
+        return {"ok": False, "error": f"成交额获取失败：{'；'.join(ar['notes'] or [ar.get('error', '')])}"}
+    sr = _ensure_shares(root, mc, start, end) if need_shares else {"ok": True, "items": None}
+    if not sr["ok"]:
+        return {"ok": False, "error": f"股本获取失败：{'；'.join(sr['notes'] or [sr.get('error', '')])}"}
 
-    sections: ["profile","dividends","forecast"]；None=全部。
-    港股/美股缺失的类别返回 note 说明（需从公告获取）。
-    返回 {ok, market, code, profile: {...}, dividends: [...], forecast: [...]}
-    """
-    valid = ("profile", "dividends", "forecast")
-    if sections is None:
-        sections = list(valid)
-    invalid = [s for s in sections if s not in valid]
-    if invalid:
-        raise ValueError(f"sections 只支持 {list(valid)}（profile/dividends/forecast），收到 {invalid}")
+    raw_items = rr["items"] or []
+    raw_by_date = _by_date(raw_items)
+    # 2. 组装 base rows（raw 列）
+    rows = [dict(r) for r in raw_items if start <= r["date"] <= end]
 
-    market, c = _resolve_market(code)
-    em = _em_symbol(market, c)
-    result: dict[str, Any] = {"ok": True, "market": _market_name(market), "code": c}
+    # 3. 美股 amount（iFinD 独立缓存）
+    if need_amount:
+        amt_by_date = _by_date(ar["items"])
+        for r in rows:
+            a = amt_by_date.get(r["date"])
+            r["amount"] = a.get("amt") if a else None
 
-    if "profile" in sections:
-        result["profile"] = _fetch_profile(market, c, em)
-    if "dividends" in sections:
-        result["dividends"] = _fetch_dividends(market, c)
-    if "forecast" in sections:
-        result["forecast"] = _fetch_forecast(market, c)
-    return result
+    # 4. 复权
+    if need_hfq:
+        hfq_by_date = _by_date(hr["items"])
+        if adjust == "hfq":
+            for r in rows:
+                h = hfq_by_date.get(r["date"])
+                if h and h.get("close") is not None and r.get("close"):
+                    # 逐日因子还原 OHL：hfq_OHL(t) = raw_OHL(t) × F(t)
+                    f = h["close"] / r["close"]
+                    for k in ("open", "high", "low", "close"):
+                        if r.get(k) is not None:
+                            r[k] = round(r[k] * f, 4)
+                else:
+                    for k in ("open", "high", "low", "close"):
+                        r[k] = h.get("close") if k == "close" and h else None
+        else:  # qfq：前复权本地现算，不落盘
+            latest_raw = next((r for r in reversed(rows) if r.get("close") is not None), None)
+            if latest_raw:
+                lh = hfq_by_date.get(latest_raw["date"])
+                if lh and lh.get("close"):
+                    scale = latest_raw["close"] / lh["close"]
+                    for r in rows:
+                        h = hfq_by_date.get(r["date"])
+                        if h and h.get("close") is not None and r.get("close"):
+                            f = h["close"] / r["close"] * scale
+                            for k in ("open", "high", "low", "close"):
+                                if r.get(k) is not None:
+                                    r[k] = round(r[k] * f, 4)
+                else:
+                    notes.append("后复权数据缺失，前复权计算不完整")
+            else:
+                notes.append("无最新收盘价，前复权未计算")
 
+    # 5. 市值现算（基于不复权 close —— 市值 = 股本 × 当日不复权收盘）
+    if "total_market_cap" in vars or "float_market_cap" in vars:
+        raw_rows = [r for r in raw_items if start <= r["date"] <= end]
+        total_cap, float_cap = _market_cap(raw_by_date, _by_date(sr["items"]), mc, raw_rows)
+        for r in rows:
+            if "total_market_cap" in vars:
+                r["total_market_cap"] = total_cap.get(r["date"])
+            if "float_market_cap" in vars:
+                r["float_market_cap"] = float_cap.get(r["date"])
+        notes.append("总市值/流通市值为估算值（股本 × 不复权收盘价）")
 
-def _fetch_profile(market: str, code: str, em: str) -> dict[str, Any]:
-    try:
-        if market == "a":
-            df = ak.stock_profile_cninfo(symbol=code)
-        elif market == "hk":
-            df = ak.stock_hk_company_profile_em(symbol=code)
-        else:
-            return {"note": "美股无公司概况接口，可从 SEC EDGAR 公告获取"}
-        rows = _df_to_records(df, limit=1)
-        return {"rows": rows} if rows else {"note": "无数据"}
-    except Exception as e:
-        return {"note": f"获取失败：{type(e).__name__}: {str(e)[:120]}"}
+    # 6. 周/月聚合
+    if period != "daily":
+        rows = _resample(rows, period, tuple(vars))
+        notes.append(f"{period} 线由日线本地聚合（{'W-FRI' if period == 'weekly' else '月度'}）")
 
+    # 7. 列过滤（date 恒首列）
+    cols = ["date"] + [v for v in vars]
+    out_rows = [{k: r.get(k) for k in cols} for r in rows]
+    if not out_rows:
+        return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
+                "start": start, "end": end, "adjust": adjust, "period": period,
+                "vars": vars, "source": rr.get("source") if rr.get("source") else None,
+                "notes": notes + ["请求范围内无数据"], "rows": []}
 
-def _fetch_dividends(market: str, code: str) -> dict[str, Any]:
-    try:
-        if market == "a":
-            df = ak.stock_fhps_detail_em(symbol=code)
-        elif market == "hk":
-            df = ak.stock_hk_dividend_payout_em(symbol=code)
-        else:
-            return {"note": "美股无分红历史接口，可从 SEC EDGAR 公告获取"}
-        rows = _df_to_records(df)
-        return {"rows": rows} if rows else {"note": "无数据"}
-    except Exception as e:
-        return {"note": f"获取失败：{type(e).__name__}: {str(e)[:120]}"}
+    date_range = {"start": out_rows[0]["date"], "end": out_rows[-1]["date"]}
+    source = rr.get("source") if rr.get("source") else (hr.get("source") if need_hfq else None)
+    if need_amount and mc.market == "US":
+        source = f"{source or ''},ifind" if source else "ifind"
+    notes += [n for n in (rr.get("notes") or []) if n]
+    notes += [n for n in (hr.get("notes") or []) if n]
+    notes += [n for n in (ar.get("notes") or []) if n]
+    notes += [n for n in (sr.get("notes") or []) if n]
 
+    # 8. 导出
+    if export_path:
+        _export_csv(export_path, out_rows, cols)
+        return {"ok": True, "path": export_path, "total_items": len(out_rows),
+                "date_range": date_range, "source": source, "notes": notes or None}
+    if len(out_rows) > 200:
+        auto_path = os.path.join(root, "cache", "_auto_export",
+                                 f"{mc.code}.{mc.suffix}_{adjust}_{period}_{start}_{end}.csv")
+        _export_csv(auto_path, out_rows, cols)
+        return {"ok": True, "auto_exported": True, "path": auto_path,
+                "total_items": len(out_rows), "date_range": date_range,
+                "source": source, "notes": notes + [f"数据超过 200 行，已自动导出到 {auto_path}"]}
 
-def _fetch_forecast(market: str, code: str) -> dict[str, Any]:
-    try:
-        if market == "a":
-            df = ak.stock_profit_forecast_em(symbol="")
-            if df is not None and len(df) > 0 and "代码" in df.columns:
-                df = df[df["代码"] == code]
-        elif market == "hk":
-            df = ak.stock_hk_profit_forecast_et(symbol=code)
-        else:
-            return {"note": "美股无盈利预测接口，可从券商研报获取"}
-        rows = _df_to_records(df)
-        return {"rows": rows} if rows else {"note": "无数据"}
-    except Exception as e:
-        return {"note": f"获取失败：{type(e).__name__}: {str(e)[:120]}"}
+    return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
+            "start": start, "end": end, "adjust": adjust, "period": period,
+            "vars": vars, "source": source, "notes": notes or None, "rows": out_rows}
