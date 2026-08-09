@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
-"""新浪行情请求模块（源 × 市场 × 档位 = sina × 各市场 × raw 除权价）。
+"""新浪行情请求模块（源 × 市场 × 档位 = sina × 各市场 × raw/hfq）。
 
-raw 宽写：一次请求把源返回的全部列写入缓存（字段聚合器按列名消费）。
+**拉到什么写什么（2026-08-09 用户拍板）**：一次上游请求返回整组数据，
+按字段拆分写入各自独立的 json（open/high/low/close/volume/amount/floating_shares），
+items 统一 `[{date, value, source}]`，同字段异 source 并存。
 - A/B 股/北交所：`ak.stock_zh_a_daily(symbol=sh600519/sz000001/bj920002, start_date, end_date, adjust="")`
-  返回列：date/open/high/low/close/volume/amount/outstanding_share/turnover（支持 start/end）
+  返回列：date/open/high/low/close/volume/amount/outstanding_share/turnover
+  → 写 open/high/low/close/volume/amount/floating_shares（outstanding_share 归流通股本，source=sina）
 - 港股：`ak.stock_hk_daily(symbol=00700, adjust="")`，无 start/end → 拉全量本地过滤
-  返回列：date/open/high/low/close/volume/amount
+  返回列：date/open/high/low/close/volume/amount → 写 6 字段
 - 美股：`ak.stock_us_daily(symbol=AAPL, adjust="")`，无 start/end → 拉全量本地过滤
-  返回列：date/open/high/low/close/volume
+  返回列：date/open/high/low/close/volume → 写 5 字段（无 amount）
+- hfq（A/B/北交所/港股）：只写 close_hfq（仅存 close；美股无此能力走 iFinD）
 
 模块契约（架构 §1.8）：**结构化返回，不抛异常**——
-`{ok, source, path, new_items, date_range, error}`；失败原因可读（供审计与聚合器提示重试）。
+`{ok, source, fields, error, notes}`，fields 为 {字段名: date_range}（本次更新的字段）。
 每次上游请求写审计日志 logs/requests.jsonl。
 """
 
@@ -32,14 +36,13 @@ for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"
     os.environ.pop(_k, None)
 
 SOURCE = "sina"
-DATA_TYPE = "quote_daily_raw"
 
-# 市场 → (akshare 接口名, 是否无 start/end 需本地过滤)
+# 市场 → (akshare 接口名, 是否无 start/end 需本地过滤, raw 宽写字段列)
 _APIS = {
-    "A": ("stock_zh_a_daily", False),  # 含 B 股（同通道）
-    "BJ": ("stock_zh_a_daily", False),  # 北交所 bj920002 同接口
-    "HK": ("stock_hk_daily", True),
-    "US": ("stock_us_daily", True),
+    "A": ("stock_zh_a_daily", False, ("open", "high", "low", "close", "volume", "amount", "floating_shares")),
+    "BJ": ("stock_zh_a_daily", False, ("open", "high", "low", "close", "volume", "amount", "floating_shares")),
+    "HK": ("stock_hk_daily", True, ("open", "high", "low", "close", "volume", "amount")),
+    "US": ("stock_us_daily", True, ("open", "high", "low", "close", "volume")),
 }
 
 
@@ -96,16 +99,28 @@ def _filter_range(records: list[dict], start: str | None, end: str | None) -> li
     return out
 
 
-def _merge(existing: list[dict] | None, fresh: list[dict]) -> list[dict]:
-    """按 date 合并去重（新数据覆盖同日期），升序。"""
-    by_date = {r["date"]: r for r in (existing or [])}
-    for r in fresh:
-        by_date[r["date"]] = r
-    return sorted(by_date.values(), key=lambda r: r["date"])
-
-
-def _standard_code(mc: MarketCode) -> str:
-    return f"{mc.code}.{mc.suffix}"
+def _write_fields(root: str, code: str, market: str, fresh: list[dict],
+                  field_map: dict[str, str]) -> dict[str, dict | None]:
+    """把拉到的行拆分写入各字段 json，返回 {字段: date_range}。field_map: 目标字段 → 源列名。"""
+    updated: dict[str, dict | None] = {}
+    for field, src_col in field_map.items():
+        items = [{"date": r["date"], "value": r.get(src_col), "source": SOURCE}
+                 for r in fresh]
+        items = [x for x in items if x["value"] is not None or True]  # 保留 None 行（占位）
+        existing = cache.read_cache(root, code, field)
+        existing_items = existing["items"] if existing else None
+        merged = cache.merge_items(existing_items, items)
+        date_range = None
+        if merged:
+            date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
+        cache.write_cache(
+            root, code, field,
+            meta={"code": code, "market": market, "field": field,
+                  "source": SOURCE, "date_range": date_range},
+            items=merged,
+        )
+        updated[field] = date_range
+    return updated
 
 
 def _fetch(
@@ -115,14 +130,14 @@ def _fetch(
     end: str | None,
     adjust: str,
 ) -> dict:
-    """新浪行情请求（raw/hfq 共用）。raw 宽写全部列；hfq 只存 date+close。"""
-    api_name, need_filter = _APIS[mc.market]
+    """新浪行情请求（raw/hfq 共用）。raw 按字段宽写；hfq 只写 close_hfq。"""
+    api_name, need_filter, raw_fields = _APIS[mc.market]
     if adjust == "hfq" and mc.market == "US":
-        return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
-                "date_range": None,
-                "error": "新浪美股接口无 hfq（实测 TypeError），美股后复权走 iFinD 请求模块"}
+        return {"ok": False, "source": SOURCE, "fields": {},
+                "error": "新浪美股接口无 hfq（实测 TypeError），美股后复权走 iFinD 请求模块",
+                "notes": None}
     fn = getattr(ak, api_name)
-    code = _standard_code(mc)
+    code = f"{mc.code}.{mc.suffix}"
     t0 = time.time()
     try:
         if mc.market in ("A", "BJ"):
@@ -135,33 +150,36 @@ def _fetch(
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
                           adjust=adjust, start=start, end=end, ok=False, elapsed=elapsed,
                           error=str(exc))
-        return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
-                "date_range": None, "error": f"新浪 {api_name} 请求失败：{exc}"}
+        return {"ok": False, "source": SOURCE, "fields": {},
+                "error": f"新浪 {api_name} 请求失败：{exc}", "notes": None}
 
     records = _rows_to_records(df)
     fresh = _filter_range(records, start, end)
     if adjust == "hfq":
-        # hfq 缓存只存 date+close 一列（架构 §2.2：逐日因子由 hfq_close/raw_close 还原）
-        fresh = [{"date": r["date"], "close": r.get("close")} for r in fresh]
-    data_type = "quote_daily_hfq" if adjust == "hfq" else "quote_daily_raw"
-    existing = cache.read_cache(root, code, data_type)
-    existing_items = existing["items"] if existing else None
-    merged = _merge(existing_items, fresh)
-    date_range = None
-    if merged:
-        date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
-    path = cache.write_cache(
-        root, code, data_type,
-        meta={"code": code, "market": mc.market, "data_type": data_type,
-              "source": SOURCE, "date_range": date_range},
-        items=merged,
-    )
+        # hfq 缓存只存 close_hfq 一列（派生层按因子还原 OHL）
+        hfq_items = [{"date": r["date"], "value": r.get("close"), "source": SOURCE} for r in fresh]
+        existing = cache.read_cache(root, code, "close_hfq")
+        merged = cache.merge_items(existing["items"] if existing else None, hfq_items)
+        date_range = None
+        if merged:
+            date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
+        cache.write_cache(root, code, "close_hfq",
+                          meta={"code": code, "market": mc.market, "field": "close_hfq",
+                                "source": SOURCE, "date_range": date_range},
+                          items=merged)
+        fields = {"close_hfq": date_range}
+    else:
+        # raw：按字段宽写。outstanding_share → floating_shares（A 股流通股本口径）
+        field_map = {f: f for f in raw_fields}
+        if "floating_shares" in raw_fields:
+            field_map["floating_shares"] = "outstanding_share"
+        fields = _write_fields(root, code, mc.market, fresh, field_map)
+
     elapsed = time.time() - t0
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
                       fields=",".join(df.columns), adjust=adjust, start=start, end=end,
                       ok=True, elapsed=elapsed)
-    return {"ok": True, "source": SOURCE, "path": path, "new_items": len(fresh),
-            "date_range": date_range, "error": None}
+    return {"ok": True, "source": SOURCE, "fields": fields, "error": None, "notes": None}
 
 
 def fetch_raw(
@@ -170,7 +188,7 @@ def fetch_raw(
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """请求新浪 raw 并写缓存（宽写全部列）。返回 {ok, source, path, new_items, date_range, error}。"""
+    """请求新浪 raw：宽拉整组，按字段拆分写入 open/high/low/close/volume/amount/floating_shares。"""
     return _fetch(root, mc, start, end, adjust="")
 
 
@@ -180,6 +198,5 @@ def fetch_hfq(
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """请求新浪 hfq（A/B/北交所/港股，仅存 close）并写缓存。
-    美股无此能力（新浪美股接口实测 TypeError），走 iFinD 请求模块。"""
+    """请求新浪 hfq（A/B/北交所/港股，仅存 close_hfq）。美股无此能力，走 iFinD。"""
     return _fetch(root, mc, start, end, adjust="hfq")

@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
 """iFinD 请求模块（源 × 市场 × 档位）。
 
-当前实现：
-- `fetch_us_hfq`：**美股后复权 close**（iFinD 单源，全程分红再投口径，无回退）：
-  ① THS_HQ 探测 .O/.N 后缀（脚本不猜，O 错试 N，都不对报错）
-  ② THS_DS `close_price` + `107,OC` 近 5 年序列（窗口从【今天】往前 5 年，服务端视角）
-  ③ THS_BD `日期,107,OC` 单点按纽交所交易日历（THS_Date_Query 212010）逐日补 5 年前
-- （股本模块后续加入：THS_DS total_shares/floating_shares 近 5 年 + THS_BD 月频单点）
+当前实现（拉到什么写什么，2026-08-09 用户拍板：字段级独立 json，items [{date,value,source}]）：
+- `fetch_us_hfq`：**美股后复权收盘**（iFinD 单源，全程分红再投口径，无回退）→ 写 close_hfq
+  （① THS_HQ 探测 .O/.N 后缀 → ② THS_DS `close_price`+`107,OC` 近 5 年序列
+   → ③ THS_BD `日期,107,OC` 单点按纽交所交易日历逐日补 5 年前）
+- `fetch_us_amount`：**美股成交额**（iFinD 单源）→ 写 amount
+  （THS_DS `amt`+`OC` 近 5 年 + THS_BD 单点逐日补 5 年前；**单点非交易日返回空值**，
+  必须严格按交易日历，不能用股本方案的日历月末采样）
+- `fetch_shares`：**全市场股本**（iFinD 主源）→ 写 total_shares + floating_shares
+  （THS_DS 近 5 年逐日 + THS_BD 月频单点补更早，日历月末采样）
 
 **铁律：iFinD 参数严禁猜测/试探变体**——所有参数写法来自官方手册与实测
-（字段与数据源支持情况.md §7/§9，2026-08-09 用户提供公式速查；单点格式
-`'2026-08-07,107,OC'` 2026-08-09 实测：与 THS_DS 107 同日期完全一致）。
+（字段与数据源支持情况.md §7/§9，2026-08-09 用户提供公式速查）。
+月度配额（用户提供官方信息）：THS_BD 60万 / THS_DS 60万 / THS_HQ 100万数据点，独立限额不共享。
 国内服务，清代理直连。登录惰性一次（THS_iFinDLogin），退出 THS_iFinDLogout。
 """
 
@@ -31,7 +34,6 @@ for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"
     os.environ.pop(_k, None)
 
 SOURCE = "ifind"
-DATA_TYPE = "quote_daily_hfq"
 
 _LOGIN_STATE = {"done": False}
 _SUFFIX_CACHE: dict[str, str] = {}
@@ -100,11 +102,20 @@ def _five_years_ago(today: date) -> date:
         return date(today.year - 5, 12, 31)
 
 
-def _merge(existing: list[dict] | None, fresh: list[dict]) -> list[dict]:
-    by_date = {r["date"]: r for r in (existing or [])}
-    for r in fresh:
-        by_date[r["date"]] = r
-    return sorted(by_date.values(), key=lambda r: r["date"])
+def _write_field(root: str, code: str, market: str, field: str, fresh: list[dict]) -> dict | None:
+    """写单个字段缓存（同源合并）。fresh 为 [{date, value}]。返回 date_range。"""
+    items = [{"date": r["date"], "value": r["value"], "source": SOURCE} for r in fresh]
+    existing = cache.read_cache(root, code, field)
+    existing_items = existing["items"] if existing else None
+    merged = cache.merge_items(existing_items, items)
+    date_range = None
+    if merged:
+        date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
+    cache.write_cache(root, code, field,
+                      meta={"code": code, "market": market, "field": field,
+                            "source": SOURCE, "date_range": date_range},
+                      items=merged)
+    return date_range
 
 
 def _fetch_us_daily(
@@ -113,8 +124,7 @@ def _fetch_us_daily(
     *,
     indicator: str,
     param: str,
-    data_type: str,
-    field_key: str,
+    field: str,
     adjust: str | None = None,
     start: str | None = None,
     end: str | None = None,
@@ -123,7 +133,7 @@ def _fetch_us_daily(
 
     ① THS_HQ 探测 .O/.N 后缀 → ② THS_DS 近 5 年序列（窗口从今天倒推，服务端视角）
     → ③ THS_BD 单点按纽交所交易日历（THS_Date_Query 212010）逐日补 5 年前，先近后远。
-    返回 {ok, source, path, new_items, date_range, error, notes}；部分失败不丢弃。
+    返回 {ok, source, fields, error, notes}；部分失败不丢弃（notes 标注）。
     """
     code = f"{mc.code}.{mc.suffix}"
     t0 = time.time()
@@ -135,8 +145,7 @@ def _fetch_us_daily(
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_HQ/THS_iFinDLogin",
                           fields=indicator, adjust=adjust, start=start, end=end,
                           ok=False, elapsed=elapsed, error=str(exc))
-        return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
-                "date_range": None, "error": str(exc), "notes": None}
+        return {"ok": False, "source": SOURCE, "fields": {}, "error": str(exc), "notes": None}
 
     notes: list[str] = []
     today = date.today()
@@ -153,19 +162,19 @@ def _fetch_us_daily(
             audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS",
                               fields=indicator, adjust=adjust, start=ds_beg, end=end_d,
                               ok=False, elapsed=elapsed, error=str(r.errmsg))
-            return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
-                    "date_range": None, "error": f"iFinD THS_DS 请求失败：{r.errmsg}", "notes": None}
+            return {"ok": False, "source": SOURCE, "fields": {},
+                    "error": f"iFinD THS_DS 请求失败：{r.errmsg}", "notes": None}
         if r.data is not None and len(r.data):
             for _, row in r.data.iterrows():
-                fresh.append({"date": str(row["time"]), field_key: _clean_value(row[indicator])})
+                fresh.append({"date": str(row["time"]), "value": _clean_value(row[indicator])})
             audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS",
                               fields=f"{indicator}({param})", adjust=adjust, start=ds_beg, end=end_d,
                               ok=True, elapsed=time.time() - t0)
 
     # ③ THS_BD 单点补 5 年前（严格按交易日历，先近后远；跳过缓存已覆盖日期）
     if start is not None and start < ds_start.isoformat():
-        existing = cache.read_cache(root, code, data_type)
-        covered = {r["date"] for r in existing["items"]} if existing else None
+        existing = cache.read_cache(root, code, field)
+        covered = {r["date"] for r in existing["items"] if r.get("source") == SOURCE} if existing else None
         days = [d for d in _trade_days(start, (ds_start - timedelta(days=1)).isoformat())]
         if covered:
             days = [d for d in days if d not in covered]
@@ -177,7 +186,7 @@ def _fetch_us_daily(
                 if fail <= 3:
                     notes.append(f"{d} 单点失败")
                 continue
-            fresh.append({"date": d, field_key: _clean_value(r.data.iloc[0][indicator])})
+            fresh.append({"date": d, "value": _clean_value(r.data.iloc[0][indicator])})
             time.sleep(0.05)  # 串行限速，防配额过快
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_BD",
                           fields=f"{indicator}({param})", adjust=adjust, start=start,
@@ -191,24 +200,14 @@ def _fetch_us_daily(
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                           fields=indicator, adjust=adjust, start=start, end=end,
                           ok=True, elapsed=elapsed)
-        return {"ok": True, "source": SOURCE, "path": None, "new_items": 0,
-                "date_range": None, "error": None, "notes": notes or None}
+        return {"ok": True, "source": SOURCE, "fields": {}, "error": None, "notes": notes or None}
 
-    existing = cache.read_cache(root, code, data_type)
-    existing_items = existing["items"] if existing else None
-    merged = _merge(existing_items, fresh)
-    date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
-    path = cache.write_cache(
-        root, code, data_type,
-        meta={"code": code, "market": mc.market, "data_type": data_type,
-              "source": SOURCE, "date_range": date_range},
-        items=merged,
-    )
+    date_range = _write_field(root, code, mc.market, field, fresh)
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields=f"{indicator}({param})", adjust=adjust, start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
-    return {"ok": True, "source": SOURCE, "path": path, "new_items": len(fresh),
-            "date_range": date_range, "error": None, "notes": notes or None}
+    return {"ok": True, "source": SOURCE, "fields": {field: date_range},
+            "error": None, "notes": notes or None}
 
 
 def fetch_us_hfq(
@@ -217,10 +216,9 @@ def fetch_us_hfq(
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """请求美股后复权 close（iFinD，分红再投）并写缓存（date+close）。"""
+    """请求美股后复权收盘（iFinD，分红再投）→ 写 close_hfq（date/value/source）。"""
     return _fetch_us_daily(root, mc, indicator="close_price", param="107,OC",
-                           data_type="quote_daily_hfq", field_key="close",
-                           adjust="hfq", start=start, end=end)
+                           field="close_hfq", adjust="hfq", start=start, end=end)
 
 
 def fetch_us_amount(
@@ -229,15 +227,14 @@ def fetch_us_amount(
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """请求美股成交额 amt（iFinD，单源无回退）并写缓存（date+amt）。
+    """请求美股成交额 amt（iFinD，单源无回退）→ 写 amount（date/value/source）。
 
     公式（用户提供官方版，2026-08-09 实测）：THS_DS('AAPL.O','amt','OC','',...) 近 5 年
     仅交易日行；THS_BD('AAPL.O','amt','日期,OC') 单点，非交易日返回空值——
     5 年前补全必须严格按交易日历逐日（不能用股本方案的日历月末采样）。
     """
     return _fetch_us_daily(root, mc, indicator="amt", param="OC",
-                           data_type="quote_daily_amount", field_key="amt",
-                           start=start, end=end)
+                           field="amount", start=start, end=end)
 
 
 def _month_ends(start: str, end: str) -> list[str]:
@@ -266,11 +263,11 @@ def fetch_shares(
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """请求股本（total_shares/floating_shares）并写缓存。
+    """请求股本（total_shares/floating_shares）→ 分写两个字段 json。
 
     iFinD 近 5 年 THS_DS 序列 + 更早 THS_BD 月频单点（先近后远），部分失败不丢弃（notes 标注）。
     代码格式：A/B/北交所原样（600519.SH/920002.BJ），港股 4 位带前导零（0700.HK），
-    美股探测 .O/.N。返回 {ok, source, path, new_items, date_range, error, notes}。
+    美股探测 .O/.N。返回 {ok, source, fields, error, notes}。
     """
     code = f"{mc.code}.{mc.suffix}"
     t0 = time.time()
@@ -286,8 +283,7 @@ def fetch_shares(
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_HQ/THS_iFinDLogin",
                           fields="total_shares;floating_shares", start=start, end=end,
                           ok=False, elapsed=elapsed, error=str(exc))
-        return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
-                "date_range": None, "error": str(exc), "notes": None}
+        return {"ok": False, "source": SOURCE, "fields": {}, "error": str(exc), "notes": None}
 
     notes: list[str] = []
     today = date.today()
@@ -304,8 +300,8 @@ def fetch_shares(
             audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS",
                               fields="total_shares;floating_shares", start=ds_beg, end=end_d,
                               ok=False, elapsed=elapsed, error=str(r.errmsg))
-            return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
-                    "date_range": None, "error": f"iFinD THS_DS 股本请求失败：{r.errmsg}", "notes": None}
+            return {"ok": False, "source": SOURCE, "fields": {},
+                    "error": f"iFinD THS_DS 股本请求失败：{r.errmsg}", "notes": None}
         if r.data is not None and len(r.data):
             for _, row in r.data.iterrows():
                 fresh.append({"date": str(row["time"]),
@@ -314,8 +310,8 @@ def fetch_shares(
 
     # ② THS_BD 月频单点补 [start, ds_start)，先近后远；跳过缓存已覆盖日期
     if start is not None and start < ds_start.isoformat():
-        existing = cache.read_cache(root, code, "shares")
-        covered = {r["date"] for r in existing["items"]} if existing else None
+        existing = cache.read_cache(root, code, "total_shares")
+        covered = {r["date"] for r in existing["items"] if r.get("source") == SOURCE} if existing else None
         months = _month_ends(start, (ds_start - timedelta(days=1)).isoformat())
         if covered:
             months = [d for d in months if d not in covered]
@@ -344,24 +340,15 @@ def fetch_shares(
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                           fields="total_shares;floating_shares", start=start, end=end,
                           ok=True, elapsed=elapsed)
-        return {"ok": True, "source": SOURCE, "path": None, "new_items": 0,
-                "date_range": None, "error": None, "notes": notes or None}
+        return {"ok": True, "source": SOURCE, "fields": {}, "error": None, "notes": notes or None}
 
-    existing = cache.read_cache(root, code, "shares")
-    # 仅与同源缓存合并，不跨源填充（iFinD total_shares 与 yfinance 扣库存股口径不同）
-    if existing and existing.get("meta", {}).get("source") != SOURCE:
-        existing = None
-    existing_items = existing["items"] if existing else None
-    merged = _merge(existing_items, fresh)
-    date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
-    path = cache.write_cache(
-        root, code, "shares",
-        meta={"code": code, "market": mc.market, "data_type": "shares",
-              "source": SOURCE, "date_range": date_range},
-        items=merged,
-    )
+    fields = {
+        "total_shares": _write_field(root, code, mc.market, "total_shares",
+                                     [{"date": r["date"], "value": r["total_shares"]} for r in fresh]),
+        "floating_shares": _write_field(root, code, mc.market, "floating_shares",
+                                        [{"date": r["date"], "value": r["floating_shares"]} for r in fresh]),
+    }
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields="total_shares;floating_shares", start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
-    return {"ok": True, "source": SOURCE, "path": path, "new_items": len(fresh),
-            "date_range": date_range, "error": None, "notes": notes or None}
+    return {"ok": True, "source": SOURCE, "fields": fields, "error": None, "notes": notes or None}

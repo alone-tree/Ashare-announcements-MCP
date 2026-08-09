@@ -3,6 +3,10 @@
 
 工具契约见 docs/market-data架构设计.md（§1.6/§2）。三层结构：本文件=工具层，
 aggregator.py=字段聚合器，providers/=请求模块（源 × 市场 × 档位）。
+
+2026-08-09 用户拍板：缓存为字段级独立 json（items [{date, value, source}]），
+请求模块"拉到什么写什么"；本层从字段缓存组装 + **派生现算**（hfq OHL 还原、
+qfq、市值、换手率、周月聚合——全部不落盘）。
 """
 
 from __future__ import annotations
@@ -21,33 +25,58 @@ VALID_PERIODS = ("daily", "weekly", "monthly")
 VALID_VARS = ("open", "high", "low", "close", "volume", "amount",
               "turnover", "outstanding_share", "total_market_cap", "float_market_cap")
 
-# 返回结构里 vars 顺序：date 恒首列，其余按 vars 传入顺序
-_RAW_KEYS = ("open", "high", "low", "close", "volume", "amount", "turnover", "outstanding_share")
+# 价格/量额原始字段（新浪 raw 宽拉列，A/港含 amount）
+_PRICE_FIELDS = ("open", "high", "low", "close", "volume", "amount")
 
 
-def _ensure_raw(root: str, mc: MarketCode, start: str | None, end: str | None) -> dict:
-    return aggregator.ensure(root, mc, "quote_daily_raw", [sina.fetch_raw], start, end)
-
-
-def _ensure_hfq(root: str, mc: MarketCode, start: str | None, end: str | None) -> dict:
-    chain = [ifind.fetch_us_hfq] if mc.market == "US" else [sina.fetch_hfq]
-    return aggregator.ensure(root, mc, "quote_daily_hfq", chain, start, end)
-
-
-def _ensure_amount(root: str, mc: MarketCode, start: str | None, end: str | None) -> dict:
-    """美股 amount 单源（iFinD）；A/港 amount 在新浪 raw 宽写列里。"""
+def _field_chains(mc: MarketCode) -> dict[str, list]:
+    """字段 → 来源链（顺序即优先级）。按市场路由。"""
     if mc.market == "US":
-        return aggregator.ensure(root, mc, "quote_daily_amount", [ifind.fetch_us_amount], start, end)
-    return {"ok": True, "items": None, "meta": None, "source": "sina", "notes": None}
+        raw_chain = [sina.fetch_raw]
+        amount_chain = [ifind.fetch_us_amount]  # 美股 amount=iFinD 单源
+        hfq_chain = [ifind.fetch_us_hfq]        # 美股 hfq=iFinD 单源
+    else:
+        raw_chain = [sina.fetch_raw]
+        amount_chain = [sina.fetch_raw]         # A/港 amount 在新浪 raw 宽写列
+        hfq_chain = [sina.fetch_hfq]
+    shares_chain = [ifind.fetch_shares] + ([yfinance.fetch_shares] if mc.market in ("HK", "US") else [])
+    chains = {f: list(raw_chain) for f in _PRICE_FIELDS}
+    chains["amount"] = amount_chain
+    chains["close_hfq"] = hfq_chain
+    chains["total_shares"] = list(shares_chain)
+    chains["floating_shares"] = list(shares_chain)
+    if mc.market == "A":
+        # A 股流通股本另有新浪 raw 附带的 outstanding_share 来源
+        chains["floating_shares"] = [sina.fetch_raw] + list(shares_chain)
+    return chains
 
 
-def _ensure_shares(root: str, mc: MarketCode, start: str | None, end: str | None) -> dict:
-    chain = [ifind.fetch_shares, yfinance.fetch_shares] if mc.market in ("HK", "US") else [ifind.fetch_shares]
-    return aggregator.ensure(root, mc, "shares", chain, start, end)
+def _ensure_fields(root: str, mc: MarketCode, fields: set[str],
+                   start: str | None, end: str | None) -> dict[str, dict]:
+    """逐字段 ensure（缓存复用：已覆盖字段不请求）。返回 {字段: {ok, items, source, notes}}。"""
+    chains = _field_chains(mc)
+    results: dict[str, dict] = {}
+    for f in fields:
+        if f not in chains:
+            continue
+        results[f] = aggregator.ensure(root, mc, f, chains[f], start, end)
+    return results
 
 
-def _by_date(items: list[dict] | None) -> dict[str, dict]:
-    return {r["date"]: r for r in (items or [])}
+def _values_by_date(items: list[dict] | None, preferred: str | None = None) -> dict[str, float | None]:
+    """字段缓存 → {date: value}。优先取 preferred 来源记录；该源缺失日期回退任何来源。"""
+    out: dict[str, float | None] = {}
+    fallback: dict[str, float | None] = {}
+    for r in (items or []):
+        d, v = r.get("date"), r.get("value")
+        if d is None:
+            continue
+        if preferred and r.get("source") == preferred:
+            out[d] = v
+        fallback.setdefault(d, v)
+    for d, v in fallback.items():
+        out.setdefault(d, v)
+    return out
 
 
 def _default_start(end: str) -> str:
@@ -55,36 +84,20 @@ def _default_start(end: str) -> str:
     return (date.fromisoformat(end) - timedelta(days=14)).isoformat()
 
 
-def _market_cap(raw_by_date: dict, shares_by_date: dict, mc: MarketCode,
-                raw_items: list[dict]) -> tuple[dict, dict]:
-    """市值现算：total = total_shares × close；float = 流通股本 × close。
-    A/B 股流通股本用新浪 outstanding_share（raw 列）；港美股用 iFinD floating_shares。"""
-    total, float_ = {}, {}
-    # 逐日对齐：close 取 raw，股本取该日最近的 shares 点（前置填充）
-    share_dates = sorted(shares_by_date)
-    for r in raw_items:
-        d = r["date"]
-        close = r.get("close")
-        if close is None:
-            continue
-        # 前置填充：取 ≤ d 的最近股本点
-        near = [sd for sd in share_dates if sd <= d]
-        sr = shares_by_date[near[-1]] if near else None
-        total_shares = (sr or {}).get("total_shares")
-        if total_shares is not None:
-            total[d] = total_shares * close
-        if mc.market == "A":
-            fs = r.get("outstanding_share")  # 新浪流通股本
-        else:
-            fs = (sr or {}).get("floating_shares")
-        if fs is not None:
-            float_[d] = fs * close
-    return total, float_
+def _latest_share(share_series: dict[str, float | None], d: str) -> float | None:
+    """前置填充：取 ≤ d 的最近股本点。"""
+    last = None
+    for sd in sorted(share_series):
+        if sd > d:
+            break
+        if share_series.get(sd) is not None:
+            last = share_series[sd]
+    return last
 
 
-def _resample(rows: list[dict], period: str, keys: tuple) -> list[dict]:
+def _resample(rows: list[dict], period: str) -> list[dict]:
     """周/月线由日线本地聚合（open=周期首日、high=最高、low=最低、close=末日、
-    volume/amount=累计；weekly 用 W-FRI、monthly 用 ME）。返回升序周期行。"""
+    volume/amount=累计，其余取末日；weekly 用 W-FRI、monthly 用 ME）。"""
     if period == "daily" or not rows:
         return rows
     from datetime import datetime
@@ -92,7 +105,6 @@ def _resample(rows: list[dict], period: str, keys: tuple) -> list[dict]:
     def bucket(d: str) -> str:
         dt = datetime.fromisoformat(d)
         if period == "weekly":
-            # W-FRI：本周五
             friday = dt + timedelta(days=(4 - dt.weekday()) % 7)
             return friday.date().isoformat()
         return f"{dt.year:04d}-{dt.month:02d}"
@@ -101,22 +113,24 @@ def _resample(rows: list[dict], period: str, keys: tuple) -> list[dict]:
     for r in rows:
         groups.setdefault(bucket(r["date"]), []).append(r)
     out = []
+    numeric = ("open", "high", "low", "close", "volume", "amount",
+               "turnover", "outstanding_share", "total_market_cap", "float_market_cap")
     for b in sorted(groups):
         g = groups[b]
         row: dict = {"date": b}
-        for k in keys:
-            vals = [x.get(k) for x in g if x.get(k) is not None]
-            if k in ("open",):
+        for k in numeric:
+            vals = [x.get(k) for x in g if isinstance(x.get(k), (int, float))]
+            if k == "open":
                 row[k] = vals[0] if vals else None
-            elif k in ("high",):
+            elif k == "high":
                 row[k] = max(vals) if vals else None
-            elif k in ("low",):
+            elif k == "low":
                 row[k] = min(vals) if vals else None
-            elif k in ("close",):
+            elif k == "close":
                 row[k] = g[-1].get(k)
             elif k in ("volume", "amount"):
                 row[k] = sum(vals) if vals else None
-            else:  # 其他（turnover/outstanding_share 等）取末日
+            else:
                 row[k] = g[-1].get(k)
         out.append(row)
     return out
@@ -160,105 +174,137 @@ def get_quote(
     start = start_date or _default_start(end)
     notes: list[str] = []
 
-    # 1. 字段链补拉
-    need_raw = bool(set(vars) & set(_RAW_KEYS)) or "total_market_cap" in vars or "float_market_cap" in vars
-    need_hfq = adjust in ("hfq", "qfq")
-    need_amount = "amount" in vars and mc.market == "US"
-    need_shares = "total_market_cap" in vars or "float_market_cap" in vars
+    # 1. 需要的字段（缓存字段名）
+    need_fields: set[str] = set()
+    for v in vars:
+        if v == "outstanding_share":
+            need_fields.add("floating_shares")
+        elif v in ("total_market_cap", "float_market_cap", "turnover"):
+            need_fields.update({"close", "floating_shares", "total_shares"})
+            if v == "total_market_cap":
+                need_fields.add("total_shares")
+            if v == "turnover":
+                need_fields.add("volume")  # 换手率 = volume ÷ 流通股本
+        elif v in _PRICE_FIELDS:
+            need_fields.add(v)
+    if adjust in ("hfq", "qfq"):
+        need_fields.add("close_hfq")
 
-    rr = _ensure_raw(root, mc, start, end) if need_raw else {"ok": True, "items": None}
-    if not rr["ok"]:
-        return {"ok": False, "error": f"行情获取失败：{'；'.join(rr['notes'] or [rr.get('error', '')])}"}
-    hr = _ensure_hfq(root, mc, start, end) if need_hfq else {"ok": True, "items": None}
-    if not hr["ok"]:
-        return {"ok": False, "error": f"后复权获取失败：{'；'.join(hr['notes'] or [hr.get('error', '')])}"}
-    ar = _ensure_amount(root, mc, start, end) if need_amount else {"ok": True, "items": None}
-    if not ar["ok"]:
-        return {"ok": False, "error": f"成交额获取失败：{'；'.join(ar['notes'] or [ar.get('error', '')])}"}
-    sr = _ensure_shares(root, mc, start, end) if need_shares else {"ok": True, "items": None}
-    if not sr["ok"]:
-        return {"ok": False, "error": f"股本获取失败：{'；'.join(sr['notes'] or [sr.get('error', '')])}"}
+    # 2. 逐字段 ensure（缓存复用）
+    results = _ensure_fields(root, mc, need_fields, start, end)
+    failed = {f: r for f, r in results.items() if not r["ok"]}
+    if failed:
+        parts = []
+        for f, r in failed.items():
+            parts.append(f + ": " + str(r.get("error") or r.get("notes")))
+        return {"ok": False, "error": "字段获取失败：" + "；".join(parts)}
+    for f, r in results.items():
+        for n in (r.get("notes") or []):
+            if n and n not in notes:
+                notes.append(n)
 
-    raw_items = rr["items"] or []
-    raw_by_date = _by_date(raw_items)
-    # 2. 组装 base rows（raw 列）
-    rows = [dict(r) for r in raw_items if start <= r["date"] <= end]
+    # 3. 组装：骨架日期 = 各字段日期并集（请求范围内）；按聚合器结果源取数
+    by_field: dict[str, dict[str, float | None]] = {}
+    all_dates: set[str] = set()
+    for f, r in results.items():
+        by_field[f] = _values_by_date(r["items"], r.get("source"))
+        all_dates.update(by_field[f].keys())
+    dates = sorted(d for d in all_dates if start <= d <= end)
 
-    # 3. 美股 amount（iFinD 独立缓存）
-    if need_amount:
-        amt_by_date = _by_date(ar["items"])
-        for r in rows:
-            a = amt_by_date.get(r["date"])
-            r["amount"] = a.get("amt") if a else None
+    # 4. 逐行组装原始值
+    raw_close = by_field.get("close", {})
+    rows = []
+    for d in dates:
+        row: dict = {"date": d}
+        for f in _PRICE_FIELDS:
+            if f in by_field:
+                row[f] = by_field[f].get(d)
+        row["_raw_close"] = raw_close.get(d)  # 内部保留：市值/复权用
+        rows.append(row)
 
-    # 4. 复权
-    if need_hfq:
-        hfq_by_date = _by_date(hr["items"])
+    # 5. 派生：hfq/qfq
+    if adjust in ("hfq", "qfq"):
+        hfq = by_field.get("close_hfq", {})
         if adjust == "hfq":
             for r in rows:
-                h = hfq_by_date.get(r["date"])
-                if h and h.get("close") is not None and r.get("close"):
-                    # 逐日因子还原 OHL：hfq_OHL(t) = raw_OHL(t) × F(t)
-                    f = h["close"] / r["close"]
-                    for k in ("open", "high", "low", "close"):
+                hc = hfq.get(r["date"])
+                rc = r.get("_raw_close")
+                if hc is not None and rc:
+                    f = hc / rc
+                    for k in ("open", "high", "low"):
                         if r.get(k) is not None:
                             r[k] = round(r[k] * f, 4)
+                    r["close"] = round(hc, 4)
                 else:
                     for k in ("open", "high", "low", "close"):
-                        r[k] = h.get("close") if k == "close" and h else None
-        else:  # qfq：前复权本地现算，不落盘
-            latest_raw = next((r for r in reversed(rows) if r.get("close") is not None), None)
-            if latest_raw:
-                lh = hfq_by_date.get(latest_raw["date"])
-                if lh and lh.get("close"):
-                    scale = latest_raw["close"] / lh["close"]
-                    for r in rows:
-                        h = hfq_by_date.get(r["date"])
-                        if h and h.get("close") is not None and r.get("close"):
-                            f = h["close"] / r["close"] * scale
-                            for k in ("open", "high", "low", "close"):
-                                if r.get(k) is not None:
-                                    r[k] = round(r[k] * f, 4)
-                else:
-                    notes.append("后复权数据缺失，前复权计算不完整")
+                        r[k] = hc if k == "close" else None
+        else:  # qfq：前复权本地现算（hfq × 最新缩放），不落盘
+            latest_raw = next((r for r in reversed(rows) if r.get("_raw_close") is not None), None)
+            lh = hfq.get(latest_raw["date"]) if latest_raw else None
+            if latest_raw and lh:
+                scale = latest_raw["_raw_close"] / lh
+                for r in rows:
+                    hc = hfq.get(r["date"])
+                    rc = r.get("_raw_close")
+                    if hc is not None and rc:
+                        f = hc / rc * scale
+                        for k in ("open", "high", "low"):
+                            if r.get(k) is not None:
+                                r[k] = round(r[k] * f, 4)
+                        r["close"] = round(hc * scale, 4)
+                    else:
+                        for k in ("open", "high", "low", "close"):
+                            r[k] = hc * scale if k == "close" and hc is not None else None
             else:
-                notes.append("无最新收盘价，前复权未计算")
+                notes.append("后复权数据缺失，前复权计算不完整")
 
-    # 5. 市值现算（基于不复权 close —— 市值 = 股本 × 当日不复权收盘）
-    if "total_market_cap" in vars or "float_market_cap" in vars:
-        raw_rows = [r for r in raw_items if start <= r["date"] <= end]
-        total_cap, float_cap = _market_cap(raw_by_date, _by_date(sr["items"]), mc, raw_rows)
+    # 6. 派生：股本/市值/换手率（基于不复权 close —— 市值 = 股本 × 当日不复权收盘）
+    total_shares = by_field.get("total_shares", {})
+    floating_shares = by_field.get("floating_shares", {})
+    need_mcap = "total_market_cap" in vars or "float_market_cap" in vars
+    need_turnover = "turnover" in vars
+    if need_mcap or need_turnover:
         for r in rows:
-            if "total_market_cap" in vars:
-                r["total_market_cap"] = total_cap.get(r["date"])
-            if "float_market_cap" in vars:
-                r["float_market_cap"] = float_cap.get(r["date"])
-        notes.append("总市值/流通市值为估算值（股本 × 不复权收盘价）")
+            rc = r.get("_raw_close")
+            ts = _latest_share(total_shares, r["date"])
+            fs = _latest_share(floating_shares, r["date"])
+            if need_mcap and "total_market_cap" in vars and ts is not None and rc is not None:
+                r["total_market_cap"] = ts * rc
+            if need_mcap and "float_market_cap" in vars and fs is not None and rc is not None:
+                r["float_market_cap"] = fs * rc
+            if need_turnover and fs and r.get("volume") is not None:
+                r["turnover"] = r["volume"] / fs
+        if need_mcap:
+            notes.append("总市值/流通市值为估算值（股本 × 不复权收盘价）")
 
-    # 6. 周/月聚合
+    # 7. vars 映射输出（outstanding_share ← floating_shares；_raw_close 不输出）
+    out_rows = []
+    for r in rows:
+        r.pop("_raw_close", None)
+        out: dict = {"date": r["date"]}
+        for v in vars:
+            if v == "outstanding_share":
+                out[v] = _latest_share(floating_shares, r["date"])
+            elif v in r:
+                out[v] = r.get(v)
+        out_rows.append(out)
+
+    # 8. 周/月聚合
     if period != "daily":
-        rows = _resample(rows, period, tuple(vars))
+        out_rows = _resample(out_rows, period)
         notes.append(f"{period} 线由日线本地聚合（{'W-FRI' if period == 'weekly' else '月度'}）")
 
-    # 7. 列过滤（date 恒首列）
-    cols = ["date"] + [v for v in vars]
-    out_rows = [{k: r.get(k) for k in cols} for r in rows]
     if not out_rows:
         return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
                 "start": start, "end": end, "adjust": adjust, "period": period,
-                "vars": vars, "source": rr.get("source") if rr.get("source") else None,
-                "notes": notes + ["请求范围内无数据"], "rows": []}
+                "vars": vars, "source": None, "notes": notes + ["请求范围内无数据"], "rows": []}
 
     date_range = {"start": out_rows[0]["date"], "end": out_rows[-1]["date"]}
-    source = rr.get("source") if rr.get("source") else (hr.get("source") if need_hfq else None)
-    if need_amount and mc.market == "US":
-        source = f"{source or ''},ifind" if source else "ifind"
-    notes += [n for n in (rr.get("notes") or []) if n]
-    notes += [n for n in (hr.get("notes") or []) if n]
-    notes += [n for n in (ar.get("notes") or []) if n]
-    notes += [n for n in (sr.get("notes") or []) if n]
+    sources = sorted({r.get("source") for r in results.values() if r.get("source")})
+    source = ",".join(sources) if sources else None
 
-    # 8. 导出
+    cols = ["date"] + vars
+    # 9. 导出
     if export_path:
         _export_csv(export_path, out_rows, cols)
         return {"ok": True, "path": export_path, "total_items": len(out_rows),
