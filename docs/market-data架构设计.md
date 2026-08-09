@@ -308,7 +308,7 @@ cache/{code}/financial_statements/
 
 | section | 市场 | 主源 | 补充源（主源缺字段时） |
 |---|---|---|---|
-| profile | A股 | 巨潮 stock_profile_cninfo（26 字段） | 东财 stock_individual_info_em（push2his 间歇，仅主源失败时） |
+| profile | A股 | 巨潮 stock_profile_cninfo（26 字段）——**单一来源，无第二来源**（2026-08-09 用户定：降低复杂度） | — |
 | | 港股 | 东财 stock_hk_company_profile_em（17 字段）**+ stock_hk_security_profile_em（14 字段）合并字段并集**（ISIN/每手股数/沪深港通标识在证券接口，两接口字段互补无重叠） | — |
 | | 美股 | ❌ 无结构化 → 返回"用公告 MCP 查 SEC"提示 | — |
 | ipo | A股 | 巨潮 stock_ipo_summary_cninfo（宽表 15 字段） | 新浪 stock_ipo_info（key-value 17 项） |
