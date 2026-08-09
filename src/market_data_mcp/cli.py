@@ -18,7 +18,7 @@ from typing import Any, Callable
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from market_data_mcp import service
+from market_data_mcp import company_service, service
 
 
 def _data_root() -> str:
@@ -116,10 +116,30 @@ def get_data_catalog_batch(request: dict[str, Any]) -> dict[str, Any]:
     return _batch_response("get_data_catalog_batch", items, "results")
 
 
+def get_company_profile_batch(request: dict[str, Any]) -> dict[str, Any]:
+    codes = request.get("codes")
+    if not isinstance(codes, list) or not codes:
+        raise ValueError("codes 必须是非空数组")
+    items = []
+    for value in codes:
+        code = str(value)
+        try:
+            result = company_service.get_company_profile(
+                _data_root(), code,
+                sections=request.get("sections"),
+                force_refresh=bool(request.get("force_refresh")),
+            )
+            items.append({"code": code, **result})
+        except Exception as exc:  # noqa: BLE001 —— 单家公司失败不阻断批次
+            items.append({"code": code, "ok": False, "error": str(exc)})
+    return _batch_response("get_company_profile_batch", items, "results")
+
+
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "get_quote_batch": get_quote_batch,
     "get_financial_statements_batch": get_financial_statements_batch,
     "get_data_catalog_batch": get_data_catalog_batch,
+    "get_company_profile_batch": get_company_profile_batch,
 }
 
 

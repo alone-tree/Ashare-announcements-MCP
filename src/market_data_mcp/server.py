@@ -30,6 +30,7 @@ try:
 except Exception:  # 兼容 mcp 版本差异
     pass
 
+from market_data_mcp import company_service
 from market_data_mcp.service import get_data_catalog as get_data_catalog_service
 from market_data_mcp.service import get_financial_statements as get_financial_statements_service
 from market_data_mcp.service import get_quote as get_quote_service
@@ -148,6 +149,29 @@ def create_server() -> Any:
         """
         return _wrap(get_data_catalog_service)(
             _data_root(), code, statements=statements,
+        )
+
+    @mcp.tool()
+    def get_company_profile(
+        code: str,
+        sections: list[str] | None = None,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        """获取公司信息（A股/北交所/港股；美股无结构化数据，返回提示用公告 MCP 查 SEC）。
+
+        code: 带市场后缀代码（600519.SH / 920002.BJ / 00700.HK）。
+        sections: 可选 profile/ipo/dividends/forecast/holders 子集；不传返回全部。
+            profile=公司概况、ipo=IPO资料、dividends=分红历史、forecast=盈利预测、
+            holders=股东（历史多期序列）。
+        force_refresh: true=忽略 30 天新鲜期，强制联网刷新（默认缓存 30 天内直接返回）。
+
+        返回 sections 字典：有数据的 section 为 {data, source, cached}；
+        该市场无结构化来源的 section 为 {available: false, reason}（不是错误）。
+        数据保留上游字段名原样；多源合并为主源优先、缺字段从补充源补全
+        （无失败回退，主源失败即报错可重试）。
+        """
+        return _wrap(company_service.get_company_profile)(
+            _data_root(), code, sections=sections, force_refresh=force_refresh,
         )
 
     return mcp

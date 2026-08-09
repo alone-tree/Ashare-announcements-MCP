@@ -49,7 +49,9 @@ class TestServer:
         from market_data_mcp.server import create_server
         mcp = create_server()
         tools = list(mcp._tool_manager.list_tools())
-        assert [t.name for t in tools] == ["get_quote", "get_financial_statements", "get_data_catalog"]
+        assert [t.name for t in tools] == [
+            "get_quote", "get_financial_statements", "get_data_catalog", "get_company_profile",
+        ]
         quote_schema = tools[0].parameters
         assert quote_schema.get("additionalProperties") is False
         # 参数契约（架构 §2.1）

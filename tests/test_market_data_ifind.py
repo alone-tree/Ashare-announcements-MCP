@@ -26,8 +26,15 @@ def _ds_df(dates, values, col="close_price"):
 
 
 @pytest.fixture(autouse=True)
-def _reset_ifind_state():
-    """每个测试重置登录/后缀缓存（模块级状态跨测试泄漏）。"""
+def _reset_ifind_state(tmp_path):
+    """每个测试重置登录/后缀缓存（模块级状态跨测试泄漏）；
+    并在 tmp_path 创建伪凭据文件（登录已被 mock，凭据内容仅满足 _load_accounts 解析，
+    不依赖本机 .secrets/ifind_accounts.txt——公司电脑无真凭据）。"""
+    secrets_dir = tmp_path / ".secrets"
+    secrets_dir.mkdir(exist_ok=True)
+    (secrets_dir / "ifind_accounts.txt").write_text(
+        "账号1：fake1\n密码1：fake1\n账号2：jdkgjt009\n密码2：fake2\n", encoding="utf-8"
+    )
     ifind._LOGIN_STATE["done"] = False
     ifind._SUFFIX_CACHE.clear()
     yield
