@@ -2,7 +2,7 @@
 """供确定性批处理脚本调用的 market-data JSON CLI。
 
 从 stdin 读取一个 JSON 请求，stdout 只输出一个 JSON 响应。
-tool 支持：get_quote_batch（后续工具批量入口同构扩展）。
+tool 支持：get_quote_batch / get_financial_statements_batch（后续工具批量入口同构扩展）。
 顶层请求字段是 `tool`（与公告 MCP CLI 一致），响应字段也是 `tool`。
 数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录）。
 """
@@ -63,8 +63,43 @@ def get_quote_batch(request: dict[str, Any]) -> dict[str, Any]:
     return _batch_response("get_quote_batch", items, "results")
 
 
+def get_financial_statements_batch(request: dict[str, Any]) -> dict[str, Any]:
+    codes = request.get("codes")
+    if not isinstance(codes, list) or not codes:
+        raise ValueError("codes 必须是非空数组")
+    if request.get("amount_basis") is None:
+        raise ValueError("amount_basis 必须明确为 cumulative 或 single")
+
+    common = {
+        key: request.get(key)
+        for key in (
+            "amount_basis",
+            "statements",
+            "start_date",
+            "end_date",
+            "include_versions",
+            "force_refresh",
+            "export_path",
+        )
+    }
+    items = []
+    for value in codes:
+        code = str(value)
+        try:
+            result = service.get_financial_statements(
+                _data_root(),
+                code,
+                **{key: value for key, value in common.items() if value is not None},
+            )
+            items.append({"code": code, **result})
+        except Exception as exc:  # noqa: BLE001 —— 单家公司失败不阻断批次
+            items.append({"code": code, "ok": False, "error": str(exc)})
+    return _batch_response("get_financial_statements_batch", items, "results")
+
+
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "get_quote_batch": get_quote_batch,
+    "get_financial_statements_batch": get_financial_statements_batch,
 }
 
 

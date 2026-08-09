@@ -9,3 +9,6 @@ tmp/
 
 # market-data 审计日志（每次上游请求，本地评估用）
 logs/
+
+# 财报接口探针数据（上游原始返回，一次性）
+financial-probe/

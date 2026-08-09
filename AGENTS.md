@@ -11,7 +11,7 @@
 |---|---|---|
 | 定位 | 公告/提交文档（非结构化）的发现、定位、阅读 | 行情/财报/指标/概况（结构化）数据获取 |
 | 数据源 | A/B/H 股=东方财富；美股=SEC EDGAR；LOCAL-=本地材料 | 行情=新浪单源；财报=东财 datacenter；股本/美股后复权=iFinD |
-| 状态 | **已实现、完善**（不要动坏） | **设计中**（决策已定稿，代码待按新架构重写） |
+| 状态 | **已实现、完善**（不要动坏） | **行情 + 财报三表已实现**；财务比率/公司概况待实现 |
 | 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（决策）+ `字段与数据源支持情况.md`（客观能力） |
 
 克制、数据准确真实、维护简单；不为假设中的需求增加抽象或字段。个人工具，不追求大而全。
@@ -36,7 +36,7 @@ CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）�
 | 工具 | 要点 |
 |---|---|
 | `get_quote` | 行情；code 带后缀、vars 字段列表（date 恒留）、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、超长(>200 行)自动导出、export_path 指定 CSV。**缓存为字段级 9 个 json**（open/high/low/close/close_hfq/volume/amount/total_shares/floating_shares，items `[{date,value,source}]` 每字段同日期仅一条），**每字段唯一数据源**（A/北交所流通股本=新浪、港美股=ifind 等），派生（qfq/市值/换手率/周月/hfq OHL 还原）全现算；**覆盖判定带探测状态机**（盘后 verified_until 覆盖周末/节假日、盘中续探零请求，见架构文档 §1.8） |
-| `get_financial_statements` | 三表；统一形状 `{report_date, item_name, amount, source}`、**科目名原样不翻译、不做跨市场映射** |
+| `get_financial_statements` | 三表；科目名原样不翻译、不做跨市场映射；`amount_basis` 必填（cumulative/single），30 天缓存+强制刷新，同报告期多版本，三表批次全有或全无；single 不返回 EPS/每股股息/加权平均股数等非加总科目 |
 | `get_financial_ratios` | 财务衍生指标，东财英文列名原样 |
 | `get_company_profile` | 概况/分红/盈利预测，sections 可选 |
 

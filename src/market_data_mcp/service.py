@@ -12,12 +12,14 @@ qfq、市值、换手率、周月聚合——全部不落盘）。
 from __future__ import annotations
 
 import csv
+import json
 import os
 import time
-from datetime import date, timedelta
+import uuid
+from datetime import date, datetime, timedelta, timezone
 
-from market_data_mcp import aggregator, cache
-from market_data_mcp.providers import ifind, sina, yfinance
+from market_data_mcp import aggregator, cache, financial_cache
+from market_data_mcp.providers import financial_statements, ifind, sina, yfinance
 from market_data_mcp.routing import MARKET_NAMES, MarketCode, parse_code
 
 VALID_ADJUSTS = ("raw", "hfq", "qfq")
@@ -139,7 +141,9 @@ def _resample(rows: list[dict], period: str) -> list[dict]:
 
 
 def _export_csv(path: str, rows: list[dict], cols: list[str]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
@@ -333,3 +337,393 @@ def get_quote(
     return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
             "start": start, "end": end, "adjust": adjust, "period": period,
             "vars": vars, "source": source, "notes": notes or None, "rows": out_rows}
+
+
+VALID_STATEMENTS = ("balance", "income", "cash_flow")
+VALID_AMOUNT_BASES = ("cumulative", "single")
+
+
+def _financial_cache_is_fresh(bundle: dict, now: datetime) -> bool:
+    payloads = [bundle[statement] for statement in VALID_STATEMENTS]
+    payloads.append(bundle["metadata"])
+    return all(financial_cache.is_fresh(payload, now=now) for payload in payloads)
+
+
+def _financial_rows(
+    bundle: dict,
+    statements: list[str],
+    start_date: str | None,
+    end_date: str | None,
+    include_versions: bool,
+) -> list[dict]:
+    rows: list[dict] = []
+    for statement in statements:
+        payload = bundle[statement]
+        for report in payload.get("reports") or []:
+            report_date = str(report.get("report_date") or "")
+            if start_date and report_date < start_date:
+                continue
+            if end_date and report_date > end_date:
+                continue
+            versions = report.get("versions") or []
+            if not include_versions:
+                versions = [
+                    version
+                    for version in versions
+                    if version.get("version_id") == report.get("current_version_id")
+                ]
+            version_count = len(report.get("versions") or [])
+            for version in versions:
+                report_metadata = version.get("metadata") or {}
+                for item in version.get("items") or []:
+                    rows.append(
+                        {
+                            "report_date": report_date,
+                            "statement": statement,
+                            "item_code": item.get("item_code"),
+                            "item_name": item.get("item_name"),
+                            "amount": item.get("amount"),
+                            "source": item.get("source"),
+                            "value_basis": "point_in_time" if statement == "balance" else "cumulative",
+                            "version_id": version.get("version_id"),
+                            "is_latest": version.get("version_id") == report.get("current_version_id"),
+                            "version_count": version_count,
+                            "has_revisions": version_count > 1,
+                            "first_seen_at": version.get("first_seen_at"),
+                            "source_update_date": report_metadata.get("UPDATE_DATE")
+                            or report_metadata.get("NOTICE_DATE"),
+                            "change_summary": version.get("change_summary"),
+                            "report_metadata": report_metadata,
+                        }
+                    )
+    rows.sort(key=lambda row: (row["report_date"], row["statement"], str(row["item_code"]), str(row["version_id"])))
+    return rows
+
+
+def _is_non_additive_item(row: dict) -> bool:
+    code = str(row.get("item_code") or "").upper()
+    name = str(row.get("item_name") or "").lower()
+    code_markers = (
+        "BASIC_EPS",
+        "DILUTED_EPS",
+        "PER_SHARE",
+        "DIVIDEND_PER_SHARE",
+        "WEIGHTED_AVERAGE_SHARE",
+        "WEIGHTED_AVG_SHARE",
+        "WEIGHTAVG_SHARE",
+        "AVERAGE_SHARES",
+        "AVG_SHARES",
+        "_ROE",
+        "_ROA",
+        "MARGIN",
+    )
+    name_markers = (
+        "每股",
+        "加权平均股",
+        "平均股数",
+        "weighted average shares",
+        "weighted average number of shares",
+        "earnings per share",
+        "dividend per share",
+        "净资产收益率",
+        "总资产收益率",
+        "毛利率",
+        "净利率",
+        "利润率",
+    )
+    return any(marker in code for marker in code_markers) or any(marker in name for marker in name_markers)
+
+
+def _period_identity(row: dict) -> tuple[str, int | None] | None:
+    metadata = row.get("report_metadata") or {}
+    report = str(metadata.get("REPORT") or "")
+    if "/" in report:
+        cycle, period = report.rsplit("/", 1)
+        ordinal = {"Q1": 1, "Q6": 2, "Q9": 3, "FY": 4}.get(period.upper())
+        return (f"report:{cycle}", ordinal) if ordinal is not None else None
+
+    report_name = str(metadata.get("REPORT_DATE_NAME") or metadata.get("REPORT_TYPE") or "")
+    ordinal = None
+    for marker, value in (
+        ("一季", 1),
+        ("第一季", 1),
+        ("半年", 2),
+        ("中报", 2),
+        ("三季", 3),
+        ("第三季", 3),
+        ("年报", 4),
+    ):
+        if marker in report_name:
+            ordinal = value
+            break
+    if ordinal is not None:
+        return (f"calendar:{row['report_date'][:4]}", ordinal)
+
+    start_date = metadata.get("START_DATE")
+    if start_date:
+        return (f"start:{str(start_date)[:10]}", None)
+    return None
+
+
+def _same_financial_basis(current: dict, previous: dict) -> bool:
+    current_meta = current.get("report_metadata") or {}
+    previous_meta = previous.get("report_metadata") or {}
+    for key in ("CURRENCY", "ACCOUNT_STANDARD"):
+        if current_meta.get(key) != previous_meta.get(key):
+            return False
+    return current.get("source") == previous.get("source")
+
+
+def _derive_single_rows(rows: list[dict]) -> tuple[list[dict], list[str]]:
+    output = [dict(row) for row in rows if row["statement"] == "balance"]
+    skipped_dates: set[str] = set()
+    grouped: dict[str, dict[str, list[dict]]] = {}
+    for row in rows:
+        if row["statement"] == "balance":
+            continue
+        grouped.setdefault(row["statement"], {}).setdefault(row["report_date"], []).append(row)
+
+    for statement, by_date in grouped.items():
+        periods: dict[str, list[tuple[int | None, str, list[dict]]]] = {}
+        for report_date, report_rows in by_date.items():
+            identity = _period_identity(report_rows[0])
+            if identity is None:
+                skipped_dates.add(report_date)
+                continue
+            cycle, ordinal = identity
+            periods.setdefault(cycle, []).append((ordinal, report_date, report_rows))
+
+        for cycle_periods in periods.values():
+            cycle_periods.sort(key=lambda item: item[1])
+            by_ordinal = {ordinal: report_rows for ordinal, _, report_rows in cycle_periods if ordinal is not None}
+            for index, (ordinal, report_date, current_rows) in enumerate(cycle_periods):
+                previous_rows = None
+                if ordinal == 1 or (ordinal is None and index == 0):
+                    previous_rows = []
+                elif ordinal is not None:
+                    previous_rows = by_ordinal.get(ordinal - 1)
+                elif index > 0:
+                    previous_rows = cycle_periods[index - 1][2]
+                if previous_rows is None:
+                    skipped_dates.add(report_date)
+                    continue
+
+                previous_by_code = {str(row.get("item_code")): row for row in previous_rows}
+                for current in current_rows:
+                    if _is_non_additive_item(current):
+                        continue
+                    derived = dict(current)
+                    current_amount = current.get("amount")
+                    if not previous_rows:
+                        amount = current_amount
+                        version_ids = [current.get("version_id")]
+                    else:
+                        previous = previous_by_code.get(str(current.get("item_code")))
+                        if previous is None or not _same_financial_basis(current, previous):
+                            amount = None
+                            version_ids = [current.get("version_id")]
+                        else:
+                            previous_amount = previous.get("amount")
+                            if isinstance(current_amount, (int, float)) and isinstance(previous_amount, (int, float)):
+                                amount = current_amount - previous_amount
+                            else:
+                                amount = None
+                            version_ids = [previous.get("version_id"), current.get("version_id")]
+                    derived["amount"] = amount
+                    derived["value_basis"] = "single"
+                    derived["derived_from_version_ids"] = [value for value in version_ids if value]
+                    output.append(derived)
+    output.sort(key=lambda row: (row["report_date"], row["statement"], str(row["item_code"])))
+    return output, sorted(skipped_dates)
+
+
+def _export_financial_csv(path: str, rows: list[dict]) -> None:
+    columns = [
+        "report_date",
+        "statement",
+        "item_code",
+        "item_name",
+        "amount",
+        "source",
+        "value_basis",
+        "version_id",
+        "is_latest",
+        "version_count",
+        "has_revisions",
+        "first_seen_at",
+        "source_update_date",
+        "change_summary",
+        "derived_from_version_ids",
+        "report_metadata",
+    ]
+    serialised = []
+    for row in rows:
+        item = dict(row)
+        for key in ("change_summary", "derived_from_version_ids", "report_metadata"):
+            if key in item:
+                item[key] = json.dumps(item[key], ensure_ascii=False, sort_keys=True)
+        serialised.append(item)
+    _export_csv(path, serialised, columns)
+
+
+def get_financial_statements(
+    root: str,
+    code: str,
+    amount_basis: str,
+    statements: list[str] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_versions: bool = False,
+    force_refresh: bool = False,
+    export_path: str | None = None,
+) -> dict:
+    """获取三大财务报表；缓存累计原值，单期金额按最新累计版本现算。"""
+    try:
+        mc = parse_code(code)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if amount_basis not in VALID_AMOUNT_BASES:
+        return {"ok": False, "error": "amount_basis 必须明确为 cumulative 或 single"}
+    selected = list(VALID_STATEMENTS) if statements is None else list(statements)
+    if not selected or any(statement not in VALID_STATEMENTS for statement in selected):
+        return {"ok": False, "error": f"statements 必须是 {list(VALID_STATEMENTS)} 的非空子集"}
+    selected = list(dict.fromkeys(selected))
+    try:
+        if start_date:
+            date.fromisoformat(start_date)
+        if end_date:
+            date.fromisoformat(end_date)
+    except ValueError:
+        return {"ok": False, "error": "start_date/end_date 必须是 YYYY-MM-DD"}
+    if start_date and end_date and start_date > end_date:
+        return {"ok": False, "error": "start_date 不能晚于 end_date"}
+
+    full_code = f"{mc.code}.{mc.suffix}"
+    now = datetime.now(timezone.utc)
+    observed_at = now.isoformat()
+    notes: list[str] = []
+    try:
+        bundle = financial_cache.read_bundle(root, full_code)
+    except (OSError, ValueError) as exc:
+        bundle = None
+        notes.append(f"现有财报缓存不可用：{exc}")
+
+    should_refresh = force_refresh or bundle is None or not _financial_cache_is_fresh(bundle, now)
+    stale = False
+    refresh_error = None
+    if should_refresh:
+        existing_metadata = bundle.get("metadata") if bundle else None
+        fetched = financial_statements.fetch(root, mc, existing_metadata=existing_metadata)
+        if not fetched.get("ok"):
+            refresh_error = fetched.get("error") or "上游刷新失败"
+            if bundle is None:
+                return {"ok": False, "code": full_code, "market": mc.market, "error": refresh_error}
+            stale = True
+            notes.append(f"刷新失败，返回上一批缓存：{refresh_error}")
+        else:
+            batch_id = uuid.uuid4().hex
+            statement_payloads = {}
+            for statement in VALID_STATEMENTS:
+                existing_statement = bundle.get(statement) if bundle else None
+                statement_payloads[statement] = financial_cache.merge_statement(
+                    existing_statement,
+                    fetched["statements"][statement],
+                    code=full_code,
+                    market=mc.market,
+                    statement=statement,
+                    source=fetched.get("source") or "eastmoney",
+                    observed_at=observed_at,
+                    batch_id=batch_id,
+                )
+            metadata_payload = {
+                "meta": {
+                    "code": full_code,
+                    "market": mc.market,
+                    "update_batch_id": batch_id,
+                    "last_successful_update": observed_at,
+                    "last_refresh_attempt": observed_at,
+                },
+                **(fetched.get("metadata") or {}),
+            }
+            financial_cache.commit_bundle(root, full_code, metadata_payload, statement_payloads)
+            bundle = financial_cache.read_bundle(root, full_code)
+            notes.extend(fetched.get("notes") or [])
+
+    assert bundle is not None
+    rows = _financial_rows(
+        bundle,
+        selected,
+        start_date if amount_basis == "cumulative" else None,
+        end_date if amount_basis == "cumulative" else None,
+        include_versions if amount_basis == "cumulative" else False,
+    )
+    if amount_basis == "single":
+        rows, skipped_dates = _derive_single_rows(rows)
+        rows = [
+            row
+            for row in rows
+            if (not start_date or row["report_date"] >= start_date)
+            and (not end_date or row["report_date"] <= end_date)
+        ]
+        skipped_dates = [
+            report_date
+            for report_date in skipped_dates
+            if (not start_date or report_date >= start_date)
+            and (not end_date or report_date <= end_date)
+        ]
+        notes.append(
+            "single 不返回 EPS、每股股息、加权平均股数等非加总科目；这些科目只能从累计报表获取，额外加工由调用方自行处理，工具不提供支持"
+        )
+        if skipped_dates:
+            notes.append(f"{len(skipped_dates)} 个报告期因无法确认累计区间连续性而未生成单期金额")
+        if include_versions:
+            notes.append("amount_basis=single 只使用各报告期最新累计版本现算；include_versions 不生成历史单期版本")
+    last_successful_update = bundle["metadata"].get("meta", {}).get("last_successful_update")
+    source_values = sorted(
+        {
+            str(value)
+            for value in (bundle["metadata"].get("sources") or {}).values()
+            if value
+        }
+    )
+    result = {
+        "ok": True,
+        "market": mc.market,
+        "code": full_code,
+        "statements": selected,
+        "amount_basis": amount_basis,
+        "include_versions": include_versions,
+        "stale": stale,
+        "last_successful_update": last_successful_update,
+        "refresh_error": refresh_error,
+        "source": ",".join(source_values) or "eastmoney",
+        "notes": notes or None,
+        "rows": rows,
+    }
+    date_range = {
+        "start": rows[0]["report_date"] if rows else None,
+        "end": rows[-1]["report_date"] if rows else None,
+    }
+    if export_path:
+        _export_financial_csv(export_path, rows)
+        result.pop("rows")
+        result.update({"path": export_path, "total_items": len(rows), "date_range": date_range})
+    elif len(rows) > 200:
+        auto_path = os.path.join(
+            root,
+            "cache",
+            "_auto_export",
+            f"{full_code}_financial_{amount_basis}_{start_date or 'all'}_{end_date or 'all'}.csv",
+        )
+        _export_financial_csv(auto_path, rows)
+        result.pop("rows")
+        result.update(
+            {
+                "auto_exported": True,
+                "path": auto_path,
+                "total_items": len(rows),
+                "date_range": date_range,
+            }
+        )
+        result["notes"] = (result.get("notes") or []) + [f"数据超过 200 行，已自动导出到 {auto_path}"]
+    return result

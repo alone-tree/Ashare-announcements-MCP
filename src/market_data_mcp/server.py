@@ -3,6 +3,7 @@
 
 工具：
 - get_quote: 日/周/月线行情（raw/hfq/qfq + 量额/股本/市值，超长自动导出）
+- get_financial_statements: 三市场三表（累计/单期、版本、30 天缓存、超长自动导出）
 
 代码强制市场后缀（600519.SH / 920002.BJ / 00700.HK / AAPL.US），程序按后缀路由市场。
 数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录），缓存与自动导出均在根目录下。
@@ -28,6 +29,7 @@ try:
 except Exception:  # 兼容 mcp 版本差异
     pass
 
+from market_data_mcp.service import get_financial_statements as get_financial_statements_service
 from market_data_mcp.service import get_quote as get_quote_service
 
 
@@ -76,6 +78,46 @@ def create_server() -> Any:
         return _wrap(get_quote_service)(
             _data_root(), code, vars=vars, adjust=adjust,
             start_date=start_date, end_date=end_date, period=period,
+            export_path=export_path,
+        )
+
+    @mcp.tool()
+    def get_financial_statements(
+        code: str,
+        amount_basis: str,
+        statements: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        include_versions: bool = False,
+        force_refresh: bool = False,
+        export_path: str | None = None,
+    ) -> dict[str, Any]:
+        """获取三大财务报表原始科目（A股/北交所/港股/美股）。
+
+        code: 带市场后缀代码（600519.SH / 920002.BJ / 00700.HK / AAPL.US）。
+        amount_basis: 必填；cumulative=累计报原值，single=用最新累计版本现算当期金额。
+            资产负债表始终为时点值。single 不返回 EPS、每股股息、加权平均股数等
+            非加总科目；这些科目只能从 cumulative 获取。额外加工由调用方自行处理，
+            本工具不提供支持。
+        statements: 可选 balance/income/cash_flow 子集；不传返回三表。上游刷新始终同时
+            获取三表，任一失败整批不更新。
+        start_date/end_date: 按原始报告截止日筛选，格式 YYYY-MM-DD，含边界；不传为全部历史。
+        include_versions: false=每个报告期仅最新版本；true=累计口径返回全部历史版本。
+            single 始终只使用最新累计版本，不生成历史单期版本。
+        force_refresh: true=忽略固定 30 天新鲜期，强制联网刷新。
+        export_path: 指定则导出 CSV；未指定且超过 200 行时自动导出并返回路径。
+        返回 rows 保留原始科目名、金额、来源、报告级元信息和版本信息；不翻译科目，
+        不返回同比/环比比例，不自行修正上游值。
+        """
+        return _wrap(get_financial_statements_service)(
+            _data_root(),
+            code,
+            amount_basis=amount_basis,
+            statements=statements,
+            start_date=start_date,
+            end_date=end_date,
+            include_versions=include_versions,
+            force_refresh=force_refresh,
             export_path=export_path,
         )
 

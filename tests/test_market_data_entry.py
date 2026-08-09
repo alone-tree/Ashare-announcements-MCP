@@ -49,13 +49,21 @@ class TestServer:
         from market_data_mcp.server import create_server
         mcp = create_server()
         tools = list(mcp._tool_manager.list_tools())
-        assert [t.name for t in tools] == ["get_quote"]
-        schema = tools[0].parameters
-        assert schema.get("additionalProperties") is False
+        assert [t.name for t in tools] == ["get_quote", "get_financial_statements"]
+        quote_schema = tools[0].parameters
+        assert quote_schema.get("additionalProperties") is False
         # 参数契约（架构 §2.1）
-        props = schema["properties"]
+        props = quote_schema["properties"]
         assert {"code", "vars", "adjust", "start_date", "end_date", "period", "export_path"} <= set(props)
         assert props["adjust"]["default"] == "raw"
+
+        financial_schema = tools[1].parameters
+        assert financial_schema.get("additionalProperties") is False
+        assert set(financial_schema["required"]) == {"code", "amount_basis"}
+        assert {
+            "code", "amount_basis", "statements", "start_date", "end_date",
+            "include_versions", "force_refresh", "export_path",
+        } <= set(financial_schema["properties"])
 
     def test_strict_args_rejected(self):
         import asyncio

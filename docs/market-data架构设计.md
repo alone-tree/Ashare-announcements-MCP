@@ -27,7 +27,7 @@
 | 工具                         | 参数                                                  | 缓存文件                                       |
 | ---------------------------- | ----------------------------------------------------- | ---------------------------------------------- |
 | `get_quote`                | code, vars, adjust, start_date, end_date, period, export_path | **字段级 9 个 json**：open/high/low/close/close_hfq/volume/amount/total_shares/floating_shares |
-| `get_financial_statements` | code, periods[], statements[]                         | financial_income / balance / cash_flow         |
+| `get_financial_statements` | code, amount_basis, statements, start/end, versions | financial_income / balance / cash_flow         |
 | `get_financial_ratios`     | code, periods[]                                       | ratios                                         |
 | `get_company_profile`      | code, sections[]                                      | profile                                        |
 
@@ -75,8 +75,8 @@
 - 缓存存 `cache/{代码}/` 下，JSON 格式 `{meta, items}`：meta 含 code/market/field/source/updated_at/date_range/shape；**items 为 `[{date, value, source}]`——source 是每条数据的来源追踪标记，每字段同日期仅一条记录（唯一源保证，2026-08-09 用户拍板）**。**探测元信息**：`verified_until`（盘后探测确认的日期上界，周五~周日延伸）+ `verified_at`（秒级）+ `last_probe {state: intraday|closed, date}`（探测状态机，见 1.8）。
 - **行情缓存为字段级独立 json（2026-08-09 用户拍板）**：高开低收原值 open/high/low/close、后复权 close_hfq（仅 close）、成交额 amount、成交量 volume、总股本 total_shares、流通股本 floating_shares——9 个文件；均为静态历史永不过期。**前复权随分红变动，现算不落盘**。
 - **市值现算不落盘**（close.json × 股本字段，逐日前置填充相乘）；股本低频变化，total_shares/floating_shares 月频/日频并存，同源不冲突。
-- **首次全量、之后增量**：行情拉 last_date 之后新交易日；财报拉新报告期。
-- **失败 = 缓存未更新**：直接返回"缓存获取失败，请重试"，不记录失败过程；重试时自动跳过已完成部分。
+- **行情首次全量、之后增量**：拉取 `last_date` 之后的新交易日。
+- **财报固定 30 天新鲜期**：首次或过期时重新拉取三表全历史并做内容哈希比较；`force_refresh=true` 可强制刷新。无缓存且刷新失败直接报错；已有完整缓存时返回上一批并明确标记 `stale/refresh_error`。
 - 周/月线由日线现算，不落盘（聚合规则：open=周期首日、high=周期最高、low=周期最低、close=周期末日、volume/amount=周期累计；weekly 用 W-FRI、monthly 用 ME）。
 
 ### 1.6 输入输出规范
@@ -211,22 +211,69 @@
 
 ### 3.1 定位与形状（决策）
 
-三市场原始三表（利润表/资产负债表/现金流量表）获取，数据源=东财 datacenter。**统一形状、不改科目名**：
+三市场原始三表（利润表/资产负债表/现金流量表）获取。A/B/北交所和港股三表使用东财；美股三表使用东财，公共提交元信息使用 SEC submissions。每类信息固定单源，不补查第二源、不做来源回退。
+
+**统一长表形状、不改科目名**：
 
 ```json
-items: [{"report_date", "item_name", "amount", "source"}, ...]
+rows: [{
+  "report_date", "statement", "item_code", "item_name", "amount", "source",
+  "value_basis", "version_id", "is_latest", "version_count", "has_revisions",
+  "first_seen_at", "source_update_date", "change_summary", "report_metadata"
+}, ...]
 ```
 
 - 科目名原样保留：A 股宽表内部转长表时科目名不翻译；港股/美股返回什么科目就叫什么科目。
 - **不做跨市场科目映射**（映射=自己猜=iFinD 的坑；跨市场比较由 AI/用户脚本处理）。
+- 只保存上游原始金额，丢弃 `_YOY/_QOQ/_MOM` 等比例或增长率列；所有 null 科目均保存，顶层 `item_catalog` 维护跨版本完整科目目录。
 - 数值单位：**原始货币（元）**——人民币/港元/美元原币数值，不做单位换算（2026-08-08 定）；返回/导出时在元信息中标注币种。
-- 增量：按报告期，首次全量、之后拉新报告期。
 
 ### 3.2 参数
 
-`code`（必填）、`periods[]`（报告期年份列表，匹配该年所有季度，空=全部）、`statements[]`（income/balance/cash_flow，空=三表全取）。
+| 参数 | 语义 |
+| ---- | ---- |
+| `code` | 必填，强制市场后缀 |
+| `amount_basis` | 必填：`cumulative`=累计原值；`single`=最新累计版本现算当期金额；不提供 `both` |
+| `statements` | `balance/income/cash_flow` 非空子集；不传返回三表。只控制返回，刷新始终同时获取三表 |
+| `start_date/end_date` | 按原始报告截止日筛选，`YYYY-MM-DD`，含边界；都不传为全部历史；可只传一端 |
+| `include_versions` | 默认 false，每个报告期只返回最新版本；true 时累计口径返回全部历史版本 |
+| `force_refresh` | 忽略 30 天新鲜期并强制联网刷新 |
+| `export_path` | 指定则导出 CSV；未指定且结果超过 200 行时自动导出到 `cache/_auto_export/` |
 
-### 3.3 数据可得性
+### 3.3 缓存、刷新与版本
+
+每家公司固定四个 JSON：
+
+```text
+cache/{code}/financial_statements/
+  metadata.json
+  balance.json
+  income.json
+  cash_flow.json
+```
+
+- 三张表文件按 `report_date` 分组，每期含 `current_version_id/versions[]`；版本保存原始报告级元信息和完整 `items[]`。
+- `metadata.json` 保存公司级来源配置；美股另存 CIK、SEC 财报提交索引和 `sec_history_complete`。首次读取 SEC 历史分片，后续只取 recent 并按 accession 合并。
+- 同报告期的“全部原始科目金额 + 有业务语义的报告元信息”计算 SHA-256；内容变化生成新版本，相同内容只更新 `last_seen_at`。`change_summary` 记录新增、删除、变化科目代码及变化元信息键。
+- 四文件共用 `update_batch_id`。三表与公共元信息先写临时文件，再按同一批次替换；任一上游请求或结构校验失败均不提交新批次。
+- 结构损坏（空响应、缺关键列、报告日不可解析、重复科目值冲突、金额无法 JSON 化）阻断整批更新；不猜测跨市场会计勾稽关系，不自行修正上游值。
+
+### 3.4 累计与单期口径
+
+- 资产负债表始终返回时点值 `point_in_time`，不参与相减。
+- `cumulative` 返回缓存中的原始累计金额；`include_versions=true` 可查看同报告期全部历史版本。
+- `single` 只使用各报告期当前最新累计版本，在同公司、来源、财年区间、币种、准则且报告期间连续时相减；使用上游 `REPORT/REPORT_DATE_NAME/REPORT_TYPE/START_DATE` 判断期间，不按月份猜财季。筛选日期前先在完整缓存上派生，因此单独查询 Q2 仍可使用 Q1。
+- `single` 不返回 EPS、每股股息、加权平均股数等非加总科目。这些科目只能从 `cumulative` 获取；额外加工由调用方自行处理，工具不提供支持。
+- `include_versions=true` 与 `single` 同时使用时仍只生成最新视图的单期金额，并返回 `derived_from_version_ids`；工具不生成历史单期版本。
+
+### 3.5 已实现与真实验证（2026-08-09）
+
+- `600519.SH`：资产/利润/现金流缓存 102/102/98 期，科目目录 152/95/120；派生比例列 0，null 与公告日、更新日、币种、审计意见均保留。
+- `00700.HK`：三表 92/95/95 期，科目目录 71/32/60；summary 中期间起点、报告类型、财年截止、币种、准则已绑定到各报告版本。
+- `AAPL.US`：资产/利润/现金流 102/105/105 期；利润和现金流只保存 26 年报 + 26 个 Q1 + 53 个累计季报，不保存 Q2/Q3/Q4 单季记录；SEC CIK `0000320193`，财报相关 submissions 132 条。强制二次刷新未重复下载历史分片，相同三表内容未生成重复版本。
+- MCP 工具发现、MCP 真实调用、CLI stdin 批量入口、30 天缓存复用、强制刷新、stale 回退、显式/自动 CSV 导出均已实跑。
+
+### 3.6 数据可得性
 
 各市场 × 各源的客观可得性见 `字段与数据源支持情况.md` §3（东财 datacenter 域稳定，2026-08 实测不受行情域限流影响）。
 
@@ -336,5 +383,6 @@ items: [{"report_date", "item_name", "amount", "source"}, ...]
 - [x] MCP 注册（Hermes config + 能力库）与 export.py 双包导出（2026-08-09 完成，一次导出两个 MCP 到用户版同目录）✅
 - [x] hfq 因子还原实现与验证：600519 还原误差 0.035% 已实测 ✅；**美股 iFinD close 还原 OHL 拆股日行为待验证**（AAPL 拆股日，挂起）
 - [x] yfinance 后复权：实测不支持（只有前复权 Adj Close + 事件列），美股 hfq 维持 iFinD 唯一源（2026-08-09 确认）✅
+- [x] `get_financial_statements`：四文件缓存、版本保留、三表批次、A/HK/US+SEC provider、累计/单期、MCP/CLI、真实三市场验证（2026-08-09）✅
 
 > 已定稿（2026-08-08）：导出文件格式 = CSV；财报数值单位 = 原始货币（元）；市值币种 = 原始币种；超长自动导出阈值 = 200 行。
