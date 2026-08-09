@@ -120,7 +120,7 @@ def test_single_subtracts_continuous_periods_and_omits_non_additive(tmp_path, mo
         ("2025-03-31", 100.0),
         ("2025-06-30", 160.0),
     ]
-    assert all(row["item_code"] == "TOTAL_REVENUE" for row in response["rows"])
+    assert all(row["item_name"] == "营业总收入" and "item_code" not in row for row in response["rows"])
     assert response["rows"][1]["value_basis"] == "single"
     assert len(response["rows"][1]["derived_from_version_ids"]) == 2
     assert any("非加总科目" in note for note in response["notes"])
@@ -193,6 +193,7 @@ def test_financial_export_path_returns_metadata_only(tmp_path, monkeypatch):
     with target.open(encoding="utf-8-sig", newline="") as file:
         rows = list(csv.DictReader(file))
     assert rows[0]["item_name"] == "营业总收入"
+    assert "item_code" not in rows[0]
     assert rows[0]["source_update_date"] == "2026-04-01"
     assert rows[0]["change_summary"] == "null"
     assert '"REPORT_TYPE": "年报"' in rows[0]["report_metadata"]
@@ -294,3 +295,148 @@ def test_financial_parameter_validation(tmp_path):
         start_date="2025-12-31",
         end_date="2025-01-01",
     )["ok"] is False
+
+
+def test_data_catalog_reads_cached_non_null_items_across_versions_without_network(tmp_path, monkeypatch):
+    first = _provider_result()
+    first["statements"]["income"][0]["items"] = [
+        {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": 100.0, "source": "eastmoney"},
+        {"item_code": "ALWAYS_EMPTY", "item_name": "ALWAYS_EMPTY", "amount": None, "source": "eastmoney"},
+    ]
+    second = _provider_result()
+    second["statements"]["income"][0]["report_date"] = "2024-12-31"
+    second["statements"]["income"][0]["items"] = [
+        {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": 80.0, "source": "eastmoney"},
+        {"item_code": "OLD_ITEM", "item_name": "OLD_ITEM", "amount": 1.0, "source": "eastmoney"},
+    ]
+    responses = iter([first, second])
+    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: next(responses))
+    service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
+    )
+    service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"], force_refresh=True
+    )
+    monkeypatch.setattr(
+        service.financial_statements,
+        "fetch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("目录工具不得联网")),
+    )
+
+    response = service.get_data_catalog(str(tmp_path), "600519.SH", statements=["income"])
+
+    assert response["ok"] is True
+    assert response["statements"] == ["income"]
+    assert response["items"] == [
+        {
+            "statement": "income",
+            "item_name": "OLD_ITEM",
+            "first_report_date": "2024-12-31",
+            "last_report_date": "2024-12-31",
+        },
+        {
+            "statement": "income",
+            "item_name": "营业收入",
+            "first_report_date": "2024-12-31",
+            "last_report_date": "2025-12-31",
+        },
+    ]
+
+
+def test_financial_query_accepts_exact_chinese_item_and_hides_english_code(tmp_path, monkeypatch):
+    provider = _provider_result()
+    provider["statements"]["income"][0]["items"] = [
+        {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": 100.0, "source": "eastmoney"},
+        {"item_code": "PARENT_NETPROFIT", "item_name": "PARENT_NETPROFIT", "amount": 20.0, "source": "eastmoney"},
+    ]
+    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+
+    response = service.get_financial_statements(
+        str(tmp_path),
+        "600519.SH",
+        amount_basis="cumulative",
+        statements=["income"],
+        items=["营业收入"],
+    )
+
+    assert response["ok"] is True
+    assert response["status"] == "success"
+    assert response["failed_items"] == []
+    assert [(row["item_name"], row["amount"]) for row in response["rows"]] == [("营业收入", 100.0)]
+    assert "item_code" not in response["rows"][0]
+
+
+def test_financial_query_returns_ambiguous_keyword_candidates_and_failed_items(tmp_path, monkeypatch):
+    provider = _provider_result()
+    provider["statements"]["income"][0]["items"] = [
+        {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": 100.0, "source": "eastmoney"},
+        {"item_code": "PARENT_NETPROFIT", "item_name": "PARENT_NETPROFIT", "amount": 20.0, "source": "eastmoney"},
+        {"item_code": "DEDUCT_PARENT_NETPROFIT", "item_name": "DEDUCT_PARENT_NETPROFIT", "amount": 18.0, "source": "eastmoney"},
+    ]
+    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+
+    response = service.get_financial_statements(
+        str(tmp_path),
+        "600519.SH",
+        amount_basis="cumulative",
+        statements=["income"],
+        items=["营业收入", "归母净利", "毛利"],
+    )
+
+    assert response["ok"] is True
+    assert response["status"] == "partial_success"
+    assert [(row["item_name"], row["amount"]) for row in response["rows"]] == [("营业收入", 100.0)]
+    assert response["failed_items"][0] == {
+        "requested_name": "归母净利",
+        "reason": "multiple_candidates",
+        "match_type": "keyword_candidates",
+        "candidates": [
+            {
+                "item_name": "归属于母公司股东的净利润",
+                "latest_report_date": "2025-12-31",
+                "latest_amount": 20.0,
+                "currency": "人民币",
+            },
+            {
+                "item_name": "归属于母公司股东的扣除非经常性损益的净利润",
+                "latest_report_date": "2025-12-31",
+                "latest_amount": 18.0,
+                "currency": "人民币",
+            },
+        ],
+    }
+    assert response["failed_items"][1]["requested_name"] == "毛利"
+    assert response["failed_items"][1]["reason"] == "not_found"
+    assert "不计算衍生指标" in response["failed_items"][1]["hint"]
+
+
+def test_financial_report_types_support_annual_cumulative_and_q4_single(tmp_path, monkeypatch):
+    provider = _provider_result()
+    provider["statements"]["income"] = [
+        {
+            "report_date": report_date,
+            "metadata": {"REPORT_DATE_NAME": report_name, "REPORT_TYPE": report_name, "CURRENCY": "人民币"},
+            "items": [
+                {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": amount, "source": "eastmoney"}
+            ],
+        }
+        for report_date, report_name, amount in (
+            ("2025-03-31", "一季报", 100.0),
+            ("2025-06-30", "半年报", 200.0),
+            ("2025-09-30", "三季报", 250.0),
+            ("2025-12-31", "年报", 400.0),
+        )
+    ]
+    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+
+    cumulative = service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="cumulative",
+        statements=["income"], report_types=["annual"], items=["营业收入"],
+    )
+    single = service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="single",
+        statements=["income"], report_types=["annual"], items=["营业收入"],
+    )
+
+    assert [(row["report_date"], row["amount"]) for row in cumulative["rows"]] == [("2025-12-31", 400.0)]
+    assert [(row["report_date"], row["amount"]) for row in single["rows"]] == [("2025-12-31", 150.0)]

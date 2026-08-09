@@ -26,6 +26,8 @@ def test_financial_statements_mcp_forwards_contract(monkeypatch):
                 "code": "600519.SH",
                 "amount_basis": "single",
                 "statements": ["income"],
+                "items": ["营业收入"],
+                "report_types": ["annual"],
                 "include_versions": True,
                 "force_refresh": True,
             },
@@ -39,6 +41,8 @@ def test_financial_statements_mcp_forwards_contract(monkeypatch):
             "statements": ["income"],
             "start_date": None,
             "end_date": None,
+            "items": ["营业收入"],
+            "report_types": ["annual"],
             "include_versions": True,
             "force_refresh": True,
             "export_path": None,
@@ -66,3 +70,41 @@ def test_financial_statements_cli_batch_partial_success(monkeypatch):
     assert response["status"] == "partial_success"
     assert response["requested"] == 2 and response["succeeded"] == 1 and response["failed"] == 1
     assert response["results"][0]["code"] == "AAPL.US"
+
+
+def test_data_catalog_mcp_is_registered_and_forwards_company_statements(monkeypatch):
+    calls = []
+
+    def fake_service(root, code, **kwargs):
+        calls.append((root, code, kwargs))
+        return {"ok": True, "items": []}
+
+    monkeypatch.setattr(server, "get_data_catalog_service", fake_service, raising=False)
+    monkeypatch.setattr(server, "_data_root", lambda: "ROOT")
+    mcp = server.create_server()
+
+    result = asyncio.run(mcp.call_tool(
+        "get_data_catalog", {"code": "600519.SH", "statements": ["income"]}
+    ))
+
+    assert result is not None
+    assert calls == [("ROOT", "600519.SH", {"statements": ["income"]})]
+
+
+def test_data_catalog_cli_batch_uses_same_service(monkeypatch):
+    monkeypatch.setattr(
+        cli.service,
+        "get_data_catalog",
+        lambda root, code, **kwargs: {"ok": True, "items": [{"item_name": code}]},
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_data_root", lambda: "ROOT")
+
+    response = cli.dispatch({
+        "tool": "get_data_catalog_batch",
+        "codes": ["600519.SH"],
+        "statements": ["income"],
+    })
+
+    assert response["status"] == "success"
+    assert response["results"][0]["items"] == [{"item_name": "600519.SH"}]

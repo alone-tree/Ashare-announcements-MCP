@@ -18,7 +18,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from market_data_mcp import aggregator, cache, financial_cache
+from market_data_mcp import aggregator, cache, financial_cache, financial_items
 from market_data_mcp.providers import financial_statements, ifind, sina, yfinance
 from market_data_mcp.routing import MARKET_NAMES, MarketCode, parse_code
 
@@ -341,6 +341,64 @@ def get_quote(
 
 VALID_STATEMENTS = ("balance", "income", "cash_flow")
 VALID_AMOUNT_BASES = ("cumulative", "single")
+VALID_REPORT_TYPES = ("annual", "semiannual", "q1", "q3")
+
+
+def get_data_catalog(
+    root: str,
+    code: str,
+    statements: list[str] | None = None,
+) -> dict:
+    """只读本地财报缓存，返回公司×报表实际出现过非空金额的科目。"""
+    try:
+        mc = parse_code(code)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    selected = list(VALID_STATEMENTS) if statements is None else list(statements)
+    if not selected or any(statement not in VALID_STATEMENTS for statement in selected):
+        return {"ok": False, "error": f"statements 必须是 {list(VALID_STATEMENTS)} 的非空子集"}
+    selected = list(dict.fromkeys(selected))
+    full_code = f"{mc.code}.{mc.suffix}"
+    bundle = financial_cache.read_bundle(root, full_code)
+    if bundle is None:
+        return {
+            "ok": False,
+            "code": full_code,
+            "error": f"本地尚无 {full_code} 的完整财务报表缓存",
+            "hint": "请先调用 get_financial_statements 获取该公司财报，再重新调用 get_data_catalog",
+        }
+
+    catalog: dict[tuple[str, str, str], dict] = {}
+    for statement in selected:
+        for report in bundle[statement].get("reports") or []:
+            report_date = str(report.get("report_date") or "")
+            for version in report.get("versions") or []:
+                for item in version.get("items") or []:
+                    if item.get("amount") is None:
+                        continue
+                    key = (
+                        statement,
+                        str(item.get("item_code") or ""),
+                        str(item.get("item_name") or item.get("item_code") or ""),
+                    )
+                    entry = catalog.setdefault(
+                        key,
+                        {
+                            "statement": statement,
+                            "item_name": financial_items.display_name(mc.market, key[1], key[2]),
+                            "first_report_date": report_date,
+                            "last_report_date": report_date,
+                        },
+                    )
+                    entry["first_report_date"] = min(entry["first_report_date"], report_date)
+                    entry["last_report_date"] = max(entry["last_report_date"], report_date)
+    return {
+        "ok": True,
+        "market": mc.market,
+        "code": full_code,
+        "statements": selected,
+        "items": sorted(catalog.values(), key=lambda item: (item["statement"], item["item_name"])),
+    }
 
 
 def _financial_cache_is_fresh(bundle: dict, now: datetime) -> bool:
@@ -465,6 +523,13 @@ def _period_identity(row: dict) -> tuple[str, int | None] | None:
     return None
 
 
+def _report_type(row: dict) -> str | None:
+    identity = _period_identity(row)
+    if identity is None:
+        return None
+    return {1: "q1", 2: "semiannual", 3: "q3", 4: "annual"}.get(identity[1])
+
+
 def _same_financial_basis(current: dict, previous: dict) -> bool:
     current_meta = current.get("report_metadata") or {}
     previous_meta = previous.get("report_metadata") or {}
@@ -541,7 +606,6 @@ def _export_financial_csv(path: str, rows: list[dict]) -> None:
     columns = [
         "report_date",
         "statement",
-        "item_code",
         "item_name",
         "amount",
         "source",
@@ -566,6 +630,73 @@ def _export_financial_csv(path: str, rows: list[dict]) -> None:
     _export_csv(path, serialised, columns)
 
 
+def _localize_financial_rows(rows: list[dict], market: str) -> list[dict]:
+    """把上游科目转为面向 AI 的中文名；内部代码不对外返回。"""
+    output = []
+    for row in rows:
+        item = dict(row)
+        item["item_name"] = financial_items.display_name(
+            market, item.get("item_code"), item.get("item_name")
+        )
+        item.pop("item_code", None)
+        output.append(item)
+    return output
+
+
+def _ordered_keyword_match(query: str, name: str) -> bool:
+    """查询字符按顺序出现在科目名中；营收→营业收入，但不会命中应收。"""
+    characters = iter("".join(str(name).split()))
+    return all(any(character == candidate for candidate in characters) for character in "".join(query.split()))
+
+
+def _filter_financial_items(
+    rows: list[dict], market: str, requested_items: list[str]
+) -> tuple[list[dict], list[dict], list[str]]:
+    by_code: dict[str, list[dict]] = {}
+    names: dict[str, str] = {}
+    for row in rows:
+        code = str(row.get("item_code") or "")
+        by_code.setdefault(code, []).append(row)
+        names[code] = financial_items.display_name(market, code, row.get("item_name"))
+    selected_codes: set[str] = set()
+    failed_items: list[dict] = []
+    notes: list[str] = []
+    for requested in requested_items:
+        exact = [code for code, name in names.items() if name == requested]
+        candidates = exact or [code for code, name in names.items() if _ordered_keyword_match(requested, name)]
+        if len(candidates) == 1:
+            selected_codes.add(candidates[0])
+            if not exact:
+                notes.append(f"科目“{requested}”按关键词匹配为“{names[candidates[0]]}”，并非精确名称匹配")
+            continue
+        if not candidates:
+            failed_items.append({
+                "requested_name": requested,
+                "reason": "not_found",
+                "hint": "报表中没有匹配科目；请调用 get_data_catalog 查看完整科目，工具不计算衍生指标",
+            })
+            continue
+        candidate_items = []
+        for code in sorted(candidates, key=lambda value: names[value]):
+            non_null = [row for row in by_code[code] if row.get("amount") is not None]
+            latest = max(non_null or by_code[code], key=lambda row: row["report_date"])
+            metadata = latest.get("report_metadata") or {}
+            candidate_items.append({
+                "item_name": names[code],
+                "latest_report_date": latest.get("report_date"),
+                "latest_amount": latest.get("amount"),
+                "currency": metadata.get("CURRENCY"),
+            })
+        failed_items.append({
+            "requested_name": requested,
+            "reason": "multiple_candidates",
+            "match_type": "exact_duplicate" if exact else "keyword_candidates",
+            "candidates": candidate_items,
+        })
+    selected = [row for row in rows if str(row.get("item_code") or "") in selected_codes]
+    return selected, failed_items, notes
+
+
 def get_financial_statements(
     root: str,
     code: str,
@@ -576,6 +707,8 @@ def get_financial_statements(
     include_versions: bool = False,
     force_refresh: bool = False,
     export_path: str | None = None,
+    items: list[str] | None = None,
+    report_types: list[str] | None = None,
 ) -> dict:
     """获取三大财务报表；缓存累计原值，单期金额按最新累计版本现算。"""
     try:
@@ -597,6 +730,14 @@ def get_financial_statements(
         return {"ok": False, "error": "start_date/end_date 必须是 YYYY-MM-DD"}
     if start_date and end_date and start_date > end_date:
         return {"ok": False, "error": "start_date 不能晚于 end_date"}
+    if items is not None and (not isinstance(items, list) or not items or any(not str(item).strip() for item in items)):
+        return {"ok": False, "error": "items 必须是非空科目名称数组"}
+    if report_types is not None and (
+        not isinstance(report_types, list)
+        or not report_types
+        or any(report_type not in VALID_REPORT_TYPES for report_type in report_types)
+    ):
+        return {"ok": False, "error": f"report_types 必须是 {list(VALID_REPORT_TYPES)} 的非空子集"}
 
     full_code = f"{mc.code}.{mc.suffix}"
     now = datetime.now(timezone.utc)
@@ -678,6 +819,15 @@ def get_financial_statements(
             notes.append(f"{len(skipped_dates)} 个报告期因无法确认累计区间连续性而未生成单期金额")
         if include_versions:
             notes.append("amount_basis=single 只使用各报告期最新累计版本现算；include_versions 不生成历史单期版本")
+    if report_types is not None:
+        selected_report_types = set(report_types)
+        rows = [row for row in rows if _report_type(row) in selected_report_types]
+    failed_items: list[dict] = []
+    if items is not None:
+        requested = list(dict.fromkeys(str(item).strip() for item in items))
+        rows, failed_items, match_notes = _filter_financial_items(rows, mc.market, requested)
+        notes.extend(match_notes)
+    rows = _localize_financial_rows(rows, mc.market)
     last_successful_update = bundle["metadata"].get("meta", {}).get("last_successful_update")
     source_values = sorted(
         {
@@ -697,6 +847,8 @@ def get_financial_statements(
         "last_successful_update": last_successful_update,
         "refresh_error": refresh_error,
         "source": ",".join(source_values) or "eastmoney",
+        "status": "success" if not failed_items else ("partial_success" if rows else "failed"),
+        "failed_items": failed_items,
         "notes": notes or None,
         "rows": rows,
     }

@@ -22,12 +22,13 @@
 
 个人投资工具。不做汇总文档工具（汇总由用户自己的脚本做）、不做实时行情、不做分钟级数据、不做跨市场科目映射。
 
-### 1.2 工具面（4 工具）
+### 1.2 工具面（5 工具）
 
 | 工具                         | 参数                                                  | 缓存文件                                       |
 | ---------------------------- | ----------------------------------------------------- | ---------------------------------------------- |
 | `get_quote`                | code, vars, adjust, start_date, end_date, period, export_path | **字段级 9 个 json**：open/high/low/close/close_hfq/volume/amount/total_shares/floating_shares |
-| `get_financial_statements` | code, amount_basis, statements, start/end, versions | financial_income / balance / cash_flow         |
+| `get_financial_statements` | code, amount_basis, statements, items, report_types, start/end, versions | financial_income / balance / cash_flow         |
+| `get_data_catalog`         | code, statements                                      | 只读对应公司三表缓存，不增加文件               |
 | `get_financial_ratios`     | code, periods[]                                       | ratios                                         |
 | `get_company_profile`      | code, sections[]                                      | profile                                        |
 
@@ -213,18 +214,18 @@
 
 三市场原始三表（利润表/资产负债表/现金流量表）获取。A/B/北交所和港股三表使用东财；美股三表使用东财，公共提交元信息使用 SEC submissions。每类信息固定单源，不补查第二源、不做来源回退。
 
-**统一长表形状、不改科目名**：
+**统一长表形状、中文优先展示**：
 
 ```json
 rows: [{
-  "report_date", "statement", "item_code", "item_name", "amount", "source",
+  "report_date", "statement", "item_name", "amount", "source",
   "value_basis", "version_id", "is_latest", "version_count", "has_revisions",
   "first_seen_at", "source_update_date", "change_summary", "report_metadata"
 }, ...]
 ```
 
-- 科目名原样保留：A 股宽表内部转长表时科目名不翻译；港股/美股返回什么科目就叫什么科目。
-- **不做跨市场科目映射**（映射=自己猜=iFinD 的坑；跨市场比较由 AI/用户脚本处理）。
+- 缓存始终保留上游原始代码/名称；返回与 CSV 导出中文优先。有经实际报表金额与正式名称核验的 A 股映射时只返回中文，未映射则返回原名；港股/美股沿用上游中文。
+- 不做跨市场统一命名。中文映射只解决 A 股英文代码的可读与精确查询，不把港美科目强制改成 A 股口径。
 - 只保存上游原始金额，丢弃 `_YOY/_QOQ/_MOM` 等比例或增长率列；所有 null 科目均保存，顶层 `item_catalog` 维护跨版本完整科目目录。
 - 数值单位：**原始货币（元）**——人民币/港元/美元原币数值，不做单位换算（2026-08-08 定）；返回/导出时在元信息中标注币种。
 
@@ -239,6 +240,10 @@ rows: [{
 | `include_versions` | 默认 false，每个报告期只返回最新版本；true 时累计口径返回全部历史版本 |
 | `force_refresh` | 忽略 30 天新鲜期并强制联网刷新 |
 | `export_path` | 指定则导出 CSV；未指定且结果超过 200 行时自动导出到 `cache/_auto_export/` |
+| `items` | 可选中文科目名列表；精确匹配优先，失败后按字符顺序做关键词匹配。单候选直接返回并提示；多候选进入 failed_items，附各候选最近非空金额；无候选不计算衍生指标 |
+| `report_types` | 可选 `annual/semiannual/q1/q3` 列表，可组合；与 single 组合分别表示 Q4/Q2/Q1/Q3 单季 |
+
+`get_data_catalog(code, statements)` 仅从现有四文件缓存汇总该公司对应报表所有报告期、所有版本中至少有一次非空金额的科目，并返回最早/最晚有效报告日；不联网、不额外维护目录文件，无缓存时提示先调用 `get_financial_statements`。
 
 ### 3.3 缓存、刷新与版本
 
@@ -308,7 +313,7 @@ cache/{code}/financial_statements/
 ## 6. 明确不做（边界）
 
 - ❌ 不做汇总文档工具（用户自己写脚本汇总）
-- ❌ 不做跨市场科目映射（科目名原样）
+- ❌ 不做跨市场统一命名（A股仅做经核验的中文展示映射）
 - ❌ 不做实时行情（只做历史日/周/月线）
 - ❌ 不做分钟级数据
 - ❌ 不做汇率换算（原币返回）
@@ -351,7 +356,7 @@ cache/{code}/financial_statements/
 
 | 日期 | 决策 | 状态 |
 | ---- | ---- | ---- |
-| 08-07 | 工具面 4 工具（quote/statements/ratios/profile） | ✅ 有效 |
+| 08-07 | 工具面 4 工具（quote/statements/ratios/profile） | ⚠️ 08-09 增加轻量 get_data_catalog，现为 5 工具 |
 | 08-07 | 行情复权请求 qfq/hfq/raw 三份缓存 | ❌ 废弃（08-08：只缓存 raw+hfq，前复权本地算） |
 | 08-07 | iFinD 行情第一来源 | ❌ 废弃（08-08：SDK bug+仅 5 年，降级为仅股本） |
 | 08-07 | 市值 iFinD 直接获取 | ❌ 废弃（08-08：计算法，股本×不复权收盘） |

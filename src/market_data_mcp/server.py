@@ -4,6 +4,7 @@
 工具：
 - get_quote: 日/周/月线行情（raw/hfq/qfq + 量额/股本/市值，超长自动导出）
 - get_financial_statements: 三市场三表（累计/单期、版本、30 天缓存、超长自动导出）
+- get_data_catalog: 纯本地查询公司三表缓存支持的科目
 
 代码强制市场后缀（600519.SH / 920002.BJ / 00700.HK / AAPL.US），程序按后缀路由市场。
 数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录），缓存与自动导出均在根目录下。
@@ -29,6 +30,7 @@ try:
 except Exception:  # 兼容 mcp 版本差异
     pass
 
+from market_data_mcp.service import get_data_catalog as get_data_catalog_service
 from market_data_mcp.service import get_financial_statements as get_financial_statements_service
 from market_data_mcp.service import get_quote as get_quote_service
 
@@ -91,6 +93,8 @@ def create_server() -> Any:
         include_versions: bool = False,
         force_refresh: bool = False,
         export_path: str | None = None,
+        items: list[str] | None = None,
+        report_types: list[str] | None = None,
     ) -> dict[str, Any]:
         """获取三大财务报表原始科目（A股/北交所/港股/美股）。
 
@@ -106,8 +110,14 @@ def create_server() -> Any:
             single 始终只使用最新累计版本，不生成历史单期版本。
         force_refresh: true=忽略固定 30 天新鲜期，强制联网刷新。
         export_path: 指定则导出 CSV；未指定且超过 200 行时自动导出并返回路径。
-        返回 rows 保留原始科目名、金额、来源、报告级元信息和版本信息；不翻译科目，
-        不返回同比/环比比例，不自行修正上游值。
+        items: 可选中文科目名称列表。精确匹配优先；否则按字符顺序匹配关键词。
+            单一候选直接返回并提示，多候选计入 failed_items 并返回各候选最近金额；
+            不存在的科目报失败，工具不计算毛利、毛利率等衍生指标。
+        report_types: 可选 annual/semiannual/q1/q3 列表；可组合。不传返回全部报告节点。
+            与 amount_basis 组合时，annual+single 表示第四季度单季，semiannual+single
+            表示第二季度单季，q3+single 表示第三季度单季。
+        返回 rows 包含中文优先的科目名、金额、来源、报告级元信息和版本信息；有可靠
+        中文名时不暴露英文代码，未映射时保留原名。不返回同比/环比比例，不自行修正上游值。
         """
         return _wrap(get_financial_statements_service)(
             _data_root(),
@@ -119,6 +129,25 @@ def create_server() -> Any:
             include_versions=include_versions,
             force_refresh=force_refresh,
             export_path=export_path,
+            items=items,
+            report_types=report_types,
+        )
+
+    @mcp.tool()
+    def get_data_catalog(
+        code: str,
+        statements: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """查询公司财务三表缓存中实际可请求的科目名称（纯本地、轻量、不联网）。
+
+        code: 带市场后缀代码。
+        statements: balance/income/cash_flow 子集；不传返回三表科目。
+        仅返回该公司所有缓存报告期和历史版本中至少有一个非空金额的科目，附最早、
+        最晚有效报告日。A股有可靠中文映射时只返回中文；未映射时保留原名。
+        如果尚无完整缓存，提示先调用 get_financial_statements。
+        """
+        return _wrap(get_data_catalog_service)(
+            _data_root(), code, statements=statements,
         )
 
     return mcp
