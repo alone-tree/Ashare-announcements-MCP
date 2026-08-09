@@ -195,3 +195,127 @@ def fetch_us_hfq(
                       ok=True, elapsed=time.time() - t0)
     return {"ok": True, "source": SOURCE, "path": path, "new_items": len(fresh),
             "date_range": date_range, "error": None, "notes": notes or None}
+
+
+def _month_ends(start: str, end: str) -> list[str]:
+    """[start, end] 内每月日历月末日（THS_BD 非交易日自动返回最近交易日值，
+    日历月末请求 = 该月最后一个交易日股本，与交易日历月末一致，省日历调用）。"""
+    import calendar
+
+    sy, sm = int(start[:4]), int(start[5:7])
+    ey, em = int(end[:4]), int(end[5:7])
+    out = []
+    y, m = sy, sm
+    while (y, m) <= (ey, em):
+        d = f"{y:04d}-{m:02d}-{calendar.monthrange(y, m)[1]:02d}"
+        if d > end:
+            break  # 升序：该月月末已超出 end，后续月份更大
+        out.append(d)
+        m += 1
+        if m == 13:
+            y, m = y + 1, 1
+    return out
+
+
+def fetch_shares(
+    root: str,
+    mc: MarketCode,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict:
+    """请求股本（total_shares/floating_shares）并写缓存。
+
+    iFinD 近 5 年 THS_DS 序列 + 更早 THS_BD 月频单点（先近后远），部分失败不丢弃（notes 标注）。
+    代码格式：A/B/北交所原样（600519.SH/920002.BJ），港股 4 位带前导零（0700.HK），
+    美股探测 .O/.N。返回 {ok, source, path, new_items, date_range, error, notes}。
+    """
+    code = f"{mc.code}.{mc.suffix}"
+    t0 = time.time()
+    try:
+        _ensure_login(root)
+        if mc.market == "US":
+            full = mc.code + _detect_suffix(root, mc.code)
+        else:
+            from market_data_mcp.routing import to_ifind
+            full = to_ifind(mc)
+    except Exception as exc:  # noqa: BLE001
+        elapsed = time.time() - t0
+        audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_HQ/THS_iFinDLogin",
+                          fields="total_shares;floating_shares", start=start, end=end,
+                          ok=False, elapsed=elapsed, error=str(exc))
+        return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
+                "date_range": None, "error": str(exc), "notes": None}
+
+    notes: list[str] = []
+    today = date.today()
+    ds_start = _five_years_ago(today)
+    end_d = min(end or today.isoformat(), today.isoformat())
+    fresh: list[dict] = []
+
+    # ① THS_DS 近 5 年逐日
+    if end_d >= ds_start.isoformat():
+        ds_beg = max(start or ds_start.isoformat(), ds_start.isoformat())
+        r = ths.THS_DS(full, "total_shares;floating_shares", ";", "", ds_beg, end_d)
+        if r.errorcode != 0:
+            elapsed = time.time() - t0
+            audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS",
+                              fields="total_shares;floating_shares", start=ds_beg, end=end_d,
+                              ok=False, elapsed=elapsed, error=str(r.errmsg))
+            return {"ok": False, "source": SOURCE, "path": None, "new_items": 0,
+                    "date_range": None, "error": f"iFinD THS_DS 股本请求失败：{r.errmsg}", "notes": None}
+        if r.data is not None and len(r.data):
+            for _, row in r.data.iterrows():
+                fresh.append({"date": str(row["time"]),
+                              "total_shares": _clean_value(row["total_shares"]),
+                              "floating_shares": _clean_value(row["floating_shares"])})
+
+    # ② THS_BD 月频单点补 [start, ds_start)，先近后远；跳过缓存已覆盖日期
+    if start is not None and start < ds_start.isoformat():
+        existing = cache.read_cache(root, code, "shares")
+        covered = {r["date"] for r in existing["items"]} if existing else None
+        months = _month_ends(start, (ds_start - timedelta(days=1)).isoformat())
+        if covered:
+            months = [d for d in months if d not in covered]
+        fail = 0
+        for d in reversed(months):  # 先近后远：中断只丢最老数据
+            r = ths.THS_BD(full, "total_shares;floating_shares", f"{d};{d}")
+            if r.errorcode != 0 or r.data is None or len(r.data) == 0:
+                fail += 1
+                if fail <= 3:
+                    notes.append(f"{d} 单点失败")
+                continue
+            row = r.data.iloc[0]
+            fresh.append({"date": d,
+                          "total_shares": _clean_value(row["total_shares"]),
+                          "floating_shares": _clean_value(row["floating_shares"])})
+            time.sleep(0.05)
+        if fail:
+            notes.append(f"股本月频补全失败 {fail} 个月点（缺失范围见日志）")
+        audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_BD",
+                          fields="total_shares;floating_shares", start=start,
+                          end=(ds_start - timedelta(days=1)).isoformat(), ok=fail == 0,
+                          elapsed=time.time() - t0, error=f"失败 {fail} 个单点" if fail else None)
+
+    if not fresh:
+        elapsed = time.time() - t0
+        audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
+                          fields="total_shares;floating_shares", start=start, end=end,
+                          ok=True, elapsed=elapsed)
+        return {"ok": True, "source": SOURCE, "path": None, "new_items": 0,
+                "date_range": None, "error": None, "notes": notes or None}
+
+    existing = cache.read_cache(root, code, "shares")
+    existing_items = existing["items"] if existing else None
+    merged = _merge(existing_items, fresh)
+    date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
+    path = cache.write_cache(
+        root, code, "shares",
+        meta={"code": code, "market": mc.market, "data_type": "shares",
+              "source": SOURCE, "date_range": date_range},
+        items=merged,
+    )
+    audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
+                      fields="total_shares;floating_shares", start=start, end=end,
+                      ok=True, elapsed=time.time() - t0)
+    return {"ok": True, "source": SOURCE, "path": path, "new_items": len(fresh),
+            "date_range": date_range, "error": None, "notes": notes or None}

@@ -126,3 +126,59 @@ class TestFetchUsHfq:
         with open(os.path.join(str(tmp_path), "logs", "requests.jsonl"), encoding="utf-8") as f:
             last = json.loads(f.readlines()[-1])
         assert last["ok"] is False and last["api"] == "THS_DS"
+
+
+class TestFetchShares:
+    def test_a_share_ds_segment(self, tmp_path, monkeypatch):
+        """A 股股本：THS_DS 近 5 年写 shares.json。"""
+        monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)
+        df = pd.DataFrame({"time": ["2026-08-06", "2026-08-07"],
+                           "thscode": ["600519.SH"] * 2,
+                           "total_shares": [1250081601.0, 1250081601.0],
+                           "floating_shares": [1250081601.0, 1250081601.0]})
+        monkeypatch.setattr(ifind.ths, "THS_DS", lambda *a, **k: _r(df))
+        root = str(tmp_path)
+        r = ifind.fetch_shares(root, parse_code("600519.SH"), start="2026-08-01")
+        assert r["ok"] is True and r["source"] == "ifind"
+        data = cache.read_cache(root, "600519.SH", "shares")
+        assert data["meta"]["data_type"] == "shares"
+        assert data["items"][0] == {"date": "2026-08-06", "total_shares": 1250081601.0,
+                                    "floating_shares": 1250081601.0}
+
+    def test_monthly_backfill(self, tmp_path, monkeypatch):
+        """5 年前月频单点：日历月末日采样，与序列衔接。"""
+        monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)
+        monkeypatch.setattr(ifind.ths, "THS_HQ", lambda *a, **k: _r(pd.DataFrame({"time": ["2026-08-07"], "close": [1.0]})))
+        monkeypatch.setattr(ifind.ths, "THS_DS", lambda *a, **k: _r(pd.DataFrame({
+            "time": ["2021-08-09"], "thscode": ["AAPL.O"],
+            "total_shares": [16530166000.0], "floating_shares": [16530166000.0]})))
+        called = []
+        def fake_bd(code, ind, param):
+            called.append(param)
+            d = param.split(";")[0]
+            return _r(pd.DataFrame({"thscode": [code], "total_shares": [float(d[:4]) * 1e9],
+                                    "floating_shares": [float(d[:4]) * 1e9]}))
+        monkeypatch.setattr(ifind.ths, "THS_BD", fake_bd)
+        root = str(tmp_path)
+        r = ifind.fetch_shares(root, parse_code("AAPL.US"), start="2021-01-01", end="2021-08-10")
+        assert r["ok"] is True
+        data = cache.read_cache(root, "AAPL.US", "shares")
+        # 月频点 2021-01-31 ~ 2021-07-31（7 个）+ 序列 2021-08-09
+        assert len(data["items"]) == 8
+        assert data["items"][0]["date"] == "2021-01-31"
+        assert data["items"][-1]["date"] == "2021-08-09"
+        # 先近后远：2021-07-31 先请求
+        assert called[-1].startswith("2021-01-31")
+
+    def test_hk_code_format(self, tmp_path, monkeypatch):
+        """港股 iFinD 格式 0700.HK（4 位带前导零）。"""
+        monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)
+        captured = {}
+        def fake_ds(code, *a, **k):
+            captured["code"] = code
+            return _r(pd.DataFrame({"time": ["2026-08-07"], "thscode": [code],
+                                    "total_shares": [1.0], "floating_shares": [1.0]}))
+        monkeypatch.setattr(ifind.ths, "THS_DS", fake_ds)
+        r = ifind.fetch_shares(str(tmp_path), parse_code("00700.HK"), start="2026-08-01")
+        assert r["ok"] is True
+        assert captured["code"] == "0700.HK"
