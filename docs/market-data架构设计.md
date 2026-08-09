@@ -324,11 +324,12 @@ cache/{code}/financial_statements/
 
 ### 5.3 参数
 
-`code`（必填）、`sections[]`（profile/ipo/dividends/forecast/holders，空=全部）。
+`code`（必填）、`sections[]`（profile/ipo/dividends/forecast/holders，空=全部）、`force_refresh`（默认 false，忽略 30 天新鲜期强制联网刷新）。
 
-### 5.4 缓存与返回
+### 5.4 缓存与刷新
 
-- 每个 section 一个 JSON 缓存文件，**快照性质**（meta 含 updated_at/source/market），无行情式日期段覆盖概念；刷新策略待定（见 §7 待决）。
+- 每个 section 一个 JSON 缓存文件，**快照性质**（meta 含 updated_at/source/market），无行情式日期段覆盖概念。
+- **刷新节奏与财报一致（2026-08-09 用户拍板）**：**30 天新鲜期**——缓存 30 天内直接返回，超过 30 天自动联网刷新（分红/预测/股东变化节奏与财报披露一致，分红本身就在财报里披露）；`force_refresh=true` 忽略新鲜期强制刷新。不引入分层 TTL。
 - 返回：`{ok, code, sections: {...}, notes}`——每个 section 返回其对象/列表；美股 section 返回 `{"available": false, "reason": "美股无结构化公司信息，请用公告 MCP 查询 SEC 提交"}`（不是错误）。
 - 港股 profile 返回两接口字段并集（公司 17 + 证券 14，去重）。
 
@@ -339,7 +340,7 @@ cache/{code}/financial_statements/
 ### 5.6 待办
 
 - [ ] 主营构成（stock_zygc_em 行业/产品/地区三维度）→ 财报工具扩展（statements 加 zygc），当前不实现
-- [ ] 刷新策略定稿（TTL vs 每次刷新 vs 快照永续）
+- [x] 刷新策略定稿：30 天新鲜期 + force_refresh（与财报一致，2026-08-09）
 - [ ] 东财股东接口 stock_gdfx_free_top_10_em 格式验证（KeyError 'sdltgd' 待解）
 
 ## 6. 明确不做（边界）
