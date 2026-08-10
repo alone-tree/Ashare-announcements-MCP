@@ -126,6 +126,7 @@ $env:PYTHONPATH = 'src'
 
 - FastMCP 未知参数静默忽略 → server.py 已设 `extra="forbid"` 严格模式（未知参数显式报错）。
 - 导出用户版必须导出到实际生效目录（`D:\HermesSync\tools\a-share-announcement-reading`），export 后 Hermes 内置 MCP 需重启才生效（能力库每次新起进程不受影响）。
+- **Hermes MCP 注册（2026-08-10 实测踩坑）**：`hermes mcp add` 无 cwd 选项，stdio 启动不设 cwd——server.py 必须自带 `sys.path` 自处理（`if __package__ in (None, ""): sys.path.insert(0, parents[1])`，公告/market-data 两个 server.py 都要有）；配置 args 用脚本**绝对路径**（如 `...\market_data_mcp\server.py`），不要用 `-m 包.模块`（依赖 cwd 会 ModuleNotFoundError）。改 Hermes MCP 配置只能走 CLI（remove+add 或 hermes config），直接 patch `Share\Configs\*.yaml` 会被安全策略拒绝；改完验证：`hermes mcp test <name>` + 模拟启动探针（subprocess 脚本路径 + 任意 cwd + env，走 JSON-RPC 真实调用一次）。
 - 港股过滤后 `total_hits` 含旧公司记录，完成判断用"连续 3 页过滤后为空"。
 - read 检测阈值必须与 `return_pages` 默认值一致（20 页），改阈值需同步 reader.py/server.py 两处 docstring。
 - 能力库 use_tool.py 返回结构有嵌套：`d["result"]["content"][0]["text"]` 才是工具真实返回。
