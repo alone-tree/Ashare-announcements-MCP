@@ -182,6 +182,8 @@ async def read_announcement(
     传 start_page 时精读指定页段：从 start_page 起返回 return_pages 页（默认 20 页，可传任意大的值一次读完全文），保留 Markdown 表格，扫描页自动 OCR，用 next_page 续读。
     本工具按 stock_code 作为 PDF 缓存目录，不要求公司已建档；公告是否存在以 url 下载结果为准。
     续读：把上次返回的 next_page 值传给 start_page（如 start_page=50），end_page 可选。
+    注意：SEC 补充材料类提交（如 DEFA14A、部分 8-K）的主文档可能只是封面，正文在另一次提交或附件里；
+    若 search/read 到的内容与预期不符，检查是否还有正式的 DEF 14A / 主文档提交。
     """
     try:
         code = _stock_code(stock_code)

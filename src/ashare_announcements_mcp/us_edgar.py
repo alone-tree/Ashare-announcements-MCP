@@ -293,6 +293,8 @@ def build_html_index(stock_code: str, accession: str, html: str) -> dict[str, An
     """把 HTML 转成与 PDF 索引同构的虚拟页索引，供 reader 复用。
 
     每页: {page, native_text, native_chars, needs_ocr: False, heading}
+    markdown_attempted=True + markdown=native_text：HTML 转出的 markdown 即最终文本，
+    避免 reader 再对 HTML 走 PyMuPDF4LLM 转换（HTML 无真实 PDF 页会越界报错）。
     """
     pages_html = split_html_pages(html)
     pages = []
@@ -311,6 +313,8 @@ def build_html_index(stock_code: str, accession: str, html: str) -> dict[str, An
                 "image_count": 0,
                 "needs_ocr": False,
                 "heading": heading,
+                "markdown": text,
+                "markdown_attempted": True,
             }
         )
     return {

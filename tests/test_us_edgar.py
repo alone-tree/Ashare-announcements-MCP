@@ -40,6 +40,22 @@ def test_split_html_pages_falls_back_to_blocks() -> None:
     assert "段落一" in pages[0]
 
 
+def test_build_html_index_marks_markdown_attempted() -> None:
+    """HTML 虚拟页必须带 markdown_attempted，否则 reader 误走 PyMuPDF4LLM 报 pages 越界。"""
+    html = (
+        "<html><body>"
+        "<div>第一页内容</div>"
+        '<div style="page-break-after:always"></div>'
+        "<div>第二页内容</div>"
+        "</body></html>"
+    )
+    index = us_edgar.build_html_index("COHR", "ACC-1", html)
+    assert len(index["pages"]) == 2
+    for page in index["pages"]:
+        assert page.get("markdown_attempted") is True
+        assert page.get("markdown") == page.get("native_text")
+
+
 def test_clean_html_removes_xbrl_header() -> None:
     html = (
         "<html><body>"

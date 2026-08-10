@@ -69,6 +69,22 @@ def _build_index(pdf_path: Path) -> dict[str, Any]:
     }
 
 
+def _upgrade_html_index(data: dict[str, Any]) -> bool:
+    """旧版 HTML 索引升级：补 markdown_attempted/markdown 字段。
+
+    旧版 build_html_index 每页只有 native_text，read 时误走 PyMuPDF4LLM
+    转换导致 'pages' 越界报错。HTML 的 native_text 即最终 markdown，
+    补上标记后 reader 直接使用不再转换。返回是否发生了修改。
+    """
+    changed = False
+    for page in data.get("pages") or []:
+        if not page.get("markdown_attempted"):
+            page["markdown"] = page.get("native_text") or ""
+            page["markdown_attempted"] = True
+            changed = True
+    return changed
+
+
 def _load_index(stock_code: str, pdf_path: Path) -> tuple[Path, dict[str, Any]]:
     path = _index_path(stock_code, pdf_path)
     stat = pdf_path.stat()
@@ -81,6 +97,11 @@ def _load_index(stock_code: str, pdf_path: Path) -> tuple[Path, dict[str, Any]]:
                 and data.get("source_size") == stat.st_size
                 and data.get("source_mtime_ns") == stat.st_mtime_ns
             ):
+                if pdf_path.suffix.lower() == ".html":
+                    # 旧版 HTML 索引缺 markdown_attempted 标记（曾导致误走 PyMuPDF4LLM 报 pages 越界）
+                    upgraded = _upgrade_html_index(data)
+                    if upgraded:
+                        _save_index(path, data)
                 return path, data
             if (
                 data.get("source_size") == stat.st_size
