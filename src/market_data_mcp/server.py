@@ -16,6 +16,10 @@ import os
 import sys
 from typing import Any
 
+# 支持直接执行导出目录中的 server.py（与公告 MCP 同款；不依赖 cwd）
+if __package__ in (None, ""):
+    sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError:
