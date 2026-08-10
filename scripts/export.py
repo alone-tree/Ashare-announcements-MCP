@@ -1,10 +1,12 @@
-"""把当前源码导出为可直接注册的用户版（一次导出两个 MCP 到同一目录）。
+"""把当前源码导出为可直接注册的用户版（一次导出三个 MCP 到同一目录）。
 
 - ashare_announcements_mcp：A股/港股/美股公告阅读（东财 + SEC EDGAR）
 - market_data_mcp：三市场行情/财报/指标/概况（新浪/iFinD/东财）
+- chart_mcp：行情绘图（K线/折线，复用 market-data 取数）
 
-两者共用同一数据根目录（用户版目录本身）：公告用 ASHARE_ANNOUNCEMENTS_ROOT、
+三者共用同一数据根目录（用户版目录本身）：公告用 ASHARE_ANNOUNCEMENTS_ROOT、
 market-data 用 MARKET_DATA_ROOT 环境变量控制（不设时默认当前目录=用户版目录）。
+chart 依赖 market-data（直接 import 取数），必须同时导出。
 market-data 需要用户版根目录 config.yaml（iFinD 凭据等，模板 config.example.yaml，不进 git）。
 """
 
@@ -41,16 +43,24 @@ PACKAGES = {
             "pyyaml>=6.0,<7\n"
         ),
     },
+    "chart_mcp": {
+        "source": ROOT / "src" / "chart_mcp",
+        "requirements": (
+            "mcp>=1.10,<2\n"
+            "matplotlib>=3.7,<4\n"
+        ),
+    },
 }
 
-USER_README = """# 投资数据 MCP（用户版）：公告阅读 + market-data
+USER_README = """# 投资数据 MCP（用户版）：公告阅读 + market-data + chart
 
-本目录包含两个可独立注册的 MCP，共用同一数据根目录（本目录）：
+本目录包含三个可独立注册的 MCP，共用同一数据根目录（本目录）：
 
 | MCP | 包 | 入口 | 能力 |
 |---|---|---|---|
 | A股公告阅读 | `ashare_announcements_mcp` | `ashare_announcements_mcp/server.py` | A/H/B 股公告（东财）+ 美股公告（SEC EDGAR）+ 互动问答；建档/查询/阅读/检索 |
 | market-data | `market_data_mcp` | `market_data_mcp/server.py` | 三市场行情（新浪单源 + 美股 iFinD 后复权/成交额）、股本、市值估算；财报/比率/概况 |
+| chart | `chart_mcp` | `chart_mcp/server.py` | 行情绘图：K线（蜡烛+成交量+MA5/10/20/60）/ 折线（单字段），PNG 落盘 `cache/_charts/` |
 
 ## MCP 注册（stdio）
 
@@ -60,11 +70,15 @@ args 指向对应包入口 `server.py`，cwd 设为**本目录**（缓存落在�
 market-data 建议显式设置环境变量 `MARKET_DATA_ROOT` 为本目录绝对路径
 （不设时以 cwd 为准，缓存与自动导出均在本目录下）。
 
+**chart 依赖 market-data**（绘图数据直接复用其 get_quote 取数），两者必须同时导出；
+用户版缺 market-data 时 chart 调用会明确报错提示。
+
 ## 批处理 CLI（stdin JSON → stdout JSON）
 
 ```bat
 echo {"tool": "query_batch", "stock_codes": ["600519"]} | python ashare_announcements_mcp\\cli.py
 echo {"tool": "get_quote_batch", "codes": ["600519.SH"], "vars": ["close"]} | python market_data_mcp\\cli.py
+echo {"tool": "get_quote_chart_batch", "codes": ["600519.SH"]} | python chart_mcp\\cli.py
 ```
 
 CLI 顶层请求字段是 `tool`，与 MCP 工具一一对应；market-data 代码必须带市场后缀
@@ -95,6 +109,7 @@ market-data 的 iFinD 通道（美股后复权/成交额/股本）需要 iFinDPy
 - 公告缓存：`cache/{股票代码}/`
 - market-data 缓存：`cache/{代码}/`（quote_daily_raw / quote_daily_hfq / quote_daily_amount / shares）
 - 超长行情自动导出：`cache/_auto_export/`
+- chart 绘图输出：`cache/_charts/`（每次调用重新绘图，PNG 文件名含代码/复权/周期/字段/日期区间）
 - 审计日志：`logs/requests.jsonl`（market-data 每次上游请求）
 """
 
@@ -115,14 +130,16 @@ def export(target: Path) -> None:
     example = ROOT / "config.example.yaml"
     if example.exists():
         shutil.copy2(example, target / "config.example.yaml")
-    requirements = "".join(pkg["requirements"] for pkg in PACKAGES.values())
+    requirements = "\n".join(
+        pkg["requirements"].strip() for pkg in PACKAGES.values()
+    ) + "\n"
     (target / "requirements.txt").write_text(requirements, encoding="utf-8")
     (target / "README.md").write_text(USER_README, encoding="utf-8")
-    print(f"已导出用户版（两个 MCP）：{target.resolve()}")
+    print(f"已导出用户版（三个 MCP：公告 + market-data + chart）：{target.resolve()}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="导出公告阅读 + market-data 双 MCP 用户版")
+    parser = argparse.ArgumentParser(description="导出公告阅读 + market-data + chart 三 MCP 用户版")
     parser.add_argument("target", type=Path, help="用户版目标目录")
     args = parser.parse_args()
     export(args.target)

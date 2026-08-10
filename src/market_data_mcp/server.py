@@ -76,6 +76,7 @@ def create_server() -> Any:
               outstanding_share/total_market_cap/float_market_cap；不传默认 close。
         adjust: raw=除权价、hfq=后复权、qfq=前复权（本地现算）。
         start_date/end_date: YYYY-MM-DD；空 = 最近 10 个交易日 / 当天。
+            start_date 传 "all"：起点不约束——end 留空 = 返回全部数据；end 指定 = 只取 ≤end 的早期数据。
         period: daily/weekly/monthly（周/月由日线本地聚合）。
         export_path: 空 = 直接返回数据（超过 200 行自动导出到缓存目录并返回路径）；
                      指定 = 导出 CSV 并返回元信息。

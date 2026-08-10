@@ -161,7 +161,8 @@ def get_quote(
     export_path: str | None = None,
 ) -> dict:
     """获取日/周/月线行情。返回 {ok, market, code, start, end, adjust, period, vars, source, notes, rows}；
-    超长自动导出 / 指定 export_path 时返回元信息不含 rows。"""
+    超长自动导出 / 指定 export_path 时返回元信息不含 rows。
+    start_date="all"：起点不约束；end 留空 = 全部数据，end 指定 = 只取 ≤end 的早期数据。"""
     try:
         mc = parse_code(code)
     except ValueError as exc:
@@ -176,8 +177,18 @@ def get_quote(
     if unknown:
         return {"ok": False, "error": f"未知字段 {unknown}（支持 {sorted(VALID_VARS)}，date 恒保留）"}
 
-    end = end_date or date.today().isoformat()
-    start = start_date or _default_start(end)
+    if start_date == "all":
+        # start=all：起点不约束 → 用哨兵起点触发全量覆盖判定与补拉（sina 全量起点）；
+        # end 留空 = 全部数据，end 指定 = 只取 ≤end 的早期数据
+        start = "1990-01-01"
+        end = end_date
+        resp_start = "all"
+        resp_end = end or "latest"
+    else:
+        end = end_date or date.today().isoformat()
+        start = start_date or _default_start(end)
+        resp_start = start
+        resp_end = end
     notes: list[str] = []
 
     # 1. 需要的字段（缓存字段名）
@@ -218,7 +229,8 @@ def get_quote(
     for f, r in results.items():
         by_field[f] = _values_by_date(r["items"], r.get("source"))
         all_dates.update(by_field[f].keys())
-    dates = sorted(d for d in all_dates if start <= d <= end)
+    dates = sorted(d for d in all_dates
+                   if (start is None or start <= d) and (end is None or d <= end))
 
     # 4. 逐行组装原始值
     raw_close = by_field.get("close", {})
@@ -305,7 +317,7 @@ def get_quote(
 
     if not out_rows:
         return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
-                "start": start, "end": end, "adjust": adjust, "period": period,
+                "start": resp_start, "end": resp_end, "adjust": adjust, "period": period,
                 "vars": vars, "source": None, "notes": notes + ["请求范围内无数据"], "rows": []}
 
     date_range = {"start": out_rows[0]["date"], "end": out_rows[-1]["date"]}
@@ -313,7 +325,7 @@ def get_quote(
     source = ",".join(sources) if sources else None
 
     # 数据起点晚于请求起点（上游数据源范围所限/新股上市）→ 通用提示，不涉及具体个股
-    if start_date and out_rows[0]["date"] > start_date:
+    if start_date and start_date != "all" and out_rows[0]["date"] > start_date:
         notes.append(f"数据自 {out_rows[0]['date']} 起（上游数据源实际可用范围）")
 
     cols = ["date"] + vars
@@ -321,21 +333,21 @@ def get_quote(
     if export_path:
         _export_csv(export_path, out_rows, cols)
         return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
-                "start": start, "end": end, "adjust": adjust, "period": period,
+                "start": resp_start, "end": resp_end, "adjust": adjust, "period": period,
                 "vars": vars, "path": export_path, "total_items": len(out_rows),
                 "date_range": date_range, "source": source, "notes": notes or None}
     if len(out_rows) > 200:
         auto_path = os.path.join(root, "cache", "_auto_export",
-                                 f"{mc.code}.{mc.suffix}_{adjust}_{period}_{start}_{end}.csv")
+                                 f"{mc.code}.{mc.suffix}_{adjust}_{period}_{start or 'all'}_{end or 'latest'}.csv")
         _export_csv(auto_path, out_rows, cols)
         return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
-                "start": start, "end": end, "adjust": adjust, "period": period,
+                "start": resp_start, "end": resp_end, "adjust": adjust, "period": period,
                 "vars": vars, "auto_exported": True, "path": auto_path,
                 "total_items": len(out_rows), "date_range": date_range,
                 "source": source, "notes": notes + [f"数据超过 200 行，已自动导出到 {auto_path}"]}
 
     return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
-            "start": start, "end": end, "adjust": adjust, "period": period,
+            "start": resp_start, "end": resp_end, "adjust": adjust, "period": period,
             "vars": vars, "source": source, "notes": notes or None, "rows": out_rows}
 
 
