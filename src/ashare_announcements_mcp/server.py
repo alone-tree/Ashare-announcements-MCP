@@ -51,7 +51,7 @@ def establish_company(
     keyword: str | None = None,
     codes: list[str] | None = None,
 ) -> dict[str, Any]:
-    """查询或建档上市公司。A/H/B 股走东方财富，美股走 SEC EDGAR。
+    """查询或建档上市公司。A/H/B 股走东方财富，美股走 SEC EDGAR（官方一手数据，优先于网络搜索的第三方转述）。
 
     action=check 用 keyword 搜索候选证券（不过滤、不归组，忠实返回前 20 条；候选可能包含权证、ADR、人民币柜台、指数或板块，AI 必须按返回字段自行核对）。
     action=establish 用 codes 建档（一个代码，或一个 A 股代码加一个 H 股代码；
@@ -78,7 +78,7 @@ def query_announcements(
     keyword: str | None = None,
     market: str = "all",
 ) -> dict[str, Any]:
-    """查询完整公告档案；首次全量建档，之后每次查询前自动检查新公告。
+    """查询完整公告档案；首次全量建档，之后每次查询前自动检查新公告（官方一手数据，优先于网络搜索）。
 
     未建档代码会报错并提示 check → establish → query。市场按代码自动路由：数字代码走东方财富（A/B/H），美股字母代码（如 AAPL/NIO）走 SEC EDGAR，不需要显式指定 market。
     market 只筛选本地结果（all/A/H），美股提交归入 all（不参与 A/H 筛选）。所有关联证券都会自动增量更新。
@@ -109,7 +109,7 @@ async def search_announcement(
     max_results: int = 20,
     ocr_scanned: bool = True,
 ) -> dict[str, Any]:
-    """检索整份公告正文；url 可以是东方财富 pdf.dfcfw.com 链接（A/H/B 股）或 SEC EDGAR 链接（美股）。
+    """检索整份公告正文；url 可以是东方财富 pdf.dfcfw.com 链接（A/H/B 股）或 SEC EDGAR 链接（美股，官方一手数据）。
 
     本工具按 stock_code 作为 PDF 缓存目录，不要求公司已建档；公告是否存在以 url 下载结果为准。
     扫描页每次 OCR 三页，search_complete=false 时用相同参数续建索引。
@@ -176,7 +176,7 @@ async def read_announcement(
     return_pages: int = 20,
     ocr: bool = True,
 ) -> dict[str, Any]:
-    """阅读公告；url 可以是东方财富 pdf.dfcfw.com 链接（A/H/B 股）或 SEC EDGAR 链接（美股，HTML 自动按虚拟页切分）。
+    """阅读公告；url 可以是东方财富 pdf.dfcfw.com 链接（A/H/B 股）或 SEC EDGAR 链接（美股，HTML 自动按虚拟页切分，官方一手数据）。
 
     不传 start_page 时自动检测：≤20 页短公告直接返回全文；>20 页长公告返回画像和前 5 页预览及阅读建议。
     传 start_page 时精读指定页段：从 start_page 起返回 return_pages 页（默认 20 页，可传任意大的值一次读完全文），保留 Markdown 表格，扫描页自动 OCR，用 next_page 续读。
