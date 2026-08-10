@@ -5,7 +5,7 @@
 
 两者共用同一数据根目录（用户版目录本身）：公告用 ASHARE_ANNOUNCEMENTS_ROOT、
 market-data 用 MARKET_DATA_ROOT 环境变量控制（不设时默认当前目录=用户版目录）。
-market-data 需要 .secrets/ifind_accounts.txt（iFinD 登录凭据，本地文件不进 git）。
+market-data 需要用户版根目录 config.yaml（iFinD 凭据等，模板 config.example.yaml，不进 git）。
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ PACKAGES = {
             "akshare>=1.18.83,<2\n"
             "pandas>=2.0,<3\n"
             "yfinance>=1.5,<2\n"
+            "pyyaml>=6.0,<7\n"
         ),
     },
 }
@@ -76,8 +77,18 @@ python -m pip install -r requirements.txt
 ```
 
 market-data 的 iFinD 通道（美股后复权/成交额/股本）需要 iFinDPy 官方 SDK：
-按官方安装包在 venv site-packages 写入 `iFinDPy.pth` 指向 SDK 目录（本机已装，
-见开发库 `.secrets/ifind_accounts.txt` 同结构凭据，用户版目录也带一份 `.secrets/`）。
+按官方安装包在 venv site-packages 写入 `iFinDPy.pth` 指向 SDK 目录（本机已装）。
+
+## 用户配置（config.yaml）
+
+本目录的 `config.example.yaml` 是配置模板：复制为 `config.yaml` 后填入你拥有的凭据，
+放进去就能用（没有的数据源留空自动跳过）。支持：
+
+- `ifind.accounts`：同花顺 iFinD 账号列表（多账号按顺序尝试登录，第一个成功即用；
+  美股后复权/成交额/股本需要它）
+- `eodhd.api_key`：EODHD API key（可选）
+
+`config.yaml` 含真实凭据，不会随 export 覆盖（export 只更新模板）。
 
 ## 缓存与导出位置
 
@@ -99,11 +110,11 @@ def export(target: Path) -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, dest)
     (target / "cache").mkdir(exist_ok=True)
-    # iFinD 凭据：用户版带一份 .secrets（本地工具目录，不进 git）
-    secrets = ROOT / ".secrets" / "ifind_accounts.txt"
-    if secrets.exists():
-        (target / ".secrets").mkdir(exist_ok=True)
-        shutil.copy2(secrets, target / ".secrets" / "ifind_accounts.txt")
+    # 配置模板：用户版带一份 config.example.yaml（真实凭据由用户复制为 config.yaml 后填写；
+    # 不覆盖用户已有的 config.yaml）
+    example = ROOT / "config.example.yaml"
+    if example.exists():
+        shutil.copy2(example, target / "config.example.yaml")
     requirements = "".join(pkg["requirements"] for pkg in PACKAGES.values())
     (target / "requirements.txt").write_text(requirements, encoding="utf-8")
     (target / "README.md").write_text(USER_README, encoding="utf-8")

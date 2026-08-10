@@ -7,6 +7,9 @@ tmp/
 .secrets/
 .codex-temp/
 
+# 用户本地配置（真实凭据，模板见 config.example.yaml）
+config.yaml
+
 # market-data 审计日志（每次上游请求，本地评估用）
 logs/
 

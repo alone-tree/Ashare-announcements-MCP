@@ -25,6 +25,7 @@ import time
 from datetime import date, timedelta
 
 import iFinDPy as ths
+import yaml
 
 from market_data_mcp import audit, cache
 from market_data_mcp.routing import MarketCode, is_market_closed
@@ -42,27 +43,45 @@ _SUFFIX_CACHE: dict[str, str] = {}
 _NYSE_CALENDAR = "212010"
 
 
-def _load_accounts(root: str) -> tuple[str, str]:
-    """从 .secrets/ifind_accounts.txt 读账号2（jdkgjt009 可用，账号1 不可用）。"""
-    path = os.path.join(root, ".secrets", "ifind_accounts.txt")
-    if not os.path.exists(path):
-        path = os.path.join(os.getcwd(), ".secrets", "ifind_accounts.txt")
-    with open(path, encoding="utf-8") as f:
-        lines = f.read().splitlines()
-    for i, l in enumerate(lines):
-        if l.startswith("账号2："):
-            return l.split("：", 1)[1].strip(), lines[i + 1].split("：", 1)[1].strip()
-    raise RuntimeError(".secrets/ifind_accounts.txt 中未找到账号2")
+def _load_accounts(root: str) -> list[tuple[str, str]]:
+    """从 config.yaml 读 iFinD 账号列表（多账号容灾：按顺序尝试登录）。
+
+    配置位置：{root}/config.yaml（root=MARKET_DATA_ROOT 或开发库根），回退 os.getcwd()。
+    格式：
+      ifind:
+        accounts:
+          - account: xxx
+            password: yyy
+    """
+    for base in (root, os.getcwd()):
+        path = os.path.join(base, "config.yaml")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+            accounts = ((config or {}).get("ifind") or {}).get("accounts") or []
+            pairs = [(str(item["account"]), str(item["password"]))
+                     for item in accounts if item.get("account") and item.get("password")]
+            if pairs:
+                return pairs
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"config.yaml 解析失败（{path}）：{exc}") from exc
+    raise RuntimeError("config.yaml 中未找到 ifind.accounts（用户版根目录/当前目录）")
 
 
 def _ensure_login(root: str) -> None:
     if _LOGIN_STATE["done"]:
         return
-    acc, pwd = _load_accounts(root)
-    code = ths.THS_iFinDLogin(acc, pwd)
-    if code != 0:
-        raise RuntimeError(f"iFinD 登录失败（errorcode={code}）")
-    _LOGIN_STATE["done"] = True
+    accounts = _load_accounts(root)
+    errors = []
+    for acc, pwd in accounts:
+        code = ths.THS_iFinDLogin(acc, pwd)
+        if code == 0:
+            _LOGIN_STATE["done"] = True
+            return
+        errors.append(f"{acc}（errorcode={code}）")
+    raise RuntimeError(f"iFinD 全部账号登录失败：{'；'.join(errors)}")
 
 
 def _clean_value(v):

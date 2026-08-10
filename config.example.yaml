@@ -1,0 +1,19 @@
+# market-data 用户配置模板
+#
+# 用法：把本文件复制为 config.yaml（用户版根目录 / 开发库根目录），填入你拥有的凭据。
+# 没有的数据源留空或删除即可，工具会自动跳过，不影响其他功能。
+# config.yaml 含真实凭据，不要提交到 git（已 gitignore）；本模板可以提交。
+#
+# 支持的凭据：
+# - ifind.accounts：同花顺 iFinD 账号列表（多账号按顺序尝试登录，第一个成功即用）
+# - eodhd.api_key：EODHD API key（付费版提供 30+ 年全历史；免费版 20 次/天、最近 1 年）
+
+ifind:
+  accounts:
+    - account: 账号1
+      password: 密码1
+    - account: 账号n
+      password: 密码n
+
+eodhd:
+  api_key: ""
