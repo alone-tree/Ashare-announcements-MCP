@@ -121,10 +121,10 @@ def test_query_batch_flattens_all_company_results(monkeypatch) -> None:
     assert [item["code"] for item in result["announcements"]] == ["A-000001", "A-000002"]
 
 
-def test_query_interactions_batch_not_applicable_is_success(monkeypatch) -> None:
+def test_query_a_share_interactions_batch_not_applicable_is_success(monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
-        "query_interactions",
+        "query_a_share_interactions",
         lambda _stock_code, **_kwargs: {
             "stock_code": "00700",
             "company_key": "00700",
@@ -136,7 +136,7 @@ def test_query_interactions_batch_not_applicable_is_success(monkeypatch) -> None
         },
     )
 
-    result = cli.dispatch({"tool": "query_interactions_batch", "stock_codes": ["00700"]})
+    result = cli.dispatch({"tool": "query_a_share_interactions_batch", "stock_codes": ["00700"]})
 
     assert result["ok"] is True
     assert result["status"] == "success"

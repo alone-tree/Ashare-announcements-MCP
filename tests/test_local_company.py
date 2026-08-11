@@ -81,10 +81,10 @@ def test_query_archive_local_supports_date_filter(monkeypatch: pytest.MonkeyPatc
     assert result["results"][0]["title"] == "招股说明书（注册稿）"
 
 
-def test_query_interactions_local_returns_not_applicable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_query_a_share_interactions_local_returns_not_applicable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(service, "load_companies", _local_registry)
 
-    result = service.query_interactions("LOCAL-YXG")
+    result = service.query_a_share_interactions("LOCAL-YXG")
 
     assert result["applicable"] is False
     assert result["matched"] == 0

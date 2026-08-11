@@ -10,12 +10,14 @@
 
 `python -m ashare_announcements_mcp.cli` 从 stdin 接收一个 JSON 请求，stdout 只返回一个 JSON 响应。CLI 与 MCP 共用公告档案、下载和 PDF 阅读模块，不维护第二套缓存。
 
-支持五个 tool（与 MCP 工具一一对应）：
+支持七个 tool（与 MCP 工具一一对应）：
 
 - `query_batch`：批量同步并查询多家公司，返回日期和关键词范围内的全部公告。
-- `inspect_batch`：批量检查 PDF 页数、文档画像、原生文本覆盖率和扫描页。
+- `query_a_share_interactions_batch`：批量查询 A 股互动问答（原 `query_interactions_batch` 改名，仅 A 股适用）。
 - `search_batch`：批量检索整份 PDF，返回命中页和短片段；默认不主动 OCR。
 - `read_batch`：批量读取指定页段；默认 `return_pages=20`、`ocr=true`。
+- `query_transcripts_batch`：批量查询美股电话会议索引/正文（参数 `period`、`force_refresh`）。
+- `search_transcripts_batch`：批量检索电话会议正文（参数 `query`）。
 
 CLI 只提供通用查询和阅读能力。按公告类型、长度和扫描比例分流的业务规则由调用方维护。
 
@@ -44,6 +46,39 @@ query_announcements(
 ### `read_announcement`
 
 不传 `start_page` 时自动检测：短公告（≤20 页）直接返回全文；长公告返回文档画像（页数、profile、扫描页、文本覆盖率、推荐动作）和前 5 页正文预览。传 `start_page` 时精读指定页段：正常页通过 PyMuPDF4LLM 尽量保留标题、段落和表格；扫描页通过 RapidOCR 恢复文字。单次最多返回 `return_pages` 页（默认 20，不设上限，可一次读完全文），使用 `next_page` 继续。
+
+### `query_transcripts`
+
+```python
+query_transcripts(
+    stock_code: str,
+    period: str | None = None,
+    force_refresh: bool = False,
+)
+```
+
+- 美股电话会议（earnings call transcript）通道，仅美股适用；其他市场返回 `applicable=false`。
+- 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`/`first_line`），首次全量同步、30 天增量更新、`force_refresh` 强制刷新。
+- 传 `period`（如 `FY2025-Q1`）：返回该财季完整正文（逐发言轮次：`author` + `text`）。
+- 索引以公司申报的 10-Q/10-K 报告期为锚（XBRL `DocumentFiscalPeriodFocus`/`DocumentFiscalYearFocus`，如 FY2026-Q1），不推算财季。
+- 正文来源 Alpha Spread（裸 UA 直连）；404 标记 `missing`，429/5xx 标记 `temporary_failed` 下次重试。
+- 上游季度标签偶尔与申报财季错位（实测 LULU 偏移一年），正文第一句会注明实际报告期，由 AI 结合正文判断，不做代码级容错。
+
+### `search_transcripts`
+
+```python
+search_transcripts(
+    stock_code: str,
+    query: str,
+)
+```
+
+- 在全部已缓存电话会议正文中检索关键词（空格=AND），返回命中财季、发言作者与上下文片段。
+- 仅美股适用；未同步过正文的财季不参与检索（先调 `query_transcripts` 全量同步）。
+
+### `query_a_share_interactions`
+
+A 股互动问答查询（原 `query_interactions` 改名，凸显 A 股范围；核心功能不变）。首次全量建档，之后增量更新；仅 A 股适用，传 H 股代码可定位关联 A 股问答，纯港股/B 股/本地公司/美股返回 `applicable=false`。
 
 ## 数据流
 
@@ -79,9 +114,12 @@ cache/{股票代码}/
   meta.json
   pdfs/{公告编号}.pdf
   extracted/{公告编号}.json
+  transcripts.json          # 电话会议索引（fiscal_quarter/report_date/status）
+  transcripts/{FY2025-Q1}.json  # 电话会议正文（逐发言轮次，meta 含 first_line）
 ```
 
 提取缓存记录 PDF 文件大小和修改时间。源文件变化或索引版本升级时自动重建。
+电话会议：正文全文缓存（每财季一篇，~50K 字符）；30 天新鲜期 + `force_refresh`；10-Q/10-K HTML 复用 `us_filings` 缓存解析 XBRL 财季字段，不重复下载。
 
 ## 依赖
 

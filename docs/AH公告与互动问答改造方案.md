@@ -628,6 +628,31 @@ post_id去重后             1697
 
 首次建档翻完所有页面；后续从第一页开始增量抓取，遇到已有 `post_id` 后停止。
 
+### 8.5 Alpha Spread 电话会议（2026-08 实测）
+
+**URL 规则**（可预测，不依赖搜索）：
+
+```text
+https://www.alphaspread.com/security/nasdaq/{ticker}/investor-relations/earnings-call/q{num}-{year}
+例：/security/nasdaq/aapl/investor-relations/earnings-call/q3-2026
+```
+
+- **market 段（nasdaq/nyse）不影响解析**：同一 ticker 两个段都返回 200，统一用 nasdaq 段即可。
+- **直连要求**：裸 UA（`Mozilla/5.0 (Windows NT 10.0; Win64; x64)`）200；**带完整浏览器指纹 header 反而 403**（Cloudflare 判定基于 header 指纹）。
+- **正文结构**：`<div class="comment">` 逐发言轮次（author + text），可结构化解析；实测 LULU Q2-2025 49 块 / 48.9K 字符、AAPL Q3-2026 54 块。页首无独立日期字段，报告期靠正文第一句开场白（如 "First Quarter 2025 Conference Call"）确认。
+- **覆盖**：实测到微型股（REFR ~$1亿）都有；未开电话会的公司（如 BRK.A）404 属正常。
+- **404 vs 限流**：404 = Alpha 明确无该季度（永久 missing，不重试）；429/5xx = 临时失败（下次重试）。实测连续探测 28 个 URL 无 429。
+
+**财季标签来源（决策：以公司申报为准，不做代码级容错）**：
+
+- 报告列表复用公告档案（`query_announcements` 的 10-Q/10-K items），10-Q/10-K HTML 复用 `us_filings` 缓存，解析 XBRL 字段 `dei:DocumentFiscalPeriodFocus`（Q1/Q2/Q3/FY）+ `dei:DocumentFiscalYearFocus`（如 2026），得财季标签 `FY2026-Q1`。
+- 10-K 的 PeriodFocus=FY 对应 Q4 电话会议。
+- **实测 6/7 公司（AAPL/NVDA/COHR/LITE/TSLA/MSFT）Alpha URL 标签与申报财季一致；LULU 偏移一年**（申报 FY2026-Q1 的正文实际是 "First Quarter 2025"）。偏移与财年结构无关（NVDA 财年同样 1 月底结束但不偏移），是 Alpha Spread 数据源自身标签问题。
+- 不做候选集探测、不做偏移试探：URL 直接按申报财季构造，错位的正文靠 first_line 保留现场证据，AI 结合正文判断（工具描述已有提示）。
+- 旧版建档缓存缺 `report_date` 字段时，从 EDGAR submissions 按 accession 补齐（上游原始字段，不推算）。
+
+**缓存**：全文缓存（每财季一篇 ~50K 字符）；30 天新鲜期 + `force_refresh`；增量只往后探测新报告期，已有且未过期不重试。
+
 ## 9. 当前代码入口与工作区状态
 
 实现前应先阅读：

@@ -120,7 +120,7 @@ def test_fetch_interaction_updates_stops_at_known_id(monkeypatch: pytest.MonkeyP
     assert meta["cache_complete"] is True
 
 
-def test_query_interactions_filters_and_keyword(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_query_a_share_interactions_filters_and_keyword(monkeypatch: pytest.MonkeyPatch) -> None:
     items = [
         _qa("1", question="回购进展如何", answer="正在推进", ),
         _qa("2", question="分红计划", answer="暂无计划"),
@@ -155,14 +155,14 @@ def test_query_interactions_filters_and_keyword(monkeypatch: pytest.MonkeyPatch)
         ),
     )
 
-    result = service.query_interactions("300308", keyword="回购", end_date="2026-07-02")
+    result = service.query_a_share_interactions("300308", keyword="回购", end_date="2026-07-02")
 
     assert result["total_interactions"] == 3
     assert result["matched"] == 1
     assert result["results"][0]["post_id"] == "1"
 
 
-def test_query_interactions_accepts_hk_code_input(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_query_a_share_interactions_accepts_hk_code_input(monkeypatch: pytest.MonkeyPatch) -> None:
     """输入关联 H 股代码也能定位 A 股互动问答。"""
     monkeypatch.setattr(
         service,
@@ -200,13 +200,13 @@ def test_query_interactions_accepts_hk_code_input(monkeypatch: pytest.MonkeyPatc
         ),
     )
 
-    result = service.query_interactions("03308")
+    result = service.query_a_share_interactions("03308")
 
     assert result["stock_code"] == "300308"
     assert result["total_interactions"] == 1
 
 
-def test_query_interactions_pure_hk_returns_not_applicable(
+def test_query_a_share_interactions_pure_hk_returns_not_applicable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -230,7 +230,7 @@ def test_query_interactions_pure_hk_returns_not_applicable(
         },
     )
 
-    result = service.query_interactions("00700")
+    result = service.query_a_share_interactions("00700")
 
     assert result["stock_code"] == "00700"
     assert result["company_key"] == "00700"

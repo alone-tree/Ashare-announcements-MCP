@@ -38,7 +38,11 @@ from ashare_announcements_mcp.service import (
     normalize_stock_code as _stock_code,
     paginate_query,
     query_archive,
-    query_interactions as query_interactions_service,
+    query_a_share_interactions as query_a_share_interactions_service,
+)
+from ashare_announcements_mcp.transcripts import (
+    query_transcripts as query_transcripts_service,
+    search_transcripts as search_transcripts_service,
 )
 
 
@@ -141,28 +145,63 @@ def _validate_pdf_url(url: str) -> None:
 
 
 @mcp.tool()
-def query_interactions(
+def query_a_share_interactions(
     stock_code: str,
     page: int = 1,
     start_date: str | None = None,
     end_date: str | None = None,
     keyword: str | None = None,
 ) -> dict[str, Any]:
-    """查询 A 股互动问答；首次全量建档，之后增量更新。
+    """查询 A 股互动问答；首次全量建档，之后增量更新。仅适用于 A 股（互动易/e互动 官方问答平台）。
 
-    传 H 股代码时，若该公司有关联 A 股，则返回对应 A 股互动问答；纯港股/B 股/本地公司返回 ok=true、applicable=false、reason 说明不适用。
+    传 H 股代码时，若该公司有关联 A 股，则返回对应 A 股互动问答；纯港股/B 股/本地公司/美股返回 ok=true、applicable=false、reason 说明不适用。
     每页固定 50 条；用 page 翻页，has_more 表示是否还有下一页。
     """
     try:
         if page < 1:
             raise ValueError("page 必须大于等于 1")
-        result = query_interactions_service(
+        result = query_a_share_interactions_service(
             stock_code,
             start_date=start_date,
             end_date=end_date,
             keyword=keyword,
         )
         return {"ok": True, **paginate_query(result, page, PAGE_SIZE)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@mcp.tool()
+def query_transcripts(
+    stock_code: str,
+    period: str | None = None,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """查询美股电话会议（earnings call transcript）索引与正文（仅美股适用）。
+
+    不传 period：返回全部财季索引（fiscal_quarter/report_date/status），30 天自动增量同步新财季，force_refresh 强制刷新。
+    传 period（如 FY2025-Q1）：返回该财季完整正文（逐发言轮次：作者+内容）。
+    索引以公司申报的 10-Q/10-K 报告期为锚：报告列表与 HTML 复用公告档案，不重复下载。
+    注：上游数据源（Alpha Spread）的季度标签偶尔与公司申报财季错位（如部分公司偏移一年），
+    正文第一句会注明实际报告期（如 "First Quarter 2025"），请以正文为准。
+    """
+    try:
+        return {"ok": True, **query_transcripts_service(stock_code, period, force_refresh)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@mcp.tool()
+def search_transcripts(
+    stock_code: str,
+    query: str,
+) -> dict[str, Any]:
+    """检索美股电话会议正文；在全部已缓存财季中定位关键词，返回命中财季与片段（仅美股适用）。
+
+    字面关键词检索（空格=AND）。结果含发言作者与上下文片段，可用于跨季度对比管理层口径。
+    """
+    try:
+        return {"ok": True, **search_transcripts_service(stock_code, query)}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

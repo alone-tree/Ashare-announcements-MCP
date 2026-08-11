@@ -19,7 +19,7 @@ from ashare_announcements_mcp.company import (
     check_company,
     establish_company as establish_securities,
 )
-from ashare_announcements_mcp.service import query_archive, query_interactions
+from ashare_announcements_mcp.service import query_a_share_interactions, query_archive
 
 
 def _status(items: list[dict[str, Any]]) -> str:
@@ -171,7 +171,7 @@ def _map_announcements(
     return _batch_response(action, outputs, result_key)
 
 
-def query_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
+def query_a_share_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
     stock_codes = request.get("stock_codes")
     if not isinstance(stock_codes, list) or not stock_codes:
         raise ValueError("stock_codes 必须是非空数组")
@@ -181,7 +181,7 @@ def query_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
     for value in stock_codes:
         stock_code = str(value)
         try:
-            result = query_interactions(
+            result = query_a_share_interactions(
                 stock_code,
                 start_date=request.get("start_date"),
                 end_date=request.get("end_date"),
@@ -193,7 +193,7 @@ def query_interactions_batch(request: dict[str, Any]) -> dict[str, Any]:
             company = {"ok": False, "stock_code": stock_code, "error": str(exc), "results": []}
         companies.append(company)
 
-    response = _batch_response("query_interactions_batch", companies, "companies")
+    response = _batch_response("query_a_share_interactions_batch", companies, "companies")
     response["interactions"] = interactions
     response["matched"] = len(interactions)
     return response
@@ -215,12 +215,69 @@ def establish_company_action(request: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"未知 action：{action}")
 
 
+def query_transcripts_batch(request: dict[str, Any]) -> dict[str, Any]:
+    from ashare_announcements_mcp.transcripts import query_transcripts
+
+    stock_codes = request.get("stock_codes")
+    if not isinstance(stock_codes, list) or not stock_codes:
+        raise ValueError("stock_codes 必须是非空数组")
+
+    companies: list[dict[str, Any]] = []
+    transcripts: list[dict[str, Any]] = []
+    period = request.get("period")
+    force_refresh = bool(request.get("force_refresh", False))
+    for value in stock_codes:
+        stock_code = str(value)
+        try:
+            result = query_transcripts(stock_code, period=period, force_refresh=force_refresh)
+            company = {"ok": True, **result}
+            transcripts.extend(result.get("results") or [])
+        except Exception as exc:
+            company = {"ok": False, "stock_code": stock_code, "error": str(exc), "results": []}
+        companies.append(company)
+
+    response = _batch_response("query_transcripts_batch", companies, "companies")
+    response["transcripts"] = transcripts
+    response["matched"] = len(transcripts)
+    return response
+
+
+def search_transcripts_batch(request: dict[str, Any]) -> dict[str, Any]:
+    from ashare_announcements_mcp.transcripts import search_transcripts
+
+    stock_codes = request.get("stock_codes")
+    if not isinstance(stock_codes, list) or not stock_codes:
+        raise ValueError("stock_codes 必须是非空数组")
+    query = request.get("query")
+    if not query:
+        raise ValueError("query 不能为空")
+
+    companies: list[dict[str, Any]] = []
+    transcripts: list[dict[str, Any]] = []
+    for value in stock_codes:
+        stock_code = str(value)
+        try:
+            result = search_transcripts(stock_code, query)
+            company = {"ok": True, **result}
+            transcripts.extend(result.get("results") or [])
+        except Exception as exc:
+            company = {"ok": False, "stock_code": stock_code, "error": str(exc), "results": []}
+        companies.append(company)
+
+    response = _batch_response("search_transcripts_batch", companies, "companies")
+    response["transcripts"] = transcripts
+    response["matched"] = len(transcripts)
+    return response
+
+
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "establish_company": establish_company_action,
     "query_batch": query_batch,
-    "query_interactions_batch": query_interactions_batch,
+    "query_a_share_interactions_batch": query_a_share_interactions_batch,
     "search_batch": search_batch,
     "read_batch": read_batch,
+    "query_transcripts_batch": query_transcripts_batch,
+    "search_transcripts_batch": search_transcripts_batch,
 }
 
 

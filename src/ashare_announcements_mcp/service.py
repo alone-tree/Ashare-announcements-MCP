@@ -409,13 +409,13 @@ def sync_interactions(code: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         raise RuntimeError(f"无法建立完整互动问答档案：{exc}") from exc
 
 
-def query_interactions(
+def query_a_share_interactions(
     stock_code: str,
     start_date: str | None = None,
     end_date: str | None = None,
     keyword: str | None = None,
 ) -> dict[str, Any]:
-    """查询互动问答；纯港股返回不适用。日期按回答时间筛选。"""
+    """查询 A 股互动问答；纯港股返回不适用。日期按回答时间筛选。"""
     start = optional_date(start_date, "start_date")
     end = optional_date(end_date, "end_date")
     if start and end and start > end:
