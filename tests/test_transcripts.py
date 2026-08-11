@@ -9,19 +9,12 @@ import pytest
 from ashare_announcements_mcp import transcripts
 
 
-def _report(form: str, report_date: str, accession: str, url: str = "https://x/") -> dict[str, Any]:
+def _report(form: str, report_date: str, accession: str) -> dict[str, Any]:
     return {
         "form": form,
         "report_date": report_date,
         "accession": accession,
-        "url": url,
     }
-
-
-class _FakeResponse:
-    def __init__(self, status_code: int, text: str) -> None:
-        self.status_code = status_code
-        self.text = text
 
 
 def _alpha_html(first_line: str = "First Quarter 2025 Conference Call") -> str:
@@ -41,42 +34,83 @@ def _alpha_html(first_line: str = "First Quarter 2025 Conference Call") -> str:
         comment("Operator", first_line)
         + comment("Tim Cook", "We delivered record revenue.")
         + comment("Analyst", "Question about guidance.")
+        + comment("Operator", "Thank you.")
     )
 
 
-def test_fiscal_fields_from_html(monkeypatch: pytest.MonkeyPatch) -> None:
-    html = (
-        "<html><body>"
-        "<dei:DocumentFiscalPeriodFocus>Q1</dei:DocumentFiscalPeriodFocus>"
-        "<dei:DocumentFiscalYearFocus>2026</dei:DocumentFiscalYearFocus>"
-        "<dei:DocumentPeriodEndDate>May 3, 2026</dei:DocumentPeriodEndDate>"
-        "</body></html>"
-    )
-    monkeypatch.setattr(
-        transcripts,
-        "cache_filing_html",
-        lambda _code, _accn, _url: _tmp_html(monkeypatch, html),
-    )
+def test_add_months() -> None:
+    from datetime import date
 
-    fields = transcripts._fiscal_fields("AAPL", "0001", "https://sec/x")
-
-    assert fields["period"] == "Q1"
-    assert fields["year"] == "2026"
-    assert fields["end"] == "May 3, 2026"
+    assert transcripts._add_months(date(2026, 3, 31), -3) == date(2025, 12, 31)
+    assert transcripts._add_months(date(2026, 3, 31), -6) == date(2025, 9, 30)
+    assert transcripts._add_months(date(2026, 3, 31), -9) == date(2025, 6, 30)
+    assert transcripts._add_months(date(2026, 6, 30), 3) == date(2026, 9, 30)
 
 
-def _tmp_html(monkeypatch: pytest.MonkeyPatch, html: str):
-    import tempfile
-    from pathlib import Path
+def test_derive_quarters_anchors_on_latest_10k() -> None:
+    """MSFT 财年 6 月底结束：最近 10-K 2026-06-30 → FY2026，往前推 FY2025/2024…"""
+    reports = [
+        _report("10-K", "2024-06-30", "A1"),
+        _report("10-Q", "2024-09-30", "A2"),
+        _report("10-Q", "2024-12-31", "A3"),
+        _report("10-Q", "2025-03-31", "A4"),
+        _report("10-K", "2025-06-30", "A5"),
+        _report("10-Q", "2025-09-30", "A6"),
+        _report("10-Q", "2025-12-31", "A7"),
+        _report("10-Q", "2026-03-31", "A8"),
+        _report("10-K", "2026-06-30", "A9"),
+    ]
+    quarters = transcripts._derive_quarters(reports)
+    by_date = {q["report_date"]: q for q in quarters}
 
-    tmp = Path(tempfile.mkdtemp()) / "10q.html"
-    tmp.write_text(html, encoding="utf-8")
-    return tmp
+    assert by_date["2026-06-30"]["fiscal_quarter"] == "FY2026-FY"
+    assert by_date["2026-03-31"]["fiscal_quarter"] == "FY2026-Q3"
+    assert by_date["2025-12-31"]["fiscal_quarter"] == "FY2026-Q2"
+    assert by_date["2025-09-30"]["fiscal_quarter"] == "FY2026-Q1"
+    assert by_date["2025-06-30"]["fiscal_quarter"] == "FY2025-FY"
+    assert by_date["2024-06-30"]["fiscal_quarter"] == "FY2024-FY"
+
+
+def test_derive_quarters_respects_min_year() -> None:
+    """早期报告期（<2018 财年）不应被推算（Alpha 无数据）。"""
+    reports = [
+        _report("10-K", "2000-06-30", "O1"),
+        _report("10-K", "2024-06-30", "A1"),
+        _report("10-K", "2025-06-30", "A2"),
+    ]
+    quarters = transcripts._derive_quarters(reports)
+    # 财季标签 FY 年份 ≥ 2018（FY2018-Q1 报告期在 2017 自然年属正常）
+    years = {int(q["fiscal_quarter"][2:6]) for q in quarters}
+    assert all(y >= 2018 for y in years)
+    # 2000 年报告期被忽略
+    assert "2000-06-30" not in {q["report_date"] for q in quarters}
+
+
+def test_derive_quarters_handles_new_fiscal_q1_after_latest_10k() -> None:
+    """最新 10-K 之后还有新财年 Q1（如最新披露报告期晚于锚点）。"""
+    reports = [
+        _report("10-K", "2025-06-30", "A1"),
+        _report("10-Q", "2025-09-30", "A2"),
+    ]
+    quarters = transcripts._derive_quarters(reports)
+    by_date = {q["report_date"]: q for q in quarters}
+    assert by_date["2025-09-30"]["fiscal_quarter"] == "FY2026-Q1"
+
+
+def test_derive_quarters_no_10k_falls_back_to_latest() -> None:
+    """无 10-K（刚上市只有 10-Q）：以最新报告期为锚。"""
+    reports = [
+        _report("10-Q", "2026-03-31", "N1"),
+        _report("10-Q", "2026-06-30", "N2"),
+    ]
+    quarters = transcripts._derive_quarters(reports)
+    # 最新 2026-06-30 视为该财年 Q3（anchor 估算）
+    assert quarters  # 不崩溃，返回非空
 
 
 def test_parse_comments() -> None:
     comments = transcripts._parse_comments(_alpha_html())
-    assert len(comments) == 2
+    assert len(comments) == 4
     assert comments[0]["author"] == "Operator"
     assert "record revenue" in comments[1]["text"]
 
@@ -89,60 +123,38 @@ def test_build_alpha_url() -> None:
     )
 
 
-def test_sync_transcripts_full_sync(monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory) -> None:
+def test_sync_transcripts_fetches_derived_quarters(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     reports = [
-        _report("10-Q", "2025-08-03", "ACC1"),
-        _report("10-Q", "2025-11-02", "ACC2"),
-        _report("10-K", "2026-02-01", "ACC3"),
+        _report("10-K", "2025-06-30", "A1"),
+        _report("10-Q", "2025-09-30", "A2"),
+        _report("10-Q", "2025-12-31", "A3"),
+        _report("10-Q", "2026-03-31", "A4"),
+        _report("10-K", "2026-06-30", "A5"),
     ]
+    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
+    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
     monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports, "meta": {}})
     monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
     monkeypatch.setattr(
         transcripts,
-        "cache_filing_html",
-        lambda _code, accn, _url: _tmp_html_for_accn(monkeypatch, accn),
-    )
-    monkeypatch.setattr(
-        transcripts,
         "_fetch_alpha",
-        lambda url: _fake_alpha_for_url(url),
+        lambda url: (200, _alpha_html("Earnings Conference Call")),
     )
     monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
     monkeypatch.setattr(transcripts, "time", _FakeTime())
 
     result = transcripts.sync_transcripts("AAPL", "AAPL")
 
-    assert result["new"] == 3
+    assert result["new"] == 5
     items = result["items"]
-    # 10-K (FY) → Q4
-    fy_item = [it for it in items if it["form"] == "10-K"][0]
-    assert fy_item["fiscal_quarter"] == "FY2025-FY"
-    assert fy_item["status"] == "ok"
-    # 10-Q 用 URL 里 q 编号
-    assert any(it["fiscal_quarter"] == "FY2026-Q3" for it in items)
+    fiscal_quarters = {it["fiscal_quarter"] for it in items}
+    assert fiscal_quarters == {"FY2025-FY", "FY2026-Q1", "FY2026-Q2", "FY2026-Q3", "FY2026-FY"}
+    assert all(it["status"] == "ok" for it in items)
 
 
 class _FakeTime:
     def sleep(self, _seconds: float) -> None:
         return None
-
-
-def _tmp_html_for_accn(monkeypatch: pytest.MonkeyPatch, accn: str):
-    period_map = {"ACC1": ("Q2", "2026"), "ACC2": ("Q3", "2026"), "ACC3": ("FY", "2025")}
-    period, year = period_map.get(accn, ("Q1", "2026"))
-    html = (
-        f"<dei:DocumentFiscalPeriodFocus>{period}</dei:DocumentFiscalPeriodFocus>"
-        f"<dei:DocumentFiscalYearFocus>{year}</dei:DocumentFiscalYearFocus>"
-    )
-    return _tmp_html(monkeypatch, html)
-
-
-def _fake_alpha_for_url(url: str):
-    if "q4-2025" in url:
-        return (200, _alpha_html("Fourth Quarter 2025 Financial Results"))
-    if "404" in url:
-        return (404, "not found")
-    return (200, _alpha_html("Earnings Conference Call"))
 
 
 def test_query_transcripts_not_applicable_for_hk(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,7 +174,7 @@ def test_query_transcripts_by_period(monkeypatch: pytest.MonkeyPatch) -> None:
     items = [
         {
             "fiscal_quarter": "FY2026-Q2",
-            "report_date": "2025-08-03",
+            "report_date": "2025-12-31",
             "form": "10-Q",
             "status": "ok",
             "first_line": "Second Quarter 2025",
@@ -174,7 +186,7 @@ def test_query_transcripts_by_period(monkeypatch: pytest.MonkeyPatch) -> None:
         "resolve_company",
         lambda code: (code, [{"code": "AAPL", "market": "US", "name": "Apple"}]),
     )
-    monkeypatch.setattr(transcripts, "sync_transcripts", lambda _c, _t, **kw: {"items": items, "new": 0, "cache_hit": False})
+    monkeypatch.setattr(transcripts, "sync_transcripts", lambda _c, _t, **kw: {"items": items, "new": 0})
     monkeypatch.setattr(
         transcripts,
         "Path",
@@ -203,7 +215,7 @@ def test_search_transcripts_finds_keyword(monkeypatch: pytest.MonkeyPatch) -> No
     items = [
         {
             "fiscal_quarter": "FY2026-Q2",
-            "report_date": "2025-08-03",
+            "report_date": "2025-12-31",
             "status": "ok",
             "body_file": "BODY",
         }
