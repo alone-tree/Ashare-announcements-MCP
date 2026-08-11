@@ -18,7 +18,7 @@ from typing import Any, Callable
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from chart_mcp.service import get_quote_chart
+from market_data_chart.service import get_quote_chart
 
 
 def _data_root() -> str:
@@ -51,7 +51,8 @@ def get_quote_chart_batch(request: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("codes 必须是非空数组")
 
     common = {k: request.get(k) for k in
-              ("adjust", "start_date", "end_date", "period", "log_scale", "field")}
+              ("adjust", "start_date", "end_date", "period", "log_scale", "field",
+               "events", "keypoints", "drawdown_threshold")}
     items = []
     for value in codes:
         code = str(value)

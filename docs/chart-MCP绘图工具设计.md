@@ -1,8 +1,22 @@
-# chart MCP 绘图工具 —— 任务交接文档
+# market-data-chart 绘图工具 —— 任务交接文档
 
-> 2026-08-10 由子柯与 Hermes（grill-me 逐项对齐）定稿。
+> 2026-08-10 由子柯与 Hermes（grill-me 逐项对齐）定稿；2026-08-11 改名 market-data-chart + 事件标注/高低点能力。
 > 本文档是接手 AI 的**唯一交接物**：背景、目标、决策与考量都在这里；
 > 代码细节请自己读仓库，本文档只提示"看哪里"。
+
+## 〇、2026-08-11 更新（改名 + 新能力）
+
+1. **改名**：`chart_mcp` → `market_data_chart`（包目录 + import + FastMCP 名 `market-data-chart`），
+   与 market-data 命名对称（体现紧密关联）。export.py / AGENTS.md / 测试 / 用户版 README 同步。
+2. **事件标注（events 参数）**：K线/折线都支持。输入：CSV 文件路径（date,description 两列，
+   兼容公告研究报告 `events/{代码}_{简称}_事件.csv` 约定）或 JSON 数组 `[{date, description}]`。
+   绘制：绿色虚线 axvline + 顶部按 offsets 垂直错开文字标签（防重叠），事件日期匹配到
+   最近一个 ≥ 事件日的交易日。
+3. **高低点标注（keypoints + drawdown_threshold）**：**仅折线图**（K线传 keypoints=true 报错）。
+   自动提取回撤超过 drawdown_threshold（默认 0.30=30%）的阶段前高（peak 绿）/低点（trough 红），
+   标注价格数字。提取逻辑移植自 price-insight `_extract_price_keypoints`。
+   **注意**：日线长历史（如 3000+ 行）在低阈值下会标出大量点（10% 阈值 300308 有 54 点），
+   AI 使用时应调高阈值或用较短区间控制密度。
 
 ## 一、背景：为什么要做这个
 

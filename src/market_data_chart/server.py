@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""chart MCP 服务器：行情绘图（三 MCP 一体的第三块）。
+"""market-data-chart MCP 服务器：行情绘图（三 MCP 一体的第三块，与 market-data 紧密关联）。
 
 工具：
-- get_quote_chart: K线（蜡烛+成交量+MA5/10/20/60）/ 折线（单字段）行情图 PNG
+- get_quote_chart: K线（蜡烛+成交量+MA5/10/20/60）/ 折线（单字段）行情图 PNG；
+  事件标注（CSV/JSON）、折线高低点自动标注（回撤阈值）
 
 代码强制市场后缀（300308.SZ / 00700.HK / AAPL.US），数据链路复用
 market-data MCP 的 get_quote()（同仓库同 venv，import 直接调用，不复制取数代码）。
@@ -33,7 +34,7 @@ try:
 except Exception:  # 兼容 mcp 版本差异
     pass
 
-from chart_mcp.service import get_quote_chart as get_quote_chart_service
+from market_data_chart.service import get_quote_chart as get_quote_chart_service
 
 
 def _data_root() -> str:
@@ -53,7 +54,7 @@ def _wrap(fn):
 
 
 def create_server() -> Any:
-    mcp = FastMCP("chart")
+    mcp = FastMCP("market-data-chart")
 
     @mcp.tool()
     def get_quote_chart(
@@ -64,6 +65,9 @@ def create_server() -> Any:
         period: str = "daily",
         log_scale: bool = False,
         field: str | None = None,
+        events: str | list | None = None,
+        keypoints: bool = False,
+        drawdown_threshold: float = 0.30,
     ) -> dict[str, Any]:
         """绘制行情图（K线或折线），输出一张 PNG，返回文件路径（A股/北交所/港股/美股）。
 
@@ -77,13 +81,20 @@ def create_server() -> Any:
         log_scale: 对数坐标；对 K线/折线/成交量副图都生效，数据含负值或 0 自动退回普通坐标。
         field: 不传 = K线（蜡烛图 + 成交量副图 + MA5/10/20/60 均线）；传 open/high/low/close
             任一 = 单字段走势折线（不带副图、不带均线）。
+        events: 事件标注（K线/折线都支持）——CSV 文件路径（date,description 两列，
+            兼容 events/{代码}_{简称}_事件.csv 约定）或 JSON 数组 [{date, description}]。
+            图上画绿色竖线 + 顶部错开文字标签，事件日期匹配到最近一个 >= 事件日的交易日。
+        keypoints: 高低点自动标注（仅折线图；K线传 true 报错）——自动提取回撤超过
+            drawdown_threshold 的阶段前高（绿）/低点（红）并标注价格数字。
+        drawdown_threshold: 回撤阈值（0~1，默认 0.30 = 30%），仅 keypoints=true 时生效。
 
-        返回 {ok, path, code, chart_type, start, end, period, adjust, rows}；
+        返回 {ok, path, code, chart_type, start, end, period, adjust, rows, notes}；
         path 为 PNG 文件路径，图片内容需自行读取。失败 {ok:false, error}。
         """
         return _wrap(get_quote_chart_service)(
             _data_root(), code, adjust=adjust, start_date=start_date,
             end_date=end_date, period=period, log_scale=log_scale, field=field,
+            events=events, keypoints=keypoints, drawdown_threshold=drawdown_threshold,
         )
 
     return mcp

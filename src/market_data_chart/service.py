@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""chart MCP 绘图服务：K线/折线行情图（三 MCP 一体的第三块）。
+"""market-data-chart MCP 绘图服务：K线/折线行情图（三 MCP 一体的第三块，与 market-data 紧密关联）。
 
 数据链路：直接 import 调用 market_data_mcp.service.get_quote()，不复制取数代码；
 绘图层完全不操心数据（有缓存用缓存，没缓存由 get_quote 自动补拉）。
@@ -8,6 +8,8 @@
 - 红涨绿跌（A股口径）
 - MA5/10/20/60 按当前周期计算（周图 MA5 = 5 周均线）；均线数据不足不绘制
 - log_scale 对 K线/折线/成交量副图都生效；数据含负值或 0 时退回普通坐标
+- 事件标注（events：CSV 路径或 JSON 数组）K线/折线都支持；axvline + 顶部错开文字
+- 高低点标注（keypoints，仅折线图）：自动提取回撤阶段前高/低点，按回撤阈值过滤
 - 每次调用都重新绘图（不按参数做图缓存复用），PNG 落盘 {root}/cache/_charts/
 - 只返回文件路径，不返回图片内容
 """
@@ -158,6 +160,139 @@ def _format_x_ticks(ax, rows: list[dict]) -> None:
     ax.set_xlim(-0.8, n - 0.2)
 
 
+def _parse_events(events: str | list | None) -> list[dict]:
+    """解析事件标注输入：CSV 文件路径 或 JSON 数组 [{date, description}]。
+
+    CSV 格式（兼容公告研究报告的 events/{代码}_{简称}_事件.csv 约定）：
+        date,description
+        2024-09-24,政策利好发布
+    返回规范化 [{date: "YYYY-MM-DD", description: str}, ...]；非法条目跳过。
+    """
+    if not events:
+        return []
+    if isinstance(events, list):
+        out: list[dict] = []
+        for item in events:
+            if not isinstance(item, dict):
+                continue
+            d = str(item.get("date") or item.get("d") or "").strip()
+            desc = str(item.get("description") or item.get("desc") or "").strip()
+            if d and desc:
+                out.append({"date": d[:10], "description": desc})
+        return out
+    path = str(events)
+    if not os.path.isfile(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            d = str(row.get("date") or "").strip()
+            desc = str(row.get("description") or row.get("desc") or "").strip()
+            if d and desc:
+                out.append({"date": d[:10], "description": desc})
+    return out
+
+
+def _draw_events(ax, rows: list[dict], events: list[dict],
+                 top_frac: float = 0.97) -> None:
+    """事件标注：axvline + 数据点 + 顶部错开文字标签（K线/折线通用）。
+
+    事件日期匹配到最近一个 >= 事件日的交易日；标签按事件序号垂直错开避免重叠。
+    """
+    if not events or not rows:
+        return
+    dates = [str(r.get("date", ""))[:10] for r in rows]
+    # 事件日期 → 交易日下标（取 >= 事件日的最早交易日）
+    event_idx: list[tuple[int, str]] = []
+    for ev in events:
+        ed = ev["date"]
+        for i, d in enumerate(dates):
+            if d >= ed:
+                event_idx.append((i, ev["description"]))
+                break
+    offsets = [0.04, -0.05, 0.09, -0.10, 0.02, -0.03, 0.12, -0.13]
+    for i, (idx, desc) in enumerate(event_idx):
+        ax.axvline(x=idx, color="#59A14F", linewidth=0.6, linestyle="--", alpha=0.8)
+        offset = offsets[i % len(offsets)]
+        ax.annotate(
+            desc,
+            xy=(idx, 0.5), xytext=(idx, top_frac + offset),
+            xycoords=("data", "axes fraction"),
+            fontsize=7, ha="center", va="center",
+            bbox=dict(boxstyle="round,pad=0.2", facecolor="#D4E8C2",
+                      edgecolor="#8FBC8F", alpha=0.85),
+            arrowprops=dict(arrowstyle="-", color="gray", lw=0.3),
+            zorder=6,
+        )
+
+
+def _extract_keypoints(values: list[float | None],
+                       threshold: float) -> list[tuple[int, float, str]]:
+    """提取回撤关键点（仅折线图用）：每轮回撤的阶段前高 peak + 最大回撤低点 trough。
+
+    基于 price-insight 的 peak/trough 扫描：从每个峰后找最大回撤点，
+    回撤 >= threshold 才记录；恢复到峰高后继续下一轮。
+    返回 [(index, value, kind), ...]；kind ∈ peak / trough。
+    """
+    prices = [v for v in values if v is not None]
+    if len(prices) < 2:
+        return []
+    # 保留原始下标（可能有 None 段，取非空值的原下标）
+    idxs = [i for i, v in enumerate(values) if v is not None]
+    n = len(prices)
+    points: list[tuple[int, float, str]] = []
+    i = 0
+    while i < n - 1:
+        peak_idx = i
+        while peak_idx + 1 < n and prices[peak_idx + 1] >= prices[peak_idx]:
+            peak_idx += 1
+        if peak_idx >= n - 1:
+            break
+        trough_idx = peak_idx + 1
+        recovery_idx = None
+        k = peak_idx + 1
+        while k < n:
+            if prices[k] < prices[trough_idx]:
+                trough_idx = k
+            if prices[k] >= prices[peak_idx]:
+                recovery_idx = k
+                break
+            k += 1
+        if trough_idx > peak_idx and prices[trough_idx] < prices[peak_idx]:
+            drawdown = prices[trough_idx] / prices[peak_idx] - 1.0
+            if drawdown <= -threshold:
+                points.append((idxs[peak_idx], float(prices[peak_idx]), "peak"))
+                points.append((idxs[trough_idx], float(prices[trough_idx]), "trough"))
+        if recovery_idx is None:
+            break
+        i = recovery_idx
+    return points
+
+
+def _draw_keypoints(ax, rows: list[dict], values: list[float | None],
+                    keypoints: bool, threshold: float) -> list[str]:
+    """折线图高低点标注：peak 绿 / trough 红，标注价格数字。
+
+    返回 notes（如阈值调整提示）。
+    """
+    if not keypoints:
+        return []
+    points = _extract_keypoints(values, threshold)
+    if not points:
+        return [f"未找到回撤超过 {threshold:.0%} 的高低点，未标注"]
+    for idx, val, kind in points:
+        color = "#16a34a" if kind == "peak" else "#dc2626"
+        ax.scatter([idx], [val], s=22, color=color, zorder=6,
+                   edgecolors="white", linewidths=0.6)
+        ax.annotate(
+            f"{val:,.0f}",
+            xy=(idx, val), xytext=(4, 6), textcoords="offset points",
+            fontsize=8, color=color,
+            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.7),
+        )
+    return []
+
+
 def get_quote_chart(
     root: str,
     code: str,
@@ -167,6 +302,9 @@ def get_quote_chart(
     period: str = "daily",
     log_scale: bool = False,
     field: str | None = None,
+    events: str | list | None = None,
+    keypoints: bool = False,
+    drawdown_threshold: float = 0.30,
 ) -> dict:
     """绘制行情图（K线或折线），PNG 落盘 {root}/cache/_charts/，返回文件路径。
 
@@ -177,8 +315,12 @@ def get_quote_chart(
     period: daily/weekly/monthly（周/月由 get_quote 按日线聚合，MA 按当前周期计算）。
     log_scale: 对数坐标；对 K线/折线/成交量副图都生效，数据含负值或 0 自动退回普通坐标。
     field: 不传 = K线（蜡烛+成交量+MA5/10/20/60）；传 open/high/low/close 任一 = 单字段折线（无均线无副图）。
+    events: 事件标注（K线/折线都支持）——CSV 文件路径 或 JSON 数组 [{date, description}]。
+        CSV 兼容 events/{代码}_{简称}_事件.csv 约定（date,description 两列）。
+    keypoints: 高低点自动标注（仅折线图；K线传了报错）——自动提取回撤阶段前高/低点并标价格数字。
+    drawdown_threshold: 回撤阈值（0~1，默认 0.30 = 30%），回撤超过该值才标注高低点（keypoints=on 时生效）。
 
-    返回 {ok, path, code, chart_type, start, end, period, adjust, field, notes}；失败 {ok:false, error}。
+    返回 {ok, path, code, chart_type, start, end, period, adjust, field, rows, notes}；失败 {ok:false, error}。
     """
     try:
         _ensure_mpl()
@@ -187,6 +329,13 @@ def get_quote_chart(
         if field is not None and field not in ("open", "high", "low", "close"):
             return {"ok": False,
                     "error": f"field 仅支持 open/high/low/close（折线模式），不传 field 为 K线"}
+
+        if keypoints and field is None:
+            return {"ok": False,
+                    "error": "keypoints 高低点标注仅支持折线图（需传 field=open/high/low/close 之一），K线不支持"}
+
+        if not (0 < drawdown_threshold < 1):
+            return {"ok": False, "error": "drawdown_threshold 必须在 0~1 之间（如 0.30 = 30%）"}
 
         if get_quote_service is None:
             return {"ok": False,
@@ -211,6 +360,9 @@ def get_quote_chart(
 
         notes: list[str] = []
         chart_type = "line" if field is not None else "kline"
+        event_list = _parse_events(events)
+        if events and not event_list:
+            notes.append("events 解析为空（文件不存在或条目非法），未标注")
 
         if chart_type == "line":
             fig, ax = plt.subplots(figsize=_FIGSIZE, dpi=_DPI)
@@ -221,6 +373,10 @@ def get_quote_chart(
             if log_scale and not log_on:
                 notes.append("数据含非正值，对数坐标退回普通坐标")
             _format_x_ticks(ax, rows)
+            if event_list:
+                _draw_events(ax, rows, event_list)
+            if keypoints:
+                notes.extend(_draw_keypoints(ax, rows, values, True, drawdown_threshold))
             ax.set_title(f"{code} {field.upper()} {period}（{adjust}）", fontsize=12)
             ax.grid(True, color=_GRID, linewidth=0.6)
             ax.set_ylabel(field.upper())
@@ -247,6 +403,8 @@ def get_quote_chart(
             else:
                 notes.append("无有效收盘价，均线未绘制")
             _format_x_ticks(ax, rows)
+            if event_list:
+                _draw_events(ax, rows, event_list)
             vol_log = _draw_volume(ax_vol, volumes, closes, log_scale)
             if log_scale and not log_on:
                 notes.append("价格数据含非正值，对数坐标退回普通坐标")

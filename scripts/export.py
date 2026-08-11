@@ -2,7 +2,7 @@
 
 - ashare_announcements_mcp：A股/港股/美股公告阅读（东财 + SEC EDGAR）
 - market_data_mcp：三市场行情/财报/指标/概况（新浪/iFinD/东财）
-- chart_mcp：行情绘图（K线/折线，复用 market-data 取数）
+- market_data_chart：行情绘图（K线/折线，复用 market-data 取数，事件标注/高低点）
 
 三者共用同一数据根目录（用户版目录本身）：公告用 ASHARE_ANNOUNCEMENTS_ROOT、
 market-data 用 MARKET_DATA_ROOT 环境变量控制（不设时默认当前目录=用户版目录）。
@@ -43,8 +43,8 @@ PACKAGES = {
             "pyyaml>=6.0,<7\n"
         ),
     },
-    "chart_mcp": {
-        "source": ROOT / "src" / "chart_mcp",
+    "market_data_chart": {
+        "source": ROOT / "src" / "market_data_chart",
         "requirements": (
             "mcp>=1.10,<2\n"
             "matplotlib>=3.7,<4\n"
@@ -60,7 +60,7 @@ USER_README = """# 投资数据 MCP（用户版）：公告阅读 + market-data 
 |---|---|---|---|
 | A股公告阅读 | `ashare_announcements_mcp` | `ashare_announcements_mcp/server.py` | A/H/B 股公告（东财）+ 美股公告（SEC EDGAR）+ 互动问答；建档/查询/阅读/检索 |
 | market-data | `market_data_mcp` | `market_data_mcp/server.py` | 三市场行情（新浪单源 + 美股 iFinD 后复权/成交额）、股本、市值估算；财报/比率/概况 |
-| chart | `chart_mcp` | `chart_mcp/server.py` | 行情绘图：K线（蜡烛+成交量+MA5/10/20/60）/ 折线（单字段），PNG 落盘 `cache/_charts/` |
+| market-data-chart | `market_data_chart` | `market_data_chart/server.py` | 行情绘图：K线（蜡烛+成交量+MA5/10/20/60）/ 折线（单字段），事件标注（CSV/JSON）、折线高低点标注，PNG 落盘 `cache/_charts/` |
 
 ## MCP 注册（stdio）
 
@@ -78,7 +78,7 @@ market-data 建议显式设置环境变量 `MARKET_DATA_ROOT` 为本目录绝对
 ```bat
 echo {"tool": "query_batch", "stock_codes": ["600519"]} | python ashare_announcements_mcp\\cli.py
 echo {"tool": "get_quote_batch", "codes": ["600519.SH"], "vars": ["close"]} | python market_data_mcp\\cli.py
-echo {"tool": "get_quote_chart_batch", "codes": ["600519.SH"]} | python chart_mcp\\cli.py
+echo {"tool": "get_quote_chart_batch", "codes": ["600519.SH"]} | python market_data_chart\\cli.py
 ```
 
 CLI 顶层请求字段是 `tool`，与 MCP 工具一一对应；market-data 代码必须带市场后缀

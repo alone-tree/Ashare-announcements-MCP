@@ -18,7 +18,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from chart_mcp import service as chart_service
+from market_data_chart import service as chart_service
 from market_data_mcp import service as md_service
 
 # 固定行情：12 天日线（够画 MA5/10，MA20/60 不足应不绘制）
@@ -115,7 +115,7 @@ def test_ma_not_drawn_when_insufficient(fake_root):
 
 def test_log_scale_fallback_nonpositive(fake_root, monkeypatch):
     """数据含 0/负值时 log_scale 自动退回普通坐标（不报错）。"""
-    import chart_mcp.service as svc
+    import market_data_chart.service as svc
 
     def fake_get_quote_zero(root, code, vars=None, adjust="raw", start_date=None,
                             end_date=None, period="daily", export_path=None):
@@ -139,7 +139,7 @@ def test_log_scale_positive_data(fake_root):
 
 
 def test_invalid_code(fake_root, monkeypatch):
-    import chart_mcp.service as svc
+    import market_data_chart.service as svc
 
     def fake_get_quote_err(root, code, **kwargs):
         return {"ok": False, "error": "代码格式错误"}
@@ -151,7 +151,7 @@ def test_invalid_code(fake_root, monkeypatch):
 
 def test_cli_line_and_kline(fake_root):
     """CLI 双入口：get_quote_chart_batch 画 K线 + 折线。"""
-    import chart_mcp.cli as cli_mod
+    import market_data_chart.cli as cli_mod
 
     req = {"tool": "get_quote_chart_batch", "codes": ["600519.SH", "00700.HK"],
            "field": "close"}
@@ -164,14 +164,14 @@ def test_cli_line_and_kline(fake_root):
 
 
 def test_cli_unknown_tool():
-    import chart_mcp.cli as cli_mod
+    import market_data_chart.cli as cli_mod
     with pytest.raises(ValueError):
         cli_mod.dispatch({"tool": "nope"})
 
 
 def test_cli_main_stdin_stdout(fake_root, monkeypatch, capsys):
     """CLI main()：stdin JSON → stdout JSON。"""
-    import chart_mcp.cli as cli_mod
+    import market_data_chart.cli as cli_mod
     monkeypatch.setattr(cli_mod, "_data_root", lambda: fake_root)
     monkeypatch.setattr(sys, "stdin", type("S", (), {"read": lambda self: json.dumps(
         {"tool": "get_quote_chart_batch", "codes": ["600519.SH"]})})())
@@ -242,3 +242,73 @@ def test_get_quote_start_all_early_data(fake_root, monkeypatch):
         assert dates == ["2025-01-01", "2025-06-15"]  # 2026 年被过滤
     finally:
         md_svc._ensure_fields = orig_ensure
+
+
+def test_events_json_list(fake_root):
+    """events 传 JSON 数组：K线/折线都支持，PNG 生成。"""
+    events = [{"date": "2026-01-06", "description": "政策利好"},
+              {"date": "2026-01-13", "description": "减持公告"}]
+    r = chart_service.get_quote_chart(fake_root, "600519.SH", events=events)
+    assert r["ok"], r
+    assert os.path.isfile(r["path"])
+    # 折线也支持
+    r2 = chart_service.get_quote_chart(fake_root, "00700.HK", field="close",
+                                       events=events)
+    assert r2["ok"], r2
+
+
+def test_events_csv_path(fake_root, tmp_path):
+    """events 传 CSV 文件路径：读取并标注。"""
+    csv_path = tmp_path / "events.csv"
+    csv_path.write_text("date,description\n2026-01-06,政策利好\n2026-01-13,减持公告\n",
+                        encoding="utf-8")
+    r = chart_service.get_quote_chart(fake_root, "600519.SH",
+                                      events=str(csv_path))
+    assert r["ok"], r
+    assert os.path.isfile(r["path"])
+
+
+def test_events_invalid_notes(fake_root):
+    """events 文件不存在：返回 notes 提示，不报错。"""
+    r = chart_service.get_quote_chart(fake_root, "600519.SH",
+                                      events="D:/no/such/events.csv")
+    assert r["ok"], r
+    assert r["notes"] and any("解析为空" in n for n in r["notes"])
+
+
+def test_keypoints_line(fake_root):
+    """折线图 keypoints=on：标注高低点，PNG 生成。"""
+    r = chart_service.get_quote_chart(fake_root, "00700.HK", field="close",
+                                      keypoints=True, drawdown_threshold=0.05)
+    assert r["ok"], r
+    assert r["chart_type"] == "line"
+    assert os.path.isfile(r["path"])
+
+
+def test_keypoints_kline_rejected(fake_root):
+    """K线模式 keypoints=true：明确报错。"""
+    r = chart_service.get_quote_chart(fake_root, "600519.SH", keypoints=True)
+    assert not r["ok"]
+    assert "仅支持折线图" in r["error"]
+
+
+def test_keypoints_threshold_invalid(fake_root):
+    """drawdown_threshold 越界（0~1 外）：报错。"""
+    r = chart_service.get_quote_chart(fake_root, "00700.HK", field="close",
+                                      keypoints=True, drawdown_threshold=1.5)
+    assert not r["ok"]
+    assert "0~1" in r["error"]
+
+
+def test_extract_keypoints_logic():
+    """回撤关键点提取逻辑：peak/trough 与阈值过滤。"""
+    # 构造：涨→跌30%→回升；再跌 10%（不足阈值不标）
+    values = [100.0, 110.0, 120.0, 100.0, 84.0, 90.0, 105.0, 95.0]
+    pts = chart_service._extract_keypoints(values, 0.25)
+    # 只有第一次 30% 回撤被标（peak 120 → trough 84），第二次 10% 不够阈值
+    kinds = [k for _, _, k in pts]
+    assert "peak" in kinds and "trough" in kinds
+    assert len(pts) == 2
+    # 阈值提高 → 无标注
+    pts2 = chart_service._extract_keypoints(values, 0.50)
+    assert pts2 == []
