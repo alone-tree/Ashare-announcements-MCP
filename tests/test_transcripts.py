@@ -334,3 +334,115 @@ def test_query_transcripts_period_backfills_early(monkeypatch: pytest.MonkeyPatc
     assert result["fiscal_quarter"] == "FY2020-Q1"
     # 第二次调用带 target_period（按需补下载）
     assert calls[-1].get("target_period") == "FY2020-Q1"
+
+
+def test_company_slug() -> None:
+    """公司名 → AlphaStreet URL slug。"""
+    assert transcripts._company_slug("Lumentum Holdings Inc") == "lumentum-holdings-inc"
+    assert transcripts._company_slug("Apple Inc.") == "apple-inc"
+    assert transcripts._company_slug("  Coherent Corp (COHR) ") == "coherent-corp"
+    assert transcripts._company_slug("Alphabet Inc. (Class A)") == "alphabet-inc"
+
+
+def test_parse_alphastreet() -> None:
+    """AlphaStreet 正文：连续 <p> 段落，含 Q&A 前介绍，不区分 speaker。"""
+    html = """
+    <html><body>
+    <h1>Lumentum Holdings Inc (LITE) Q1 2026 Earnings Call Transcript</h1>
+    <p>Good day, everyone, and welcome to the Lumentum Holdings First Quarter Fiscal Year 2026 Earnings Call.</p>
+    <p>At this time I would like to turn the call over to Kathy Ta.</p>
+    <p>Thank you, and welcome to Lumentum's first quarter of fiscal year 2026.</p>
+    <p>Operator: We will now begin the question-and-answer session.</p>
+    <p>Hi, just making sure, can you hear me?</p>
+    <p>Yeah, we can hear you.</p>
+    <div>Disclaimer: The information provided is for informational purposes only.</div>
+    </body></html>
+    """
+    parts = transcripts._parse_alphastreet(html)
+    assert len(parts) == 6
+    assert all(p["author"] == "" for p in parts)  # 不区分 speaker
+    assert "Good day" in parts[0]["text"]  # 含 Q&A 前介绍
+    assert "question-and-answer" in parts[3]["text"]
+    assert "Disclaimer" not in "".join(p["text"] for p in parts)  # 不包含声明
+
+
+def test_download_body_falls_back_to_alphastreet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Alpha Spread 无收录 → 尝试 AlphaStreet 备用源。"""
+    monkeypatch.setattr(transcripts, "_company_name", lambda code: "Lumentum Holdings Inc")
+    calls = []
+
+    def fake_fetch(url):
+        calls.append(url)
+        if "alphaspread.com" in url:
+            return 404, "<html>not found</html>"
+        return 200, """
+            <html><body>
+            <h1>Lumentum (LITE) Q4 2026 Earnings Call Transcript</h1>
+            <p>Good day, everyone, and welcome to the Lumentum Fourth Quarter Fiscal Year 2026 Earnings Call.</p>
+            <p>Revenue surged year-over-year.</p>
+            </body></html>
+        """
+
+    monkeypatch.setattr(transcripts, "_fetch_alpha", fake_fetch)
+    first, body = transcripts._download_body("LITE", "LITE", "4", "2026")
+
+    assert first is not None
+    assert "Fourth Quarter Fiscal Year 2026" in first
+    assert body["meta"]["source"] == "alphastreet"
+    assert "alphaspread.com" in calls[0]
+    assert "news.alphastreet.com" in calls[1]
+    assert len(calls) == 2
+
+
+def test_download_body_uses_alphaspread_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Alpha Spread 有收录 → 不用备用源。"""
+    calls = []
+
+    def fake_fetch(url):
+        calls.append(url)
+        return 200, _alpha_html("Fourth Quarter Fiscal Year 2026 Conference Call")
+
+    monkeypatch.setattr(transcripts, "_fetch_alpha", fake_fetch)
+    first, body = transcripts._download_body("LITE", "LITE", "4", "2026")
+
+    assert body["meta"]["source"] == "alphaspread"
+    assert len(calls) == 1  # 只请求主源
+
+
+def test_sync_alphastreet_retried_next_time(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """备源结果（source=alphastreet）不算已保存：下次同步仍试主源，主源收录后覆盖。"""
+    reports = [
+        _report("10-K", "2025-06-30", "A1"),
+        _report("10-K", "2026-06-30", "A5"),
+    ]
+    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
+    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
+    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports, "meta": {}})
+    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
+    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
+    monkeypatch.setattr(transcripts, "time", _FakeTime())
+    monkeypatch.setattr(transcripts, "_company_name", lambda code: "Apple Inc")
+
+    # 第一次：主源 404，备源成功
+    def fake_fetch(url):
+        if "alphaspread.com" in url:
+            return 404, "<html>x</html>"
+        return 200, '<html><h1>Apple Q1 2026</h1><p>Good day everyone.</p></html>'
+
+    monkeypatch.setattr(transcripts, "_fetch_alpha", fake_fetch)
+    result = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=True)
+    street_items = [it for it in result["items"] if it.get("source") == "alphastreet"]
+    assert street_items, "备源应成功"
+
+    # 第二次：主源已收录（200 + comment），应覆盖备源
+    def fake_fetch_ok(url):
+        if "alphaspread.com" in url:
+            return 200, _alpha_html("Earnings Conference Call")
+        return 404, "<html>x</html>"
+
+    monkeypatch.setattr(transcripts, "_fetch_alpha", fake_fetch_ok)
+    result2 = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=True)
+    spread_items = [it for it in result2["items"] if it.get("source") == "alphaspread"]
+    assert spread_items, "主源收录后应覆盖备源"
+    street_left = [it for it in result2["items"] if it.get("source") == "alphastreet"]
+    assert not street_left, "备源记录应被主源覆盖"

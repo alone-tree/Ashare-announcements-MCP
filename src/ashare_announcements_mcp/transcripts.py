@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import html as html_mod
 import json
 import re
 import time
@@ -28,6 +29,8 @@ from ashare_announcements_mcp import us_edgar
 
 ALPHA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 ALPHA_BASE = "https://www.alphaspread.com/security/nasdaq/{ticker}/investor-relations/earnings-call/q{num}-{year}"
+# AlphaStreet 备用源（最新季 Alpha Spread 未收录时补位；仅覆盖近 ~8 季）
+ALPHA_STREET_BASE = "https://news.alphastreet.com/{slug}-{ticker}-q{num}-{year}-earnings-call-transcript/"
 MIN_YEAR = 2018  # Alpha Spread 历史覆盖下限（实测 AAPL/LULU 2018 起才有）
 # 首次同步默认只下载最近 N 个财季（避免全量下载超时；更早的按需补下载）
 RECENT_QUARTERS = 12
@@ -61,6 +64,7 @@ def load_transcripts(code: str) -> dict[str, Any]:
 
 def save_transcripts(code: str, items: list[dict[str, Any]], meta: dict[str, Any]) -> Path:
     path = _transcripts_path(code)
+    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "meta": {**meta, "updated_at": date.today().isoformat()},
         "items": items,
@@ -77,6 +81,15 @@ def _company_cik(code: str) -> str | None:
     for sec in securities:
         if sec.get("market") == "US":
             return sec.get("cik") or ""
+    return None
+
+
+def _company_name(code: str) -> str | None:
+    """从 companies.json 取 US 证券的公司名（用于 AlphaStreet URL slug）。"""
+    _key, securities = resolve_company(code)
+    for sec in securities:
+        if sec.get("market") == "US":
+            return sec.get("name") or ""
     return None
 
 
@@ -222,6 +235,57 @@ def _build_alpha_url(ticker: str, q_num: str, year: str) -> str:
     return ALPHA_BASE.format(ticker=ticker.lower(), num=q_num, year=year)
 
 
+def _company_slug(company_name: str) -> str:
+    """公司名 → AlphaStreet URL slug：'Lumentum Holdings Inc' → 'lumentum-holdings-inc'。"""
+    slug = company_name.lower()
+    slug = re.sub(r"\s*\(.*?\)\s*", "", slug)  # 去括号内容
+    slug = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
+    return slug
+
+
+def _build_alpha_street_url(company_name: str, ticker: str, q_num: str, year: str) -> str:
+    slug = _company_slug(company_name)
+    return ALPHA_STREET_BASE.format(slug=slug, ticker=ticker.lower(),
+                                    num=q_num, year=year)
+
+
+def _parse_alphastreet(html: str) -> list[dict[str, str]]:
+    """解析 AlphaStreet 正文：连续 <p> 段落，完整保留（含 Q&A 前介绍）。
+
+    AlphaStreet 无独立 speaker 标记（段首直接是发言内容，靠称呼推断），
+    这里不区分说话人，每段一条 {author: "", text}；检索/阅读时由 AI 自行判断。
+    """
+    # 定位正文：从公司名+代码标题附近（'Good day' 等开场）到 Disclaimer 前
+    start = html.find("Earnings Call Transcript")
+    if start < 0:
+        start = 0
+    # 找正文起始：常见开场 'Good day' / 'Good morning' / 'Ladies and gentlemen'
+    body_start = -1
+    for pat in ("<p>Good day", "<p>Good morning", "<p>Ladies and gentlemen"):
+        idx = html.find(pat, start)
+        if idx >= 0:
+            body_start = idx
+            break
+    if body_start < 0:
+        body_start = start
+    end = html.find("Disclaimer", body_start)
+    if end < 0:
+        end = len(html)
+    body = html[body_start:end]
+
+    parts: list[dict[str, str]] = []
+    for m in re.finditer(r"<p>(.*?)</p>", body, re.S):
+        text = re.sub(r"<br\s*/?>", "\n", m.group(1))
+        text = re.sub(r"<[^>]+>", "", text)
+        text = html_mod.unescape(text)
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n[ \t]+", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        if text:
+            parts.append({"author": "", "text": text})
+    return parts
+
+
 def _parse_comments(html: str) -> list[dict[str, str]]:
     """解析 Alpha Spread 正文 comment 块：每块 author + text。"""
     parts: list[dict[str, str]] = []
@@ -263,27 +327,55 @@ def _fetch_alpha(url: str) -> tuple[int, str]:
 def _download_body(
     code: str, ticker: str, q_num: str, year: str
 ) -> tuple[str | None, dict[str, Any]]:
-    """下载单个财季的 Alpha 正文；返回 (first_line, meta)。"""
+    """下载单个财季的电话会议正文；Alpha Spread 缺失时尝试 AlphaStreet 备用源。
+
+    返回 (first_line, meta)；meta.source 标记实际来源（alphaspread/alphastreet），
+    备源结果下次同步仍会重试主源（主源收录后覆盖）。
+    """
     url = _build_alpha_url(ticker, q_num, year)
     status, html = _fetch_alpha(url)
     if status == 404:
-        return None, {"status": "missing"}
-    if status != 200:
+        # 主源无收录 → 走备用源（下方统一处理）
+        comments = []
+    elif status != 200:
         return None, {"status": "temporary_failed", "http_status": status}
-    comments = _parse_comments(html)
-    if not comments:
+    else:
+        comments = _parse_comments(html)
+    if comments:
+        first = _first_line(comments)
+        body = {
+            "meta": {
+                "source": "alphaspread",
+                "url": url,
+                "fetched_at": date.today().isoformat(),
+                "first_line": first,
+            },
+            "body": comments,
+        }
+        return first, body
+
+    # Alpha Spread 无收录（404 或无 comment 块）→ 尝试 AlphaStreet 备用源
+    company_name = _company_name(code)
+    if not company_name:
         return None, {"status": "missing"}
-    first = _first_line(comments)
-    body = {
+    alt_url = _build_alpha_street_url(company_name, ticker, q_num, year)
+    astatus, ahtml = _fetch_alpha(alt_url)
+    if astatus != 200:
+        return None, {"status": "missing"}
+    a_comments = _parse_alphastreet(ahtml)
+    if not a_comments:
+        return None, {"status": "missing"}
+    afirst = _first_line(a_comments)
+    abody = {
         "meta": {
-            "source": "alphaspread",
-            "url": url,
+            "source": "alphastreet",
+            "url": alt_url,
             "fetched_at": date.today().isoformat(),
-            "first_line": first,
+            "first_line": afirst,
         },
-        "body": comments,
+        "body": a_comments,
     }
-    return first, body
+    return afirst, abody
 
 
 def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
@@ -313,7 +405,13 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
     reported_dates = {r["report_date"] for r in reports}
 
     # 3. 差集 = 推算集合 − 已保存集合
-    saved_by_date = {str(it.get("report_date") or "") for it in items}
+    # 已保存 = 主源已收录（source=alphaspread 的 ok/missing 都算）或临时失败；
+    # 备源结果（source=alphastreet）不算已保存 —— 下次仍试主源，主源收录后覆盖
+    saved_by_date = {
+        str(it.get("report_date") or "")
+        for it in items
+        if it.get("source") != "alphastreet"
+    }
     to_fetch = [
         q for q in derived
         if q["report_date"] not in saved_by_date
@@ -353,6 +451,7 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
                 record["http_status"] = body["http_status"]
         else:
             record["status"] = "ok"
+            record["source"] = body.get("meta", {}).get("source", "alphaspread")
             record["first_line"] = first_line
             body_path = _body_path(code, fiscal_quarter)
             temporary = body_path.with_suffix(".json.tmp")
