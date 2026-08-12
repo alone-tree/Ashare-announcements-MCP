@@ -29,6 +29,8 @@ from ashare_announcements_mcp import us_edgar
 ALPHA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 ALPHA_BASE = "https://www.alphaspread.com/security/nasdaq/{ticker}/investor-relations/earnings-call/q{num}-{year}"
 MIN_YEAR = 2018  # Alpha Spread 历史覆盖下限（实测 AAPL/LULU 2018 起才有）
+# 首次同步默认只下载最近 N 个财季（避免全量下载超时；更早的按需补下载）
+RECENT_QUARTERS = 12
 REQUEST_DELAY = 1.0  # Alpha 串行限速（秒）
 
 
@@ -284,12 +286,17 @@ def _download_body(
     return first, body
 
 
-def sync_transcripts(code: str, ticker: str, force_refresh: bool = False) -> dict[str, Any]:
+def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
+                     only_recent: bool = True,
+                     target_period: str | None = None) -> dict[str, Any]:
     """维护电话会议索引：先同步公告列表，再机械推算报告期，差集下载正文。
 
     每次调用都同步公告列表增量（复用 sync_edgar_archive，廉价）；
     已保存财季不重试；404 财季保持未保存（下次再试）；
     force_refresh 时重试全部 missing/temporary_failed 财季。
+    only_recent=True（默认）：只下载最近 RECENT_QUARTERS 个财季（首次同步防超时），
+    更早的财季保持未下载，query_transcripts(period=早期季) 时按需补下载。
+    target_period 指定（如 FY2020-Q1）：只下载该财季（按需补下载早期季，避免全量）。
     """
     # 1. 同步公告列表（保证最新）
     cik = _company_cik(code)
@@ -312,6 +319,12 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False) -> dic
         if q["report_date"] not in saved_by_date
         and q["report_date"] in reported_dates  # 财报已披露才请求
     ]
+    # only_recent：只下载最近 RECENT_QUARTERS 个财季（按 report_date 倒序取前 N）
+    if only_recent and len(to_fetch) > RECENT_QUARTERS:
+        to_fetch = sorted(to_fetch, key=lambda q: q["report_date"], reverse=True)[:RECENT_QUARTERS]
+    # target_period：只下载指定财季（按需补下载早期季）
+    if target_period:
+        to_fetch = [q for q in to_fetch if q["fiscal_quarter"] == target_period]
     if force_refresh:
         for it in items:
             if it.get("status") in ("missing", "temporary_failed"):
@@ -380,11 +393,19 @@ def query_transcripts(
             "results": [],
         }
     ticker = us[0]["code"]
-    result = sync_transcripts(code, ticker, force_refresh=force_refresh)
+    # 无 period：常规同步（仅最近 RECENT_QUARTERS 季）
+    result = sync_transcripts(code, ticker, force_refresh=force_refresh,
+                              only_recent=True)
     items = result["items"]
 
     if period:
         match = [it for it in items if str(it.get("fiscal_quarter") or "") == period]
+        # 目标财季未下载（早期季或首次同步范围外）：按需单独补下载该季
+        if not match or match[0].get("status") not in ("ok", "missing"):
+            result = sync_transcripts(code, ticker, force_refresh=force_refresh,
+                                      only_recent=False, target_period=period)
+            items = result["items"]
+            match = [it for it in items if str(it.get("fiscal_quarter") or "") == period]
         if not match:
             return {
                 "stock_code": code,

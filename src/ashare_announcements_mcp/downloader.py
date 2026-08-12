@@ -50,9 +50,18 @@ def download_pdf(stock_code: str, url: str) -> tuple[Path, bool]:
 
         target_dir = stock_cache_dir(stock_code) / "us_filings"
         target_dir.mkdir(parents=True, exist_ok=True)
-        # 从 URL 提取 accession 作为文件名
+        # 从 URL 提取 accession + 文档名作为文件名：主文档与附件共享 accession，
+        # 若只按 accession 命名，附件会命中主文档缓存（读附件返回主文档封面）。
+        # 示例：edgar/data/1633978/000162828026055726/lite_ex991xq4fy26.htm
+        #   → accession=000162828026055726, doc=lite_ex991xq4fy26.htm
         match = re.search(r"edgar/data/\d+/(\d+)/([^/]+)$", url)
-        stem = match.group(1) if match else str(abs(hash(url)))
+        if match:
+            doc = match.group(2)
+            if doc.lower().endswith((".htm", ".html")):
+                doc = doc.rsplit(".", 1)[0]
+            stem = f"{match.group(1)}_{doc}"
+        else:
+            stem = str(abs(hash(url)))
         target = target_dir / f"{stem}.html"
         if target.exists():
             return target, True

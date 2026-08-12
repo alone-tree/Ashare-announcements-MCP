@@ -235,3 +235,102 @@ def test_search_transcripts_finds_keyword(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert result["matched"] == 1
     assert result["results"][0]["fiscal_quarter"] == "FY2026-Q2"
+
+
+def test_sync_only_recent_limits_fetch(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """only_recent=True：财季数 > RECENT_QUARTERS 时只下载最近 12 个。"""
+    # 构造 20 个财季（5 年 × 4，2022-06-30 的 10-K 起）
+    reports = []
+    for year in range(2022, 2027):
+        reports.append(_report("10-K", f"{year}-06-30", f"K{year}"))
+        reports.append(_report("10-Q", f"{year}-09-30", f"Q{year}1"))
+        reports.append(_report("10-Q", f"{year}-12-31", f"Q{year}2"))
+        reports.append(_report("10-Q", f"{year+1}-03-31", f"Q{year}3"))
+    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
+    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
+    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports, "meta": {}})
+    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_alpha",
+        lambda url: (200, _alpha_html("Earnings Conference Call")),
+    )
+    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
+    monkeypatch.setattr(transcripts, "time", _FakeTime())
+
+    result = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=True)
+
+    assert result["new"] == transcripts.RECENT_QUARTERS
+    # 下载的是最近 12 个财季（report_date 最大的 12 个）
+    dates = sorted(it["report_date"] for it in result["items"])
+    assert len(dates) == transcripts.RECENT_QUARTERS
+    assert dates[-1] == "2027-03-31"  # 最新报告期在
+    assert "2022-06-30" not in dates  # 最早的被截断
+
+
+def test_sync_target_period_fetches_specific(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """target_period：只下载指定早期财季（按需补下载），不触发全量。"""
+    reports = [
+        _report("10-K", "2020-06-30", "K2020"),
+        _report("10-K", "2021-06-30", "K2021"),
+        _report("10-K", "2022-06-30", "K2022"),
+    ]
+    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
+    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
+    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports, "meta": {}})
+    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_alpha",
+        lambda url: (200, _alpha_html("Earnings Conference Call")),
+    )
+    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
+    monkeypatch.setattr(transcripts, "time", _FakeTime())
+
+    result = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=False,
+                                          target_period="FY2020-FY")
+
+    assert result["new"] == 1
+    assert result["items"][0]["fiscal_quarter"] == "FY2020-FY"
+    assert result["items"][0]["status"] == "ok"
+
+
+def test_query_transcripts_period_backfills_early(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """query_transcripts(period=早期季)：常规同步没下载时，按需补下载目标季。"""
+    recent_items = []  # 常规同步只返回空（未下载早期季）
+    backfilled = [
+        {
+            "fiscal_quarter": "FY2020-Q1",
+            "report_date": "2019-12-31",
+            "form": "10-Q",
+            "status": "ok",
+            "first_line": "First Quarter 2020",
+            "body_file": "BODY",
+        }
+    ]
+    calls = []
+
+    def fake_sync(_c, _t, **kw):
+        calls.append(kw)
+        if kw.get("target_period"):
+            return {"items": backfilled, "new": 1}
+        return {"items": recent_items, "new": 0}
+
+    monkeypatch.setattr(
+        transcripts,
+        "resolve_company",
+        lambda code: (code, [{"code": "AAPL", "market": "US", "name": "Apple"}]),
+    )
+    monkeypatch.setattr(transcripts, "sync_transcripts", fake_sync)
+    monkeypatch.setattr(
+        transcripts,
+        "Path",
+        lambda *a, **k: _FakePath("BODY"),
+    )
+
+    result = transcripts.query_transcripts("AAPL", period="FY2020-Q1")
+
+    assert result["matched"] == 1
+    assert result["fiscal_quarter"] == "FY2020-Q1"
+    # 第二次调用带 target_period（按需补下载）
+    assert calls[-1].get("target_period") == "FY2020-Q1"
