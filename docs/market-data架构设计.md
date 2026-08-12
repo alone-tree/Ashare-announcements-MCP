@@ -341,6 +341,7 @@ cache/{code}/financial_statements/
 
 ### 5.6 待办
 
+- [ ] **美股 iFinD 5 年前回填覆盖最新数据点（真实 bug，测试红）**：`_fetch_us_daily` 把 THS_DS 近 5 年 + THS_BD 补 5 年前的 `fresh` 整体写入，回填单点（如 2021-08-06）排在 fresh 末尾，`_write_field` 后写覆盖丢掉了 THS_DS 返回的最新交易日（2021-08-09）。测试 `test_backfill_uses_trade_days` 断言 `items[-1] == 2021-08-09` 失败。修法：合并时按日期升序排序/去重，保证最新交易日保留。2026-08-12 记录（低频路径：美股成交额 5 年前回填）
 - [ ] 主营构成（stock_zygc_em 行业/产品/地区三维度）→ 财报工具扩展（statements 加 zygc），当前不实现
 - [x] 刷新策略定稿：30 天新鲜期 + force_refresh（与财报一致，2026-08-09）
 - [ ] 东财股东接口 stock_gdfx_free_top_10_em 格式验证（KeyError 'sdltgd' 待解）
