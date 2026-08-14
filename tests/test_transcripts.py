@@ -443,3 +443,118 @@ def test_sync_alphastreet_retried_next_time(monkeypatch: pytest.MonkeyPatch, tmp
     assert spread_items, "主源收录后应覆盖备源"
     street_left = [it for it in result2["items"] if it.get("source") == "alphastreet"]
     assert not street_left, "备源记录应被主源覆盖"
+
+
+def test_next_fiscal_quarter() -> None:
+    """财季标签后继：Q1→Q2→Q3→FY→下一财年 Q1。"""
+    assert transcripts._next_fiscal_quarter("FY2026-Q1") == "FY2026-Q2"
+    assert transcripts._next_fiscal_quarter("FY2026-Q2") == "FY2026-Q3"
+    assert transcripts._next_fiscal_quarter("FY2026-Q3") == "FY2026-FY"
+    assert transcripts._next_fiscal_quarter("FY2026-FY") == "FY2027-Q1"
+
+
+def test_earnings_k8_items_filters_only_202(monkeypatch: pytest.MonkeyPatch) -> None:
+    """只筛出 items 含 2.02 的 8-K（5.02/12.02 等不算）。"""
+    items = [
+        {"form": "8-K", "items": "2.02,7.01,9.01", "display_time": "2026-08-12 00:00:00",
+         "accession": "E1", "report_date": "2026-08-12"},
+        {"form": "8-K", "items": "5.02", "display_time": "2026-04-28 00:00:00",
+         "accession": "E2", "report_date": "2026-04-27"},
+        {"form": "8-K", "items": "12.02", "display_time": "2026-03-02 00:00:00",
+         "accession": "E3", "report_date": "2026-03-02"},
+        {"form": "10-Q", "items": "", "display_time": "2026-05-06 00:00:00",
+         "accession": "E4", "report_date": "2026-03-31"},
+    ]
+    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": items, "meta": {}})
+    k8s = transcripts._earnings_k8_items("AAPL")
+    assert len(k8s) == 1
+    assert k8s[0]["filing_date"] == "2026-08-12"
+    assert k8s[0]["accession"] == "E1"
+
+
+def test_sync_transcripts_8k_triggers_next_quarter(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """最新财报 8-K(2.02) 发布日 > 最新已确认报告期 → 提前下载下一财季（不必等 10-K）。"""
+    reports = [
+        _report("10-K", "2025-06-30", "A1"),
+        _report("10-Q", "2025-09-30", "A2"),
+        _report("10-Q", "2025-12-31", "A3"),
+        _report("10-Q", "2026-03-31", "A4"),
+    ]
+    k8 = {"form": "8-K", "items": "2.02,7.01,9.01", "display_time": "2026-08-12 00:00:00",
+          "accession": "E1", "report_date": "2026-08-12"}
+    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
+    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
+    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports + [k8], "meta": {}})
+    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_alpha",
+        lambda url: (200, _alpha_html("Earnings Conference Call")),
+    )
+    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
+    monkeypatch.setattr(transcripts, "time", _FakeTime())
+
+    result = transcripts.sync_transcripts("AAPL", "AAPL")
+
+    # 4 个正式财季 + 1 个 8-K 触发的 FY2026-FY
+    assert result["new"] == 5
+    quarters = {it["fiscal_quarter"]: it for it in result["items"]}
+    assert quarters["FY2026-FY"]["trigger_source"] == "8-K"
+    assert quarters["FY2026-FY"]["report_date"] == "2026-08-12"  # 发布日（10-K 提交后覆盖为财季末）
+    assert quarters["FY2026-Q3"]["report_date"] == "2026-03-31"  # 正式财季不受影响
+
+
+def test_sync_transcripts_8k_missing_not_saved(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """8-K 触发财季未被上游收录（404）→ 不落索引，其余正式财季 missing 照常落索引。"""
+    reports = [
+        _report("10-K", "2025-06-30", "A1"),
+        _report("10-Q", "2025-09-30", "A2"),
+        _report("10-Q", "2025-12-31", "A3"),
+        _report("10-Q", "2026-03-31", "A4"),
+    ]
+    k8 = {"form": "8-K", "items": "2.02,7.01,9.01", "display_time": "2026-08-12 00:00:00",
+          "accession": "E1", "report_date": "2026-08-12"}
+    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
+    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
+    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports + [k8], "meta": {}})
+    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
+    monkeypatch.setattr(transcripts, "_fetch_alpha", lambda url: (404, "<html>x</html>"))
+    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
+    monkeypatch.setattr(transcripts, "time", _FakeTime())
+
+    result = transcripts.sync_transcripts("AAPL", "AAPL")
+
+    assert result["new"] == 4  # 只有正式财季落索引（8-K 触发版不落）
+    assert all(it["status"] == "missing" for it in result["items"])
+    assert not any(it.get("trigger_source") for it in result["items"])
+    assert "FY2026-FY" not in {it["fiscal_quarter"] for it in result["items"]}
+
+
+def test_sync_transcripts_8k_no_retrigger_after_ok(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """8-K 触发财季已下载成功 → 后续同步不重复触发。"""
+    reports = [
+        _report("10-K", "2025-06-30", "A1"),
+        _report("10-Q", "2025-09-30", "A2"),
+        _report("10-Q", "2025-12-31", "A3"),
+        _report("10-Q", "2026-03-31", "A4"),
+    ]
+    k8 = {"form": "8-K", "items": "2.02,7.01,9.01", "display_time": "2026-08-12 00:00:00",
+          "accession": "E1", "report_date": "2026-08-12"}
+    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
+    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
+    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports + [k8], "meta": {}})
+    monkeypatch.setattr(transcripts, "_fetch_alpha",
+                        lambda url: (200, _alpha_html("Earnings Conference Call")))
+    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
+    monkeypatch.setattr(transcripts, "time", _FakeTime())
+
+    # 第一次：8-K 触发下载成功
+    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
+    first = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert first["new"] == 5
+
+    # 第二次：已保存的财季与已成功的触发版都不再下载
+    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": first["items"], "meta": {}})
+    second = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert second["new"] == 0
+    assert len(second["items"]) == 5

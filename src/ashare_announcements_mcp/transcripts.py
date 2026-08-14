@@ -4,6 +4,9 @@
 - 公告列表复用 sync_edgar_archive（先同步增量，再读 announcements.json）
 - 财季推算纯机械：锚定最近一份 10-K（= 财年结束 = Q4，year = 其 reportDate 年份），
   Q1→Q2→Q3→FY→年份+1→Q1 固定循环；不读 XBRL、不下载公告正文
+- 8-K(2.02) 触发：最新财报 8-K 发布日 > 最新已确认报告期时，把推算序列的下一财季
+  提前加入待下载——财报发布当天即可尝试获取电话会议，不必等 10-Q/10-K 提交
+  （8-K 只做触发信号，财季归属仍由 10-K/10-Q 推算决定；未收录时不落索引、下次重试）
 - 历史下限：Alpha Spread 覆盖从 2018 财季起（实测），更早无数据
 - 增量：推算集合 − 本地已保存 = 待获取；404 表示该财季电话会议未出（刚披露/未开），
   不保存、下次再试；force_refresh 重试全部 404/missing
@@ -231,6 +234,78 @@ def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
     return quarters
 
 
+def _next_fiscal_quarter(fiscal_quarter: str) -> str:
+    """财季标签后继：Q1→Q2→Q3→FY→下一财年 Q1（8-K 触发下载用）。"""
+    year = int(fiscal_quarter[2:6])
+    label = fiscal_quarter[7:]
+    if label == "FY":
+        return f"FY{year + 1}-Q1"
+    order = ["Q1", "Q2", "Q3", "FY"]
+    return f"FY{year}-{order[order.index(label) + 1]}"
+
+
+def _earnings_k8_items(code: str) -> list[dict[str, str]]:
+    """筛出财报 8-K（items 含 2.02）的记录：filing_date（发布日）/report_date/accession。
+
+    只读公告缓存的结构化字段，不读 8-K 正文；历史分片无 items 字段，
+    不会被识别为财报 8-K（触发只看最近提交，recent 1000 条有 items）。
+    """
+    cached = load_cache(code)
+    items = cached.get("items") or []
+    k8s: list[dict[str, str]] = []
+    for item in items:
+        if str(item.get("form") or "") != "8-K":
+            continue
+        item_codes = {p.strip() for p in str(item.get("items") or "").split(",")}
+        if "2.02" not in item_codes:
+            continue
+        filing_date = str(item.get("display_time") or "")[:10]
+        if not filing_date:
+            continue
+        k8s.append(
+            {
+                "filing_date": filing_date,
+                "report_date": str(item.get("report_date") or ""),
+                "accession": str(item.get("accession") or ""),
+            }
+        )
+    return k8s
+
+
+def _k8_trigger_fetch(
+    derived: list[dict[str, str]], items: list[dict[str, Any]], code: str
+) -> dict[str, str] | None:
+    """最新财报 8-K(2.02) 发布日 > 最新已确认报告期 → 返回下一财季待下载记录。
+
+    8-K 只回答"该下载了"，财季标签来自推算序列的后继（Q1→Q2→Q3→FY→下财年 Q1）；
+    report_date 暂存 8-K 发布日（财季末未知，10-Q/10-K 提交后由正式记录覆盖）。
+    该财季已有成功记录时不重复触发；无触发返回 None。
+    """
+    if not derived:
+        return None
+    k8s = _earnings_k8_items(code)
+    if not k8s:
+        return None
+    latest_confirmed = max(q["report_date"] for q in derived)
+    k8_latest = max(k["filing_date"] for k in k8s)
+    if k8_latest <= latest_confirmed:
+        return None
+    latest_fq = max(derived, key=lambda q: q["report_date"])["fiscal_quarter"]
+    next_fq = _next_fiscal_quarter(latest_fq)
+    existing_ok = any(
+        str(it.get("fiscal_quarter") or "") == next_fq and it.get("status") == "ok"
+        for it in items
+    )
+    if existing_ok:
+        return None
+    return {
+        "fiscal_quarter": next_fq,
+        "report_date": k8_latest,
+        "form": "8-K",
+        "trigger_source": "8-K",
+    }
+
+
 def _build_alpha_url(ticker: str, q_num: str, year: str) -> str:
     return ALPHA_BASE.format(ticker=ticker.lower(), num=q_num, year=year)
 
@@ -349,6 +424,9 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
     only_recent=True（默认）：只下载最近 RECENT_QUARTERS 个财季（首次同步防超时），
     更早的财季保持未下载，query_transcripts(period=早期季) 时按需补下载。
     target_period 指定（如 FY2020-Q1）：只下载该财季（按需补下载早期季，避免全量）。
+    8-K(2.02) 触发：最新财报 8-K 发布日 > 最新已确认报告期时，提前尝试下载
+    推算序列的下一财季（财报发布当天即可获取，不必等 10-Q/10-K 提交）；
+    触发版未收录（404）不落索引，下次同步自动重试。
     """
     # 1. 同步公告列表（保证最新）
     cik = _company_cik(code)
@@ -377,6 +455,10 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
         if q["report_date"] not in saved_by_date
         and q["report_date"] in reported_dates  # 财报已披露才请求
     ]
+    # 8-K(2.02) 触发：最新财报 8-K 发布日 > 最新已确认报告期 → 下一财季提前待下载
+    k8_trigger = _k8_trigger_fetch(derived, items, code)
+    if k8_trigger:
+        to_fetch.append(k8_trigger)
     # only_recent：只下载最近 RECENT_QUARTERS 个财季（按 report_date 倒序取前 N）
     if only_recent and len(to_fetch) > RECENT_QUARTERS:
         to_fetch = sorted(to_fetch, key=lambda q: q["report_date"], reverse=True)[:RECENT_QUARTERS]
@@ -405,7 +487,12 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
             "form": q["form"],
             "alpha_url": _build_alpha_url(ticker, q_num, year),
         }
+        if q.get("trigger_source"):
+            record["trigger_source"] = q["trigger_source"]
         if body is None:
+            if q.get("trigger_source") == "8-K":
+                # 8-K 触发的财季尚未被上游收录（电话会议未开/未更）：不落索引，下次同步自动重试
+                continue
             record["status"] = meta.get("status", "missing")
             if meta.get("http_status"):
                 record["http_status"] = meta["http_status"]
@@ -419,7 +506,8 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
             )
             temporary.replace(body_path)
             record["body_file"] = str(body_path)
-        items = [it for it in items if str(it.get("report_date") or "") != q["report_date"]]
+        # 同一财季只保留一条（8-K 触发版在 10-Q/10-K 提交后被正式版覆盖）
+        items = [it for it in items if str(it.get("fiscal_quarter") or "") != fiscal_quarter]
         items.append(record)
         changed += 1
         time.sleep(REQUEST_DELAY)
