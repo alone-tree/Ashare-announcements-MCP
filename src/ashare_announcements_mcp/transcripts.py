@@ -250,29 +250,14 @@ def _build_alpha_street_url(company_name: str, ticker: str, q_num: str, year: st
 
 
 def _parse_alphastreet(html: str) -> list[dict[str, str]]:
-    """解析 AlphaStreet 正文：连续 <p> 段落，完整保留（含 Q&A 前介绍）。
+    """AlphaStreet 站点提取器：正文容器（entry-content）内全部 <p> 段落。
 
-    AlphaStreet 无独立 speaker 标记（段首直接是发言内容，靠称呼推断），
-    这里不区分说话人，每段一条 {author: "", text}；检索/阅读时由 AI 自行判断。
+    站点级规则（AlphaStreet 是 WordPress 站，正文在 entry-content 容器）；
+    不做公司级矫正（各公司开场白/参与者列表措辞不同，不逐一适配）。
+    无独立 speaker 标记，每段一条 {author: "", text}；正文语义由 AI 读全文判断。
     """
-    # 定位正文：从公司名+代码标题附近到 Disclaimer 前
-    start = html.find("Earnings Call Transcript")
-    if start < 0:
-        start = 0
-    # 找正文起始：常见开场白（各公司措辞不同：Good day/Good morning/Greetings/Welcome/Ladies and gentlemen）
-    body_start = -1
-    for pat in ("<p>Good day", "<p>Good morning", "<p>Greetings", "<p>Welcome",
-                "<p>Ladies and gentlemen", "<p>Ladies and Gentlemen"):
-        idx = html.find(pat, start)
-        if idx >= 0:
-            body_start = idx
-            break
-    if body_start < 0:
-        body_start = start
-    end = html.find("Disclaimer", body_start)
-    if end < 0:
-        end = len(html)
-    body = html[body_start:end]
+    m = re.search(r'<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>(.*?)</div>', html, re.S)
+    body = m.group(1) if m else html
 
     parts: list[dict[str, str]] = []
     for m in re.finditer(r"<p>(.*?)</p>", body, re.S):
@@ -310,15 +295,6 @@ def _parse_comments(html: str) -> list[dict[str, str]]:
     return parts
 
 
-def _first_line(comments: list[dict[str, str]]) -> str:
-    """正文第一句（开场白），用于确认实际报告期。"""
-    for c in comments:
-        text = c.get("text", "")
-        if text:
-            return text[:200]
-    return ""
-
-
 def _fetch_alpha(url: str) -> tuple[int, str]:
     """GET Alpha Spread 页面；裸 UA（完整浏览器指纹反而 403）。"""
     resp = requests.get(url, headers={"User-Agent": ALPHA_UA}, timeout=30)
@@ -327,33 +303,24 @@ def _fetch_alpha(url: str) -> tuple[int, str]:
 
 def _download_body(
     code: str, ticker: str, q_num: str, year: str
-) -> tuple[str | None, dict[str, Any]]:
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """下载单个财季的电话会议正文；Alpha Spread 缺失时尝试 AlphaStreet 备用源。
 
-    返回 (first_line, meta)；meta.source 标记实际来源（alphaspread/alphastreet），
-    备源结果下次同步仍会重试主源（主源收录后覆盖）。
+    返回 (body_dict | None, meta)；meta.status 标记结果，成功时 meta.source
+    标记实际来源（alphaspread/alphastreet），备源结果下次同步仍会重试主源。
     """
     url = _build_alpha_url(ticker, q_num, year)
     status, html = _fetch_alpha(url)
     if status == 404:
-        # 主源无收录 → 走备用源（下方统一处理）
-        comments = []
+        comments = []  # 主源无收录 → 走备用源
     elif status != 200:
         return None, {"status": "temporary_failed", "http_status": status}
     else:
         comments = _parse_comments(html)
     if comments:
-        first = _first_line(comments)
-        body = {
-            "meta": {
-                "source": "alphaspread",
-                "url": url,
-                "fetched_at": date.today().isoformat(),
-                "first_line": first,
-            },
-            "body": comments,
-        }
-        return first, body
+        return {"meta": {"source": "alphaspread", "url": url,
+                         "fetched_at": date.today().isoformat()},
+                "body": comments}, {"status": "ok", "source": "alphaspread"}
 
     # Alpha Spread 无收录（404 或无 comment 块）→ 尝试 AlphaStreet 备用源
     company_name = _company_name(code)
@@ -366,17 +333,9 @@ def _download_body(
     a_comments = _parse_alphastreet(ahtml)
     if not a_comments:
         return None, {"status": "missing"}
-    afirst = _first_line(a_comments)
-    abody = {
-        "meta": {
-            "source": "alphastreet",
-            "url": alt_url,
-            "fetched_at": date.today().isoformat(),
-            "first_line": afirst,
-        },
-        "body": a_comments,
-    }
-    return afirst, abody
+    return {"meta": {"source": "alphastreet", "url": alt_url,
+                     "fetched_at": date.today().isoformat()},
+            "body": a_comments}, {"status": "ok", "source": "alphastreet"}
 
 
 def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
@@ -439,21 +398,20 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
         if q_num == "FY":
             q_num = "4"
         year = fiscal_quarter.split("-")[0][2:]
-        first_line, body = _download_body(code, ticker, q_num, year)
+        body, meta = _download_body(code, ticker, q_num, year)
         record = {
             "fiscal_quarter": fiscal_quarter,
             "report_date": q["report_date"],
             "form": q["form"],
             "alpha_url": _build_alpha_url(ticker, q_num, year),
         }
-        if first_line is None:
-            record["status"] = body.get("status", "missing")
-            if body.get("http_status"):
-                record["http_status"] = body["http_status"]
+        if body is None:
+            record["status"] = meta.get("status", "missing")
+            if meta.get("http_status"):
+                record["http_status"] = meta["http_status"]
         else:
             record["status"] = "ok"
-            record["source"] = body.get("meta", {}).get("source", "alphaspread")
-            record["first_line"] = first_line
+            record["source"] = meta.get("source", "alphaspread")
             body_path = _body_path(code, fiscal_quarter)
             temporary = body_path.with_suffix(".json.tmp")
             temporary.write_text(
@@ -532,8 +490,7 @@ def query_transcripts(
             "fiscal_quarter": period,
             "report_date": record.get("report_date"),
             "matched": 1,
-            "source": "alphaspread",
-            "first_line": body["meta"].get("first_line", ""),
+            "source": body.get("meta", {}).get("source", "alphaspread"),
             "body": body["body"],
         }
 
@@ -549,7 +506,6 @@ def query_transcripts(
                 "report_date": it.get("report_date"),
                 "form": it.get("form"),
                 "status": it.get("status"),
-                "first_line": it.get("first_line"),
             }
             for it in items
         ],
