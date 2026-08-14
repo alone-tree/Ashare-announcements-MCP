@@ -255,13 +255,14 @@ def _parse_alphastreet(html: str) -> list[dict[str, str]]:
     AlphaStreet 无独立 speaker 标记（段首直接是发言内容，靠称呼推断），
     这里不区分说话人，每段一条 {author: "", text}；检索/阅读时由 AI 自行判断。
     """
-    # 定位正文：从公司名+代码标题附近（'Good day' 等开场）到 Disclaimer 前
+    # 定位正文：从公司名+代码标题附近到 Disclaimer 前
     start = html.find("Earnings Call Transcript")
     if start < 0:
         start = 0
-    # 找正文起始：常见开场 'Good day' / 'Good morning' / 'Ladies and gentlemen'
+    # 找正文起始：常见开场白（各公司措辞不同：Good day/Good morning/Greetings/Welcome/Ladies and gentlemen）
     body_start = -1
-    for pat in ("<p>Good day", "<p>Good morning", "<p>Ladies and gentlemen"):
+    for pat in ("<p>Good day", "<p>Good morning", "<p>Greetings", "<p>Welcome",
+                "<p>Ladies and gentlemen", "<p>Ladies and Gentlemen"):
         idx = html.find(pat, start)
         if idx >= 0:
             body_start = idx

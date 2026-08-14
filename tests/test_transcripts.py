@@ -366,6 +366,27 @@ def test_parse_alphastreet() -> None:
     assert "Disclaimer" not in "".join(p["text"] for p in parts)  # 不包含声明
 
 
+def test_parse_alphastreet_greetings_opening() -> None:
+    """COHR 式开场：Greetings 开场白 + 参与者列表，正文应从开场白开始。"""
+    html = """
+    <html><body>
+    <h1>Coherent Corp (COHR) Q4 2026 Earnings Call Transcript</h1>
+    <p><strong>Paul Silverstein</strong> — <em>Senior Vice President of Investor Relations</em></p>
+    <p><strong>Jim Anderson</strong> — <em>Chief Executive Officer</em></p>
+    <p>Greetings, and welcome to the Coherent Fourth Quarter and Fiscal Year 2026 Earnings Call.</p>
+    <p>It is now my pleasure to introduce your host, Mr. Paul Silverstein.</p>
+    <p>Thank you, operator, and good afternoon, everyone. With me today are Jim Anderson.</p>
+    <p>Q1 revenue surged year-over-year.</p>
+    <div>Disclaimer: The information provided is for informational purposes only.</div>
+    </body></html>
+    """
+    parts = transcripts._parse_alphastreet(html)
+    # 从 Greetings 开场白开始，参与者列表（前 2 段）应被跳过
+    assert len(parts) == 4
+    assert "Greetings" in parts[0]["text"]
+    assert "Silverstein" not in parts[0]["text"]
+
+
 def test_download_body_falls_back_to_alphastreet(monkeypatch: pytest.MonkeyPatch) -> None:
     """Alpha Spread 无收录 → 尝试 AlphaStreet 备用源。"""
     monkeypatch.setattr(transcripts, "_company_name", lambda code: "Lumentum Holdings Inc")
