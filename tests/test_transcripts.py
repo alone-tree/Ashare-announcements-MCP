@@ -63,12 +63,12 @@ def test_derive_quarters_anchors_on_latest_10k() -> None:
     quarters = transcripts._derive_quarters(reports)
     by_date = {q["report_date"]: q for q in quarters}
 
-    assert by_date["2026-06-30"]["fiscal_quarter"] == "FY2026-FY"
+    assert by_date["2026-06-30"]["fiscal_quarter"] == "FY2026-Q4"
     assert by_date["2026-03-31"]["fiscal_quarter"] == "FY2026-Q3"
     assert by_date["2025-12-31"]["fiscal_quarter"] == "FY2026-Q2"
     assert by_date["2025-09-30"]["fiscal_quarter"] == "FY2026-Q1"
-    assert by_date["2025-06-30"]["fiscal_quarter"] == "FY2025-FY"
-    assert by_date["2024-06-30"]["fiscal_quarter"] == "FY2024-FY"
+    assert by_date["2025-06-30"]["fiscal_quarter"] == "FY2025-Q4"
+    assert by_date["2024-06-30"]["fiscal_quarter"] == "FY2024-Q4"
 
 
 def test_derive_quarters_respects_min_year() -> None:
@@ -148,7 +148,7 @@ def test_sync_transcripts_fetches_derived_quarters(monkeypatch: pytest.MonkeyPat
     assert result["new"] == 5
     items = result["items"]
     fiscal_quarters = {it["fiscal_quarter"] for it in items}
-    assert fiscal_quarters == {"FY2025-FY", "FY2026-Q1", "FY2026-Q2", "FY2026-Q3", "FY2026-FY"}
+    assert fiscal_quarters == {"FY2025-Q4", "FY2026-Q1", "FY2026-Q2", "FY2026-Q3", "FY2026-Q4"}
     assert all(it["status"] == "ok" for it in items)
 
 
@@ -287,10 +287,10 @@ def test_sync_target_period_fetches_specific(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr(transcripts, "time", _FakeTime())
 
     result = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=False,
-                                          target_period="FY2020-FY")
+                                          target_period="FY2020-Q4")
 
     assert result["new"] == 1
-    assert result["items"][0]["fiscal_quarter"] == "FY2020-FY"
+    assert result["items"][0]["fiscal_quarter"] == "FY2020-Q4"
     assert result["items"][0]["status"] == "ok"
 
 
@@ -446,11 +446,11 @@ def test_sync_alphastreet_retried_next_time(monkeypatch: pytest.MonkeyPatch, tmp
 
 
 def test_next_fiscal_quarter() -> None:
-    """财季标签后继：Q1→Q2→Q3→FY→下一财年 Q1。"""
+    """财季标签后继：Q1→Q2→Q3→Q4→下一财年 Q1。"""
     assert transcripts._next_fiscal_quarter("FY2026-Q1") == "FY2026-Q2"
     assert transcripts._next_fiscal_quarter("FY2026-Q2") == "FY2026-Q3"
-    assert transcripts._next_fiscal_quarter("FY2026-Q3") == "FY2026-FY"
-    assert transcripts._next_fiscal_quarter("FY2026-FY") == "FY2027-Q1"
+    assert transcripts._next_fiscal_quarter("FY2026-Q3") == "FY2026-Q4"
+    assert transcripts._next_fiscal_quarter("FY2026-Q4") == "FY2027-Q1"
 
 
 def test_earnings_k8_items_filters_only_202(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -496,11 +496,11 @@ def test_sync_transcripts_8k_triggers_next_quarter(monkeypatch: pytest.MonkeyPat
 
     result = transcripts.sync_transcripts("AAPL", "AAPL")
 
-    # 4 个正式财季 + 1 个 8-K 触发的 FY2026-FY
+    # 4 个正式财季 + 1 个 8-K 触发的 FY2026-Q4
     assert result["new"] == 5
     quarters = {it["fiscal_quarter"]: it for it in result["items"]}
-    assert quarters["FY2026-FY"]["trigger_source"] == "8-K"
-    assert quarters["FY2026-FY"]["report_date"] == "2026-08-12"  # 发布日（10-K 提交后覆盖为财季末）
+    assert quarters["FY2026-Q4"]["trigger_source"] == "8-K"
+    assert quarters["FY2026-Q4"]["report_date"] == "2026-08-12"  # 发布日（10-K 提交后覆盖为财季末）
     assert quarters["FY2026-Q3"]["report_date"] == "2026-03-31"  # 正式财季不受影响
 
 
@@ -527,7 +527,7 @@ def test_sync_transcripts_8k_missing_not_saved(monkeypatch: pytest.MonkeyPatch, 
     assert result["new"] == 4  # 只有正式财季落索引（8-K 触发版不落）
     assert all(it["status"] == "missing" for it in result["items"])
     assert not any(it.get("trigger_source") for it in result["items"])
-    assert "FY2026-FY" not in {it["fiscal_quarter"] for it in result["items"]}
+    assert "FY2026-Q4" not in {it["fiscal_quarter"] for it in result["items"]}
 
 
 def test_sync_transcripts_8k_no_retrigger_after_ok(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

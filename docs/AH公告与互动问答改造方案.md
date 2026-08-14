@@ -684,15 +684,16 @@ https://www.alphaspread.com/security/nasdaq/{ticker}/investor-relations/earnings
 - **覆盖**：实测到微型股（REFR ~$1亿）都有；未开电话会的公司（如 BRK.A）404 属正常。
 - **404 vs 限流**：404 = Alpha 明确无该季度（永久 missing，不重试）；429/5xx = 临时失败（下次重试）。实测连续探测 28 个 URL 无 429。
 
-**财季标签来源（决策：以公司申报为准，不做代码级容错）**：
+**财季标签来源（决策：纯机械推算，锚定最近 10-K；标签用 Q4 不用 FY）**：
 
-- 报告列表复用公告档案（`query_announcements` 的 10-Q/10-K items），10-Q/10-K HTML 复用 `us_filings` 缓存，解析 XBRL 字段 `dei:DocumentFiscalPeriodFocus`（Q1/Q2/Q3/FY）+ `dei:DocumentFiscalYearFocus`（如 2026），得财季标签 `FY2026-Q1`。
-- 10-K 的 PeriodFocus=FY 对应 Q4 电话会议。
+- 报告列表复用公告档案（`query_announcements` 的 10-Q/10-K items），纯机械推算财季标签 `FY{year}-{Q1/Q2/Q3/Q4}`：锚定最近一份 10-K（= 财年结束 = Q4），Q1→Q2→Q3→Q4→年份+1→Q1 固定循环，不解析 XBRL。
+- 标签用 Q4 不用 FY：FY 是 SEC XBRL 字段值（`DocumentFiscalPeriodFocus` 年报值="FY"）照搬，与 Q1-Q3 序列不统一；2026-08-14 统一改 Q4（Alpha URL 仍 `q4-{year}`，上游无感）。
+- 最新财报 8-K(2.02) 发布日 > 最新已确认报告期时，提前下载推算序列的下一财季（不必等 10-Q/10-K 提交）。
 - **实测 6/7 公司（AAPL/NVDA/COHR/LITE/TSLA/MSFT）Alpha URL 标签与申报财季一致；LULU 偏移一年**（申报 FY2026-Q1 的正文实际是 "First Quarter 2025"）。偏移与财年结构无关（NVDA 财年同样 1 月底结束但不偏移），是 Alpha Spread 数据源自身标签问题。
-- 不做候选集探测、不做偏移试探：URL 直接按申报财季构造，错位的正文靠 first_line 保留现场证据，AI 结合正文判断（工具描述已有提示）。
+- 不做候选集探测、不做偏移试探：URL 直接按申报财季构造，错位的正文靠正文第一句注明实际报告期，AI 结合正文判断（工具描述已有提示）。
 - 旧版建档缓存缺 `report_date` 字段时，从 EDGAR submissions 按 accession 补齐（上游原始字段，不推算）。
 
-**缓存**：全文缓存（每财季一篇 ~50K 字符）；30 天新鲜期 + `force_refresh`；增量只往后探测新报告期，已有且未过期不重试。
+**缓存**：全文缓存（每财季一篇 ~50K 字符）；首次同步最近 12 财季、每次调用增量、`force_refresh` 强制；增量只往后探测新报告期，已有财季不重试（8-K 触发版 404 不落索引、下次同步自动重试）。
 
 ## 9. 当前代码入口与工作区状态
 

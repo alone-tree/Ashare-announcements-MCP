@@ -58,9 +58,9 @@ query_transcripts(
 ```
 
 - 美股电话会议（earnings call transcript）通道，仅美股适用；其他市场返回 `applicable=false`。
-- 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`/`first_line`），首次全量同步、30 天增量更新、`force_refresh` 强制刷新。
+- 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`），首次同步最近 12 财季、之后每次调用增量同步新财季、`force_refresh` 强制刷新。
 - 传 `period`（如 `FY2025-Q1`）：返回该财季完整正文（逐发言轮次：`author` + `text`）。
-- 索引以公司申报的 10-Q/10-K 报告期为锚（XBRL `DocumentFiscalPeriodFocus`/`DocumentFiscalYearFocus`，如 FY2026-Q1），不推算财季。
+- 索引以 10-Q/10-K 报告期为锚、纯机械推算财季标签（`FY{year}-{Q1/Q2/Q3/Q4}`，锚定最近一份 10-K，不解析 XBRL）；最新财报 8-K(2.02) 发布后提前下载下一财季，不必等 10-Q/10-K 提交。
 - 正文来源 Alpha Spread（裸 UA 直连）；404 标记 `missing`，429/5xx 标记 `temporary_failed` 下次重试。
 - 上游季度标签偶尔与申报财季错位（实测 LULU 偏移一年），正文第一句会注明实际报告期，由 AI 结合正文判断，不做代码级容错。
 
@@ -115,11 +115,11 @@ cache/{股票代码}/
   pdfs/{公告编号}.pdf
   extracted/{公告编号}.json
   transcripts.json          # 电话会议索引（fiscal_quarter/report_date/status）
-  transcripts/{FY2025-Q1}.json  # 电话会议正文（逐发言轮次，meta 含 first_line）
+  transcripts/{FY2025-Q1}.json  # 电话会议正文（逐发言轮次）
 ```
 
 提取缓存记录 PDF 文件大小和修改时间。源文件变化或索引版本升级时自动重建。
-电话会议：正文全文缓存（每财季一篇，~50K 字符）；30 天新鲜期 + `force_refresh`；10-Q/10-K HTML 复用 `us_filings` 缓存解析 XBRL 财季字段，不重复下载。
+电话会议：正文全文缓存（每财季一篇，~50K 字符）；首次同步最近 12 财季、每次调用增量、`force_refresh` 强制；报告期由公告列表（EDGAR submissions）纯机械推算，不解析 XBRL。
 
 ## 依赖
 

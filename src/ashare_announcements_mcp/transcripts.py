@@ -3,7 +3,7 @@
 数据流：公告列表（EDGAR submissions）→ 机械推算报告期序列 → Alpha Spread URL → 下载正文缓存。
 - 公告列表复用 sync_edgar_archive（先同步增量，再读 announcements.json）
 - 财季推算纯机械：锚定最近一份 10-K（= 财年结束 = Q4，year = 其 reportDate 年份），
-  Q1→Q2→Q3→FY→年份+1→Q1 固定循环；不读 XBRL、不下载公告正文
+  Q1→Q2→Q3→Q4→年份+1→Q1 固定循环；不读 XBRL、不下载公告正文
 - 8-K(2.02) 触发：最新财报 8-K 发布日 > 最新已确认报告期时，把推算序列的下一财季
   提前加入待下载——财报发布当天即可尝试获取电话会议，不必等 10-Q/10-K 提交
   （8-K 只做触发信号，财季归属仍由 10-K/10-Q 推算决定；未收录时不落索引、下次重试）
@@ -152,10 +152,10 @@ def _add_months(value: date, months: int) -> date:
 def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
     """机械推算报告期序列（基于公告列表真实报告期，不推算日期）。
 
-    锚定最近一份 10-K：year = reportDate 年份，财年结束日 = reportDate（= 该财年 Q4/FY）。
+    锚定最近一份 10-K：year = reportDate 年份，财年结束日 = reportDate（= 该财年 Q4）。
     财季分配：同一财年内按时间顺序，锚点 10-K 之前的 10-Q 依次为 Q3、Q2、Q1；
     锚点 10-K 之后的 10-Q 属于下一财年 Q1、Q2…
-    （Q1→Q2→Q3→FY→年份+1→Q1 固定循环，纯机械，不读 XBRL）
+    （Q1→Q2→Q3→Q4→年份+1→Q1 固定循环，纯机械，不读 XBRL）
     范围：[max(MIN_YEAR, 最早报告期财年) , 最新报告期]。
     """
     if not reports:
@@ -183,7 +183,7 @@ def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
             current_fy = int(r["report_date"][:4])
             quarters.append(
                 {
-                    "fiscal_quarter": f"FY{current_fy}-FY",
+                    "fiscal_quarter": f"FY{current_fy}-Q4",
                     "report_date": r["report_date"],
                     "form": "10-K",
                 }
@@ -205,7 +205,7 @@ def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
     if k10s:
         quarters.append(
             {
-                "fiscal_quarter": f"FY{anchor_year}-FY",
+                "fiscal_quarter": f"FY{anchor_year}-Q4",
                 "report_date": anchor["report_date"],
                 "form": "10-K",
             }
@@ -235,12 +235,12 @@ def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 def _next_fiscal_quarter(fiscal_quarter: str) -> str:
-    """财季标签后继：Q1→Q2→Q3→FY→下一财年 Q1（8-K 触发下载用）。"""
+    """财季标签后继：Q1→Q2→Q3→Q4→下一财年 Q1（8-K 触发下载用）。"""
     year = int(fiscal_quarter[2:6])
     label = fiscal_quarter[7:]
-    if label == "FY":
+    if label == "Q4":
         return f"FY{year + 1}-Q1"
-    order = ["Q1", "Q2", "Q3", "FY"]
+    order = ["Q1", "Q2", "Q3", "Q4"]
     return f"FY{year}-{order[order.index(label) + 1]}"
 
 
@@ -277,7 +277,7 @@ def _k8_trigger_fetch(
 ) -> dict[str, str] | None:
     """最新财报 8-K(2.02) 发布日 > 最新已确认报告期 → 返回下一财季待下载记录。
 
-    8-K 只回答"该下载了"，财季标签来自推算序列的后继（Q1→Q2→Q3→FY→下财年 Q1）；
+    8-K 只回答"该下载了"，财季标签来自推算序列的后继（Q1→Q2→Q3→Q4→下财年 Q1）；
     report_date 暂存 8-K 发布日（财季末未知，10-Q/10-K 提交后由正式记录覆盖）。
     该财季已有成功记录时不重复触发；无触发返回 None。
     """
@@ -477,8 +477,6 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
     for q in to_fetch:
         fiscal_quarter = q["fiscal_quarter"]
         q_num = fiscal_quarter.split("-")[-1].lstrip("Q") or "4"
-        if q_num == "FY":
-            q_num = "4"
         year = fiscal_quarter.split("-")[0][2:]
         body, meta = _download_body(code, ticker, q_num, year)
         record = {
