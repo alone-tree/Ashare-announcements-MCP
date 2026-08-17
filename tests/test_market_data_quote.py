@@ -199,3 +199,56 @@ class TestGetQuote:
         w = r["rows"][0]
         assert w["date"] == "2026-06-05"  # W-FRI
         assert w["close"] == 13.0 and w["volume"] == 34.0
+
+    # ---- 骨架日期基准（2026-08-17 拍板：新浪价格序列，iFinD 只做值映射）----
+
+    @staticmethod
+    def _phantom_data():
+        """iFinD 字段带"今天"伪行（值=上一交易日）、新浪价格字段停在最后交易日。"""
+        trade = ["2026-08-12", "2026-08-13", "2026-08-14"]
+        today = trade + ["2026-08-17"]  # iFinD 对 end=今天的伪行
+        mk = lambda ds, base, src="sina": [  # noqa: E731
+            {"date": d, "value": base + i, "source": src} for i, d in enumerate(ds)]
+        return {
+            "open": (mk(trade, 10.0), "sina"), "high": (mk(trade, 12.0), "sina"),
+            "low": (mk(trade, 9.0), "sina"), "close": (mk(trade, 11.0), "sina"),
+            "volume": (mk(trade, 1000.0), "sina"),
+            "amount": (mk(today, 1e10, "ifind"), "ifind"),
+            "close_hfq": (mk(today, 55.0, "ifind"), "ifind"),
+            "total_shares": (mk(today, 2.4e10, "ifind"), "ifind"),
+            "floating_shares": (mk(today, 2.4e10, "ifind"), "ifind"),
+        }
+
+    def test_skeleton_excludes_ifind_phantom_dates(self, monkeypatch):
+        """美股 qfq：iFinD 字段带今天伪行不进骨架 → 无 8/17 幻影 K 线。"""
+        fake = _FakeEnsure(self._phantom_data())
+        monkeypatch.setattr(service, "aggregator", type("A", (), {"ensure": fake})())
+        r = service.get_quote("unused-root", "NVDA.US",
+                              vars=["close", "volume", "amount", "turnover",
+                                    "outstanding_share", "total_market_cap", "float_market_cap"],
+                              adjust="qfq", start_date="2026-08-12", end_date="2026-08-17")
+        dates = [x["date"] for x in r["rows"]]
+        assert dates == ["2026-08-12", "2026-08-13", "2026-08-14"]
+        assert r["rows"][-1]["close"] is not None
+        assert all(x.get("close") is not None for x in r["rows"])
+
+    def test_skeleton_weekend_end_returns_last_trade_day(self, monkeypatch):
+        """end=周日 → 最后一行 = 最近交易日（8/14），不输出 8/16 空行。"""
+        fake = _FakeEnsure(self._phantom_data())
+        monkeypatch.setattr(service, "aggregator", type("A", (), {"ensure": fake})())
+        r = service.get_quote("unused-root", "NVDA.US", vars=["close"],
+                              adjust="qfq", start_date="2026-08-12", end_date="2026-08-16")
+        assert [x["date"] for x in r["rows"]] == ["2026-08-12", "2026-08-13", "2026-08-14"]
+
+    def test_skeleton_fallback_pure_share_request(self, monkeypatch):
+        """无新浪价格字段（美股纯股本）→ 退回全部字段并集，股本今天行保留。"""
+        mk = lambda ds, base, src="sina": [  # noqa: E731
+            {"date": d, "value": base + i, "source": src} for i, d in enumerate(ds)]
+        data = {"floating_shares": (mk(["2026-08-12", "2026-08-13", "2026-08-14", "2026-08-17"],
+                                       2.4e10, "ifind"), "ifind")}
+        fake = _FakeEnsure(data)
+        monkeypatch.setattr(service, "aggregator", type("A", (), {"ensure": fake})())
+        r = service.get_quote("unused-root", "NVDA.US", vars=["outstanding_share"],
+                              start_date="2026-08-12", end_date="2026-08-17")
+        assert r["rows"][-1]["date"] == "2026-08-17"
+        assert r["rows"][-1]["outstanding_share"] is not None

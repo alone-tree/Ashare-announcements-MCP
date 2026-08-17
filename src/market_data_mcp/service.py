@@ -83,6 +83,11 @@ def _values_by_date(items: list[dict] | None, preferred: str | None = None) -> d
     return out
 
 
+def _is_sina_chain(chain: list | None) -> bool:
+    """字段来源链首源是否为新浪（骨架日期的唯一贡献者，见 get_quote 组装段）。"""
+    return bool(chain) and chain[0] in (sina.fetch_raw, sina.fetch_hfq)
+
+
 def _default_start(end: str) -> str:
     """end 为空时默认起点：最近 10 个交易日（≈14 自然日）。"""
     return (date.fromisoformat(end) - timedelta(days=14)).isoformat()
@@ -208,6 +213,7 @@ def get_quote(
         need_fields.add("close_hfq")
 
     # 2. 逐字段 ensure（缓存复用）；字段级失败→部分成功：失败字段无数据 + notes 标注，不整单拒绝
+    chains = _field_chains(mc)
     results = _ensure_fields(root, mc, need_fields, start, end)
     failed = {f: r for f, r in results.items() if not r["ok"]}
     ok_fields = [f for f, r in results.items() if r["ok"]]
@@ -223,13 +229,24 @@ def get_quote(
             if n and n not in notes:
                 notes.append(n)
 
-    # 3. 组装：骨架日期 = 各字段日期并集（请求范围内）；按聚合器结果源取数
+    # 3. 组装：骨架日期 = 新浪价格序列日期（2026-08-17 用户拍板：除权行情做基准，
+    #    三个市场一致；iFinD 字段——股本/美股 amount/美股 close_hfq——只做值映射不贡献日期，
+    #    避免 iFinD 把"今天"伪行（值=上一交易日）混入非交易日输出）。
+    #    新浪日线接口只返回真实交易日，天然处理周末/节假日/美股未开盘；
+    #    无新浪价格字段的请求（如纯股本）退回全部字段并集。
     by_field: dict[str, dict[str, float | None]] = {}
+    skeleton: set[str] = set()
     all_dates: set[str] = set()
     for f, r in results.items():
         by_field[f] = _values_by_date(r["items"], r.get("source"))
         all_dates.update(by_field[f].keys())
-    dates = sorted(d for d in all_dates
+        if _is_sina_chain(chains.get(f)):
+            for it in (r.get("items") or []):
+                if it.get("source") == "sina" and it.get("value") is not None:
+                    skeleton.add(it["date"])
+    if not skeleton:
+        skeleton = all_dates
+    dates = sorted(d for d in skeleton
                    if (start is None or start <= d) and (end is None or d <= end))
 
     # 4. 逐行组装原始值
