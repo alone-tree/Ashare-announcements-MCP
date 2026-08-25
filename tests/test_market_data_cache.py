@@ -63,16 +63,21 @@ class TestMergeItems:
 
 
 class TestCoverage:
-    """覆盖判定：c_start ≤ start 且 c_end ≥ end（末尾容忍 ≤7 天缺口）。"""
+    """覆盖判定：实际数据范围优先；终点不足时按 updated_at 短期复用 10 分钟。"""
 
-    def _meta(self, start=None, end=None):
-        return {"date_range": {"start": start, "end": end}}
+    def _meta(self, start=None, end=None, updated_at=None):
+        meta = {"date_range": {"start": start, "end": end}}
+        if updated_at is not None:
+            meta["updated_at"] = updated_at
+        return meta
 
     def test_full_cover(self):
         assert cache.coverage(self._meta("2026-01-01", "2026-12-31"), "2026-03-01", "2026-06-30")
 
-    def test_missing_start(self):
-        assert not cache.coverage(self._meta("2026-03-01", "2026-12-31"), "2026-01-01", "2026-06-30")
+    def test_missing_start_never_uses_retry_window(self):
+        meta = self._meta("2026-03-01", "2026-12-31", "2026-08-25T10:00:00")
+        assert not cache.coverage(meta, "2026-01-01", "2026-06-30",
+                                  now=datetime(2026, 8, 25, 10, 5))
 
     def test_exact_boundary_ok(self):
         assert cache.coverage(self._meta("2026-01-01", "2026-12-31"), "2026-01-01", "2026-12-31")
@@ -82,91 +87,32 @@ class TestCoverage:
         assert cache.coverage(self._meta("2026-01-01", "2026-12-31"), "2026-06-01", None)
         assert cache.coverage(self._meta("2026-01-01", "2026-12-31"), None, "2026-06-30")
 
-    def test_verified_until_covers_end(self):
-        """探测验证：verified_until ≥ end → 视为覆盖（周末场景零请求）。"""
-        meta = self._meta("2026-01-01", "2026-08-07")
-        meta["verified_until"] = "2026-08-09"
-        meta["verified_at"] = "2026-08-09T10:00:00"
-        assert cache.coverage(meta, "2026-03-01", "2026-08-09")
+    def test_incomplete_end_reuses_cache_within_ten_minutes(self):
+        meta = self._meta("2026-01-01", "2026-08-24", "2026-08-25T10:00:00")
+        assert cache.coverage(meta, "2026-03-01", "2026-08-25",
+                              now=datetime(2026, 8, 25, 10, 9, 59))
 
-    def test_verified_until_not_enough(self):
-        meta = self._meta("2026-01-01", "2026-08-07")
-        meta["verified_until"] = "2026-08-09"
-        assert not cache.coverage(meta, "2026-03-01", "2026-08-10")  # 超出验证范围 → 补拉
+    def test_incomplete_end_retries_at_ten_minutes(self):
+        meta = self._meta("2026-01-01", "2026-08-24", "2026-08-25T10:00:00")
+        assert not cache.coverage(meta, "2026-03-01", "2026-08-25",
+                                  now=datetime(2026, 8, 25, 10, 10))
 
-    def test_verified_without_meta_field(self):
-        assert not cache.coverage(self._meta("2026-01-01", "2026-08-07"), "2026-03-01", "2026-08-09")
+    def test_future_updated_at_retries(self):
+        """系统时钟回拨或异常未来时间不能无限复用不完整缓存。"""
+        meta = self._meta("2026-01-01", "2026-08-24", "2026-08-25T10:01:00")
+        assert not cache.coverage(meta, "2026-03-01", "2026-08-25",
+                                  now=datetime(2026, 8, 25, 10, 0))
+
+    def test_incomplete_without_updated_at_retries(self):
+        assert not cache.coverage(self._meta("2026-01-01", "2026-08-24"),
+                                  "2026-03-01", "2026-08-25")
+
+    def test_legacy_probe_fields_are_ignored(self):
+        meta = self._meta("2026-01-01", "2026-08-24", "2026-08-25T09:00:00")
+        meta.update({"verified_until": "2026-08-25",
+                     "last_probe": {"state": "closed", "date": "2026-08-25"}})
+        assert not cache.coverage(meta, "2026-03-01", "2026-08-25",
+                                  now=datetime(2026, 8, 25, 10, 0))
 
     def test_no_date_range(self):
         assert not cache.coverage({"x": 1}, "2026-01-01", "2026-06-30")
-
-
-class TestProbeResult:
-    def _write(self, root, code="600519.SH"):
-        cache.write_cache(root, code, "close",
-                          meta={"code": code, "market": "A", "field": "close", "source": "sina",
-                                "date_range": {"start": "2026-08-06", "end": "2026-08-07"}},
-                          items=[{"date": "2026-08-06", "value": 1.0, "source": "sina"}])
-
-    def test_friday_closed_probe_extends_to_sunday(self, tmp_path):
-        """周五收盘后探测 → verified_until 延伸到周日（周末确定无数据）。"""
-        root = str(tmp_path)
-        self._write(root)
-        cache.probe_result(root, "600519.SH", "close", "2026-08-07", closed=True,
-                           now=datetime(2026, 8, 7, 15, 30))
-        meta = cache.read_cache(root, "600519.SH", "close")["meta"]
-        assert meta["verified_until"] == "2026-08-09"
-        assert meta["verified_at"] == "2026-08-07T15:30:00"
-        assert meta["last_probe"] == {"state": "closed", "date": "2026-08-07"}
-        # 周六/周日请求命中（零请求）；周一不命中 → 补拉
-        assert cache.coverage(meta, "2026-08-06", "2026-08-08") is True
-        assert cache.coverage(meta, "2026-08-06", "2026-08-09") is True
-        assert cache.coverage(meta, "2026-08-06", "2026-08-10") is False
-
-    def test_monday_closed_probe_no_extension(self, tmp_path):
-        """周一~周四不延伸（次日可能出数据）。"""
-        root = str(tmp_path)
-        self._write(root)
-        cache.probe_result(root, "600519.SH", "close", "2026-08-10", closed=True,
-                           now=datetime(2026, 8, 10, 15, 30))
-        meta = cache.read_cache(root, "600519.SH", "close")["meta"]
-        assert meta["verified_until"] == "2026-08-10"
-        assert cache.coverage(meta, "2026-08-06", "2026-08-10") is True
-        assert cache.coverage(meta, "2026-08-06", "2026-08-11") is False
-
-    def test_intraday_probe_no_verified(self, tmp_path):
-        """盘中探测：不写 verified_until（当日收盘后可能出数据），只记 last_probe=intraday。"""
-        root = str(tmp_path)
-        self._write(root)
-        cache.probe_result(root, "600519.SH", "close", "2026-08-11", closed=False,
-                           now=datetime(2026, 8, 11, 10, 0))
-        meta = cache.read_cache(root, "600519.SH", "close")["meta"]
-        assert "verified_until" not in meta
-        assert meta["last_probe"] == {"state": "intraday", "date": "2026-08-11"}
-
-    def test_intraday_same_day_reprobe_covered(self, tmp_path):
-        """盘中续探（用户拍板）：上次盘中、本次盘中同一天且未收盘 → 覆盖（零请求）。"""
-        root = str(tmp_path)
-        self._write(root)
-        cache.probe_result(root, "600519.SH", "close", "2026-08-11", closed=False,
-                           now=datetime(2026, 8, 11, 10, 0))
-        meta = cache.read_cache(root, "600519.SH", "close")["meta"]
-        # 同天盘中再请求 → 覆盖
-        assert cache.coverage(meta, "2026-08-06", "2026-08-11",
-                              market="A", now=datetime(2026, 8, 11, 11, 0)) is True
-        # 同天已收盘（本次盘后）→ 不覆盖 → 补拉当天数据
-        assert cache.coverage(meta, "2026-08-06", "2026-08-11",
-                              market="A", now=datetime(2026, 8, 11, 16, 0)) is False
-        # 跨天（次日盘中）→ 不覆盖 → 补拉（前一天收盘可能有数据）
-        assert cache.coverage(meta, "2026-08-06", "2026-08-12",
-                              market="A", now=datetime(2026, 8, 12, 10, 0)) is False
-        # 不带 market（老调用方）→ 盘中续探不生效
-        assert cache.coverage(meta, "2026-08-06", "2026-08-11") is False
-
-    def test_preserves_items(self, tmp_path):
-        root = str(tmp_path)
-        self._write(root)
-        cache.probe_result(root, "600519.SH", "close", "2026-08-09", closed=True,
-                           now=datetime(2026, 8, 9, 12, 0))
-        data = cache.read_cache(root, "600519.SH", "close")
-        assert data["items"] == [{"date": "2026-08-06", "value": 1.0, "source": "sina"}]

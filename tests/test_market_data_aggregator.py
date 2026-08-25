@@ -1,15 +1,24 @@
 # -*- coding: utf-8 -*-
 """字段聚合器测试：字段级 ensure、缓存覆盖判定、字段链补拉、全链失败。"""
 
+import json
+from datetime import datetime
+
 from market_data_mcp import aggregator, cache
 from market_data_mcp.routing import parse_code
 
 
-def _write_field(root, code, field, rows, start, end, source="sina"):
-    cache.write_cache(root, code, field,
-                      meta={"code": code, "market": "A", "field": field,
-                            "source": source, "date_range": {"start": start, "end": end}},
-                      items=rows)
+def _write_field(root, code, field, rows, start, end, source="sina", updated_at=None):
+    meta = {"code": code, "market": "A", "field": field,
+            "source": source, "date_range": {"start": start, "end": end}}
+    cache.write_cache(root, code, field, meta=meta, items=rows)
+    if updated_at is not None:
+        path = cache.cache_path(root, code, field)
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["meta"]["updated_at"] = updated_at
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
 
 
 def _fetcher(result):
@@ -34,15 +43,27 @@ class TestEnsure:
         assert r["ok"] is True and r["source"] == "sina"
         assert f.calls == []  # 未触发补拉
 
-    def test_end_gap_not_covered(self, tmp_path):
-        """严格覆盖判定：end 超出缓存末尾（即使 1 天）→ 不覆盖，触发补拉。"""
+    def test_recent_end_gap_reuses_cache(self, tmp_path):
+        """终点不足但刚请求过：10 分钟内复用缓存，不重复请求。"""
         root = str(tmp_path)
-        _write_field(root, "600519.SH", "close", [{"date": "2026-08-07", "value": 1.0, "source": "sina"}],
-                     "2026-08-03", "2026-08-07")
+        _write_field(root, "600519.SH", "close", [{"date": "2026-08-24", "value": 1.0, "source": "sina"}],
+                     "2026-08-03", "2026-08-24",
+                     updated_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
         f = _fetcher({"ok": True, "source": "sina", "fields": {}})
         r = aggregator.ensure(root, parse_code("600519.SH"), "close", [f],
-                              start="2026-08-03", end="2026-08-09")
-        assert f.calls  # 严格判定：不覆盖 → 补拉
+                              start="2026-08-03", end="2026-08-25")
+        assert r["ok"] is True
+        assert f.calls == []
+
+    def test_stale_end_gap_retries(self, tmp_path):
+        """终点不足且上次请求已超过 10 分钟：重新请求上游。"""
+        root = str(tmp_path)
+        _write_field(root, "600519.SH", "close", [{"date": "2026-08-24", "value": 1.0, "source": "sina"}],
+                     "2026-08-03", "2026-08-24", updated_at="2000-08-25T10:00:00")
+        f = _fetcher({"ok": True, "source": "sina", "fields": {}})
+        aggregator.ensure(root, parse_code("600519.SH"), "close", [f],
+                          start="2026-08-03", end="2026-08-25")
+        assert f.calls == [("2026-08-24", "2026-08-25")]
 
     def test_chain_tries_next_source(self, tmp_path):
         """第一源失败（或不覆盖字段）→ 尝试第二源。"""

@@ -28,7 +28,7 @@ import iFinDPy as ths
 import yaml
 
 from market_data_mcp import audit, cache
-from market_data_mcp.routing import MarketCode, is_market_closed
+from market_data_mcp.routing import MarketCode
 
 # iFinD 为国内服务：清代理直连（与新浪/东财一致）
 for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
@@ -215,16 +215,18 @@ def _fetch_us_daily(
             notes.append(f"单点补全失败 {fail} 个交易日（缺失范围见日志）")
 
     if not fresh:
+        # 请求成功但无新行：已有缓存只刷新 updated_at，启动固定 10 分钟重试窗口；
+        # 无缓存时不创建空文件。
+        date_range = cache.refresh_cache(root, code, field)
         elapsed = time.time() - t0
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                           fields=indicator, adjust=adjust, start=start, end=end,
                           ok=True, elapsed=elapsed)
-        return {"ok": True, "source": SOURCE, "fields": {}, "error": None, "notes": notes or None}
+        fields = {field: date_range} if date_range is not None else {}
+        return {"ok": True, "source": SOURCE, "fields": fields,
+                "error": None, "notes": notes or None}
 
     date_range = _write_field(root, code, mc.market, field, fresh)
-    # 探测（2026-08-09 用户拍板）：返回末日 < end → 记探测结果（closed/intraday）
-    if end is not None and fresh and max(r["date"] for r in fresh) < end:
-        cache.probe_result(root, code, field, end, closed=is_market_closed(mc.market))
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields=f"{indicator}({param})", adjust=adjust, start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
@@ -358,11 +360,19 @@ def fetch_shares(
                           elapsed=time.time() - t0, error=f"失败 {fail} 个单点" if fail else None)
 
     if not fresh:
+        # 请求成功但无新行：仅刷新该市场实际归属 iFinD 的已有股本字段。
+        fields = {}
+        share_fields = ("total_shares", "floating_shares") if mc.market in ("HK", "US") else ("total_shares",)
+        for field in share_fields:
+            date_range = cache.refresh_cache(root, code, field)
+            if date_range is not None:
+                fields[field] = date_range
         elapsed = time.time() - t0
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                           fields="total_shares;floating_shares", start=start, end=end,
                           ok=True, elapsed=elapsed)
-        return {"ok": True, "source": SOURCE, "fields": {}, "error": None, "notes": notes or None}
+        return {"ok": True, "source": SOURCE, "fields": fields,
+                "error": None, "notes": notes or None}
 
     fields = {
         "total_shares": _write_field(root, code, mc.market, "total_shares",
@@ -374,11 +384,6 @@ def fetch_shares(
         fields["floating_shares"] = _write_field(
             root, code, mc.market, "floating_shares",
             [{"date": r["date"], "value": r["floating_shares"]} for r in fresh])
-    # 探测（2026-08-09 用户拍板）：返回末日 < end → 记探测结果（closed/intraday）
-    if end is not None and fresh and max(r["date"] for r in fresh) < end:
-        closed = is_market_closed(mc.market)
-        for f in fields:
-            cache.probe_result(root, code, f, end, closed=closed)
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields="total_shares;floating_shares", start=start, end=end,
                       ok=True, elapsed=time.time() - t0)

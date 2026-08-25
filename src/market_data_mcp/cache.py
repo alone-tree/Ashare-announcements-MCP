@@ -9,10 +9,11 @@ meta: code / market / field / source / updated_at / date_range / shape
 - date_range：数据实际覆盖范围 {"start": "...", "end": "..."}（请求模块写入）
 - shape：数据形状 {"rows": N}（自动）
 
-覆盖判定（2026-08-08 用户拍板）：**完整覆盖才算够**——
-c_start ≤ start 且 c_end ≥ end（双向段覆盖）才直接返回缓存；
-其他情况缺什么补什么。start/end 为 None 视为不约束该侧。
-日期为 YYYY-MM-DD 字符串，字典序即时间序，直接比较。
+覆盖判定：
+- 实际数据完整覆盖请求范围时直接返回缓存；
+- 实际终点尚未覆盖，但最近一次成功请求写入缓存距今不足 10 分钟时，短期复用缓存；
+- 满 10 分钟后重新请求上游。程序不判断交易所开收盘、周末或节假日。
+start/end 为 None 视为不约束该侧；日期为 YYYY-MM-DD 字符串，字典序即时间序。
 
 缓存文件清单（2026-08-09 用户拍板：字段级独立 json）：
 - 高开低收原值：open / high / low / close
@@ -28,10 +29,12 @@ import json
 import os
 import tempfile
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
-from market_data_mcp.routing import is_market_closed
+# 实际数据尚未覆盖请求终点时，短期复用最近一次成功请求写入的缓存。
+# 用户决策：固定 10 分钟，不暴露为参数，不判断交易所开收盘时间。
+INCOMPLETE_RETRY_INTERVAL = timedelta(minutes=10)
 
 # 字段 → 缓存文件名（2026-08-09 用户拍板）
 DATA_FILES = {
@@ -98,7 +101,7 @@ def write_cache(
     path = cache_path(root, code, field)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     meta = dict(meta)
-    meta.setdefault("updated_at", time.strftime("%Y-%m-%dT%H:%M:%S"))
+    meta["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     meta.setdefault("date_range", None)
     meta.setdefault("shape", _shape_of(items))
     payload = {"meta": meta, "items": items}
@@ -114,6 +117,17 @@ def write_cache(
     return path
 
 
+def refresh_cache(root: str, code: str, field: str) -> dict[str, Any] | None:
+    """上游请求成功但没有新行时，刷新已有字段缓存的 updated_at；无缓存不创建空文件。"""
+    data = read_cache(root, code, field)
+    if data is None:
+        return None
+    old = data.get("meta") or {}
+    meta = {k: old.get(k) for k in ("code", "market", "field", "source", "date_range")}
+    write_cache(root, code, field, meta=meta, items=data.get("items") or [])
+    return meta.get("date_range")
+
+
 def _shape_of(items: Any) -> dict[str, Any]:
     if isinstance(items, list):
         return {"rows": len(items)}
@@ -122,64 +136,26 @@ def _shape_of(items: Any) -> dict[str, Any]:
 
 def coverage(meta: dict[str, Any], start: str | None, end: str | None,
              market: str | None = None, now: datetime | None = None) -> bool:
-    """覆盖判定：缓存完整覆盖请求日期段才算够（c_start ≤ start 且 c_end ≥ end）。
+    """判断缓存是否可复用。
 
-    探测验证（2026-08-09 用户拍板：探测 + 已收盘判断，无交易日历）：
-    1. 末尾不足时若 meta.verified_until ≥ end → 视为覆盖（盘后探测确认到该日期
-       为止无更多已收盘数据；周五~周日探测自动延伸到周日）
-    2. 盘中续探：上次探测是盘中（last_probe.state=intraday）且与本次请求同一天
-       且当前仍未收盘 → 视为覆盖（盘中"最新收盘日"不会变，不重复请求；
-       收盘后（本次盘后）→ 不覆盖 → 补拉当天数据）
+    实际日期范围完整覆盖请求时直接复用。若仅终点不足，但本缓存距最近一次成功请求
+    写入尚不足 10 分钟，也短期复用；满 10 分钟后重新请求上游。market 参数保留兼容
+    现有调用方，不参与判断。
     """
+    del market
     dr = meta.get("date_range") or {}
     c_start, c_end = dr.get("start"), dr.get("end")
-    if start is not None and c_start is None:
+    if start is not None and (c_start is None or c_start > start):
         return False
-    if end is not None and c_end is None:
+    if end is None or (c_end is not None and c_end >= end):
+        return True
+    updated_at = meta.get("updated_at")
+    if not updated_at:
         return False
-    if start is not None and c_start > start:
+    try:
+        updated = datetime.fromisoformat(updated_at)
+    except (TypeError, ValueError):
         return False
-    if end is not None and c_end < end:
-        v = meta.get("verified_until")
-        if v is not None and v >= end:
-            return True
-        lp = meta.get("last_probe") or {}
-        if (lp.get("state") == "intraday" and lp.get("date") == end
-                and market is not None and not is_market_closed(market, now)):
-            return True
-        return False
-    return True
-
-
-def probe_result(root: str, code: str, field: str, end: str, closed: bool,
-                 now: datetime | None = None) -> None:
-    """记录探测结果（每次补拉后调用）。
-
-    - closed=True（市场已收盘）：写 verified_until（周五~周日延伸到周末周日）
-      + verified_at（秒级，区分盘中/盘后检查）+ last_probe={state: closed}
-    - closed=False（盘中）：只写 last_probe={state: intraday}（同天盘中续探不重复请求）；
-      不写 verified_until（当日收盘后可能出数据，不能被误缓存）
-    """
-    data = read_cache(root, code, field)
-    if data is None:
-        return
     now = now or datetime.now()
-    meta = dict(data["meta"])
-    meta["last_probe"] = {"state": "closed" if closed else "intraday", "date": end}
-    if closed:
-        meta["verified_until"] = _extend_verified(end)
-        meta["verified_at"] = now.strftime("%Y-%m-%dT%H:%M:%S")
-    else:
-        # 盘中探测不写 verified（旧 verified 保留：盘后确认比盘中更新，仍有效）
-        meta.pop("verified_at", None)
-    write_cache(root, code, field, meta=meta, items=data["items"])
-
-
-def _extend_verified(end: str) -> str:
-    """周五~周日的探测日期延伸到所在周末的周日（周末确定无数据）。"""
-    d = date.fromisoformat(end)
-    if d.weekday() == 4:  # 周五 → 周日
-        return (d + timedelta(days=2)).isoformat()
-    if d.weekday() == 5:  # 周六 → 周日
-        return (d + timedelta(days=1)).isoformat()
-    return end  # 周一~周四不延伸（次日可能出数据）
+    elapsed = now - updated
+    return timedelta(0) <= elapsed < INCOMPLETE_RETRY_INTERVAL

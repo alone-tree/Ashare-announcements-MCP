@@ -116,6 +116,25 @@ class TestFetchUsAmount:
         # 不污染 close
         assert cache.read_cache(root, "AAPL.US", "close") is None
 
+    def test_empty_success_refreshes_existing_cache(self, tmp_path, monkeypatch):
+        """iFinD 成功但无新行：刷新已有缓存时间，避免 10 分钟内重复请求。"""
+        _login_and_probe(monkeypatch)
+        root = str(tmp_path)
+        cache.write_cache(
+            root, "AAPL.US", "amount",
+            meta={"code": "AAPL.US", "market": "US", "field": "amount", "source": "ifind",
+                  "date_range": {"start": "2026-08-24", "end": "2026-08-24"}},
+            items=[{"date": "2026-08-24", "value": 1.0, "source": "ifind"}],
+        )
+        before = cache.read_cache(root, "AAPL.US", "amount")["meta"]["updated_at"]
+        monkeypatch.setattr(ifind.ths, "THS_DS", lambda *a, **k: _r(pd.DataFrame()))
+        r = ifind.fetch_us_amount(root, parse_code("AAPL.US"),
+                                  start="2026-08-24", end="2026-08-25")
+        data = cache.read_cache(root, "AAPL.US", "amount")
+        assert r["fields"] == {"amount": {"start": "2026-08-24", "end": "2026-08-24"}}
+        assert data["meta"]["updated_at"] >= before
+        assert data["items"] == [{"date": "2026-08-24", "value": 1.0, "source": "ifind"}]
+
     def test_backfill_uses_trade_days(self, tmp_path, monkeypatch):
         _login_and_probe(monkeypatch)
         monkeypatch.setattr(ifind.ths, "THS_DS", lambda *a, **k: _r(_ds_df(

@@ -29,7 +29,7 @@ import akshare as ak
 import pandas as pd
 
 from market_data_mcp import audit, cache
-from market_data_mcp.routing import MarketCode, is_market_closed
+from market_data_mcp.routing import MarketCode
 
 # 新浪为国内源：清代理直连（Hermes 注入的代理对数据接口致 ProxyError/SSLError）
 for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
@@ -176,13 +176,6 @@ def _fetch(
         fields = _write_fields(root, code, mc.market, fresh, field_map)
 
     elapsed = time.time() - t0
-    # 探测（2026-08-09 用户拍板）：返回末日 < end → 记探测结果
-    # closed（市场已收盘）→ verified_until+verified_at（周末延伸，节假日覆盖）；
-    # intraday（盘中）→ last_probe=intraday（同天盘中续探零请求，盘后自动失效补拉）
-    if end is not None and fresh and fresh[-1]["date"] < end:
-        closed = is_market_closed(mc.market)
-        for f in fields:
-            cache.probe_result(root, code, f, end, closed=closed)
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
                       fields=",".join(df.columns), adjust=adjust, start=start, end=end,
                       ok=True, elapsed=elapsed)

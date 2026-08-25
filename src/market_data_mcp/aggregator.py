@@ -34,10 +34,19 @@ def ensure(
         return {"ok": True, "items": cur["items"], "source": cur["meta"].get("source"),
                 "notes": None}
 
+    # 仅终点不足时，从缓存实际末日开始重叠一天补拉：既减少请求范围，也允许上游
+    # 修订最后一条记录。起点不足时仍按原请求起点补拉。
+    fetch_start = start
+    if cur is not None:
+        dr = cur["meta"].get("date_range") or {}
+        c_start, c_end = dr.get("start"), dr.get("end")
+        if c_end is not None and (start is None or (c_start is not None and c_start <= start)):
+            fetch_start = c_end
+
     notes = []
     last_error = None
     for fetcher in chain:
-        r = fetcher(root, mc, start=start, end=end)
+        r = fetcher(root, mc, start=fetch_start, end=end)
         if r.get("ok") and field in (r.get("fields") or {}):
             # fetcher 只在写缓存成功后返回 fields 声明——重新读缓存确认即可
             cur = cache.read_cache(root, code, field)

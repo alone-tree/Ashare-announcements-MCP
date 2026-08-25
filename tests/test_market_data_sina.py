@@ -76,33 +76,21 @@ class TestFetchRaw:
             last = json.loads(f.readlines()[-1])
         assert last["ok"] is False and last["source"] == "sina"
 
-    def test_probe_writes_verified_after_close(self, tmp_path, monkeypatch):
-        """探测（2026-08-09 用户拍板）：返回末日 < end 且市场已收盘 → verified_until/verified_at/last_probe。"""
-        df = _df(["2026-08-07"], {"close": [10.0], "volume": [100]})
+    def test_incomplete_response_keeps_actual_date_range(self, tmp_path, monkeypatch):
+        """上游未返回请求终点时，只记录实际拿到的数据范围，不写额外探测状态。"""
+        df = _df(["2026-08-24"], {"open": [9.0], "high": [11.0], "low": [8.0],
+                                       "close": [10.0], "volume": [100], "amount": [1000.0],
+                                       "outstanding_share": [10000]})
         monkeypatch.setattr("akshare.stock_zh_a_daily", lambda **kw: df)
-        monkeypatch.setattr("market_data_mcp.providers.sina.is_market_closed", lambda m: True)
         root = str(tmp_path)
-        r = sina.fetch_raw(root, parse_code("600519.SH"), start="2026-08-01", end="2026-08-09")
-        assert r["ok"] is True
-        for f in ("close", "volume", "open", "high", "low", "amount", "floating_shares"):
-            meta = cache.read_cache(root, "600519.SH", f)["meta"]
-            assert meta["verified_until"] == "2026-08-09"  # 周日探测（延伸=本身）
-            assert meta["verified_at"]  # 秒级时间戳（区分盘中/盘后检查）
-            assert meta["last_probe"] == {"state": "closed", "date": "2026-08-09"}
-        meta = cache.read_cache(root, "600519.SH", "close")["meta"]
-        assert cache.coverage(meta, "2026-08-07", "2026-08-09") is True
-
-    def test_probe_intraday_writes_last_probe(self, tmp_path, monkeypatch):
-        """盘中探测：不写 verified_until，只记 last_probe=intraday（同天盘中续探零请求）。"""
-        df = _df(["2026-08-07"], {"close": [10.0], "volume": [100]})
-        monkeypatch.setattr("akshare.stock_zh_a_daily", lambda **kw: df)
-        monkeypatch.setattr("market_data_mcp.providers.sina.is_market_closed", lambda m: False)
-        root = str(tmp_path)
-        r = sina.fetch_raw(root, parse_code("600519.SH"), start="2026-08-01", end="2026-08-09")
+        r = sina.fetch_raw(root, parse_code("600519.SH"),
+                           start="2026-08-24", end="2026-08-25")
         assert r["ok"] is True
         meta = cache.read_cache(root, "600519.SH", "close")["meta"]
+        assert meta["date_range"]["end"] == "2026-08-24"
         assert "verified_until" not in meta
-        assert meta["last_probe"] == {"state": "intraday", "date": "2026-08-09"}
+        assert "verified_at" not in meta
+        assert "last_probe" not in meta
 
 
 class TestFetchHfq:
