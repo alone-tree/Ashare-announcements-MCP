@@ -12,10 +12,13 @@
   序号前缀（一、/减：/加：/其中：）与填列说明括注后收录核心名；
 - 同一报表行的停用重复 code、恒 0 的 *_BALANCE 死字段、语义随公司漂移的
   code 不收录（保留英文原名），如 BEGIN_CCE/END_CASH、DEFER_TAX、
-  CASH_DEPOSIT_PBC、FBOPERATE_NETCASH_OTHER、FINANCE_INFLOW_OTHER、
+  FBOPERATE_NETCASH_OTHER、FINANCE_INFLOW_OTHER、
   FINANCE_OUTFLOW_OTHER、BORROW_REPO_ADD、LEND_RESALE_ADD、
   OPERATE_INFLOW_OTHER、OPERATE_OUTFLOW_OTHER、IA_LPE_AMORTIZE、
   SUBSIDIARY_ACCEPT_INVEST、OTHER、ABLE_OCI_OTHER、UNABLE_OCI_OTHER；
+- 简称与全名重复的唯一例外：CASH_DEPOSIT_PBC（银行模板行名=现金及存放
+  中央银行款项、金租模板行名=货币资金），收录为 [现金及存放中央银行款项,
+  货币资金]，显示名取银行口径，等价关系随返回 notes 说明；
 - 全名重复仅限行业/年代替代 code 对：利息收入（FE_INTEREST_INCOME 与
   INTEREST_INCOME）、信用减值损失（CREDIT_IMPAIRMENT_INCOME 与 _LOSS）、
   资产减值损失（ASSET_IMPAIRMENT_INCOME 与 _LOSS），四家样本无同公司并存。
