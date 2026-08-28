@@ -72,6 +72,54 @@ def test_financial_statements_cli_batch_partial_success(monkeypatch):
     assert response["results"][0]["code"] == "AAPL.US"
 
 
+def test_financial_markdown_renders_variable_by_period_matrix():
+    result = {
+        "ok": True,
+        "code": "301205.SZ",
+        "statements": ["income"],
+        "amount_basis": "single",
+        "rows": [
+            {"report_date": "2026-03-31", "statement": "income", "item_name": "营业收入",
+             "amount": 213359674.81, "value_basis": "single",
+             "report_metadata": {"NOTICE_DATE": "2026-04-29 00:00:00", "CURRENCY": "CNY",
+                                  "OPINION_TYPE": None, "UPDATE_DATE": "2026-04-29 00:00:00"}},
+            {"report_date": "2026-06-30", "statement": "income", "item_name": "营业收入",
+             "amount": 1105675.0499999998, "value_basis": "single",
+             "report_metadata": {"NOTICE_DATE": "2026-08-28 00:00:00", "CURRENCY": "CNY",
+                                  "OPINION_TYPE": None, "UPDATE_DATE": "2026-08-28 00:00:00"}},
+        ],
+    }
+
+    rendered = server._render_financial_markdown(result)
+
+    md = rendered["markdown"]
+    assert "## 利润表（value_basis=single）" in md
+    assert "| 科目 | 2026-03-31 | 2026-06-30 |" in md
+    assert "| 营业收入 | 213359674.81 | 1105675.05 |" in md
+    assert "| 公告日 | 2026-04-29 00:00:00 | 2026-08-28 00:00:00 |" in md
+    assert "| 货币 | CNY | CNY |" in md
+    assert "rows" not in rendered
+
+
+def test_financial_markdown_passthrough_export_and_version_audit():
+    exported = server._render_financial_markdown({"ok": True, "path": "x.csv"})
+    assert "markdown" not in exported
+
+    versioned = server._render_financial_markdown({
+        "ok": True, "statements": ["income"], "amount_basis": "cumulative",
+        "include_versions": True,
+        "rows": [
+            {"report_date": "2025-12-31", "statement": "income", "item_name": "净利润",
+             "amount": 100.0, "value_basis": "cumulative", "version_id": "abc",
+             "is_latest": True, "version_count": 2, "report_metadata": {}},
+        ],
+    })
+
+    md = versioned["markdown"]
+    assert "| 报告期 | 科目 | 金额 | version_id | is_latest | version_count |" in md
+    assert "| 2025-12-31 | 净利润 | 100.00 | abc | True | 2 |" in md
+
+
 def test_data_catalog_mcp_is_registered_and_forwards_company_statements(monkeypatch):
     calls = []
 

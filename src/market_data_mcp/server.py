@@ -56,6 +56,84 @@ def _wrap(fn):
     return wrapper
 
 
+_FINANCIAL_TITLES = {"income": "利润表", "balance": "资产负债表", "cash_flow": "现金流量表"}
+_FINANCIAL_META_ROWS = [
+    ("公告日", "NOTICE_DATE"),
+    ("东财更新日", "UPDATE_DATE"),
+    ("货币", "CURRENCY"),
+    ("审计意见", "OPINION_TYPE"),
+]
+
+
+def _fmt_financial_amount(value):
+    """金额统一保留 2 位小数展示；空值渲染为空单元格。"""
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        return f"{round(value, 2):.2f}"
+    return str(value)
+
+
+def _render_financial_markdown(result: dict) -> dict:
+    """把 get_financial_statements 的 rows 渲染为「变量 × 报告期」markdown 表。
+
+    JSON 信封保留 ok/status/failed_items/notes 等元信息，数据本体进入 markdown 字段；
+    rows 不再返回。include_versions=true 渲染版本审计长表。导出场景（无 rows）原样透传。
+    列名=上游原始报告截止日，不做任何推断（美/港股财年截止日灵活）。
+    """
+    rows = result.get("rows")
+    if rows is None:
+        return result
+    include_versions = bool(result.get("include_versions"))
+    blocks: list[str] = []
+    for statement in result.get("statements") or []:
+        srows = [row for row in rows if row.get("statement") == statement]
+        if not srows:
+            continue
+        value_basis = "point_in_time" if statement == "balance" else result.get("amount_basis")
+        title = _FINANCIAL_TITLES.get(statement, statement)
+        if include_versions:
+            md = [
+                f"## {title}（value_basis={value_basis}，版本审计）",
+                "",
+                "| 报告期 | 科目 | 金额 | version_id | is_latest | version_count |",
+                "|---|---|---:|---|---|---:|",
+            ]
+            for row in srows:
+                md.append("| {} | {} | {} | {} | {} | {} |".format(
+                    row.get("report_date"), row.get("item_name"),
+                    _fmt_financial_amount(row.get("amount")),
+                    row.get("version_id") or "", row.get("is_latest"), row.get("version_count"),
+                ))
+        else:
+            dates = sorted({row["report_date"] for row in srows})
+            md = [
+                f"## {title}（value_basis={value_basis}）",
+                "",
+                "| 科目 | " + " | ".join(dates) + " |",
+                "|---|" + "|---:" * len(dates),
+            ]
+            items: dict[str, dict[str, str]] = {}
+            meta_by_date: dict[str, dict] = {}
+            for row in srows:
+                report_date = row["report_date"]
+                items.setdefault(row.get("item_name"), {})[report_date] = _fmt_financial_amount(row.get("amount"))
+                if report_date not in meta_by_date:
+                    meta_by_date[report_date] = row.get("report_metadata") or {}
+            for name, cells in items.items():
+                md.append("| {} | {} |".format(name, " | ".join(cells.get(d, "") for d in dates)))
+            for label, key in _FINANCIAL_META_ROWS:
+                md.append("| {} | {} |".format(
+                    label,
+                    " | ".join(str((meta_by_date.get(d) or {}).get(key) or "") for d in dates),
+                ))
+        blocks.append("\n".join(md))
+    result.pop("rows", None)
+    if blocks:
+        result["markdown"] = "\n\n".join(blocks)
+    return result
+
+
 def create_server() -> Any:
     mcp = FastMCP("market-data")
 
@@ -126,10 +204,14 @@ def create_server() -> Any:
         report_types: 可选 annual/semiannual/q1/q3 列表；可组合。不传返回全部报告节点。
             与 amount_basis 组合时，annual+single 表示第四季度单季，semiannual+single
             表示第二季度单季，q3+single 表示第三季度单季。
-        返回 rows 包含中文优先的科目名、金额、来源、报告级元信息和版本信息；有可靠
-        中文名时不暴露英文代码，未映射时保留原名。不返回同比/环比比例，不自行修正上游值。
+        返回 JSON 信封（ok/status/failed_items/notes 等）+ markdown 字段：markdown 为
+        「变量 × 报告期」表格，每 statement 一张表，公告日/东财更新日/货币/审计意见
+        作为行，金额保留 2 位小数；列名=上游原始报告截止日，不做推断（美/港股财年
+        截止日灵活）。include_versions=true 时为版本审计长表（含 version_id 等列）。
+        有可靠中文名时不暴露英文代码，未映射时保留原名。不返回同比/环比比例，
+        不自行修正上游值。CLI 与 CSV 导出维持长表格式（机器消费）。
         """
-        return _wrap(get_financial_statements_service)(
+        return _render_financial_markdown(_wrap(get_financial_statements_service)(
             _data_root(),
             code,
             amount_basis=amount_basis,
@@ -141,7 +223,7 @@ def create_server() -> Any:
             export_path=export_path,
             items=items,
             report_types=report_types,
-        )
+        ))
 
     @mcp.tool()
     def get_data_catalog(

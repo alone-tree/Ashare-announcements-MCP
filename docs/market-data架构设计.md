@@ -211,14 +211,18 @@
 
 三市场原始三表（利润表/资产负债表/现金流量表）获取。A/B/北交所和港股三表使用东财；美股三表使用东财，公共提交元信息使用 SEC submissions。每类信息固定单源，不补查第二源、不做来源回退。
 
-**统一长表形状、中文优先展示**：
+**输出形态（2026-08-28 改版）：MCP=markdown 矩阵、CLI/CSV=长表**
 
-```json
-rows: [{
-  "report_date", "statement", "item_name", "amount", "source",
-  "value_basis", "version_id", "is_latest", "version_count", "has_revisions",
-  "first_seen_at", "source_update_date", "change_summary", "report_metadata"
-}, ...]
+- **MCP 成功路径**：JSON 信封（ok/market/code/statements/amount_basis/source/status/failed_items/notes/stale 等）+ `markdown` 字段——数据本体为「变量 × 报告期」矩阵，每 statement 一张表；报告级元信息（公告日/东财更新日/货币/审计意见）作为行；金额保留 2 位小数；**列名=上游原始报告截止日，不做任何推断**（美/港股财年截止日灵活）。默认视图不含 version_id/first_seen_at 等版本与审计字段；无值的单元格留空。
+- **`include_versions=true`（版本审计）**：markdown 渲染为版本长表（报告期/科目/金额/version_id/is_latest/version_count）。
+- **CLI 与 CSV 导出**：维持长表 JSON 与扁平行格式（机器消费），字段含版本信息与 `report_metadata`，不随 MCP 渲染改变；导出路径/自动导出阈值逻辑不变。
+
+```markdown
+| 科目 | 2026-03-31 | 2026-06-30 |
+|---|---:|---:|
+| 营业收入 | 213359674.81 | 482883665.96 |
+| 公告日 | 2026-04-29 | 2026-08-28 |
+| 货币 | CNY | CNY |
 ```
 
 - 缓存始终保留上游原始代码/名称；返回与 CSV 导出中文优先。有经实际报表金额与正式名称核验的 A 股映射时只返回中文，未映射则返回原名；港股/美股沿用上游中文。
