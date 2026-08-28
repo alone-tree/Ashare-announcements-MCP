@@ -440,3 +440,79 @@ def test_financial_report_types_support_annual_cumulative_and_q4_single(tmp_path
 
     assert [(row["report_date"], row["amount"]) for row in cumulative["rows"]] == [("2025-12-31", 400.0)]
     assert [(row["report_date"], row["amount"]) for row in single["rows"]] == [("2025-12-31", 150.0)]
+
+
+def test_financial_query_accepts_alias_and_notes_substitute(tmp_path, monkeypatch):
+    provider = _provider_result()
+    provider["statements"]["income"][0]["items"] = [
+        {"item_code": "TOTAL_OPERATE_INCOME", "item_name": "TOTAL_OPERATE_INCOME", "amount": 100.0, "source": "eastmoney"},
+        {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": 90.0, "source": "eastmoney"},
+        {"item_code": "OPERATE_COST", "item_name": "OPERATE_COST", "amount": 60.0, "source": "eastmoney"},
+        {"item_code": "DEDUCT_PARENT_NETPROFIT", "item_name": "DEDUCT_PARENT_NETPROFIT", "amount": 18.0, "source": "eastmoney"},
+    ]
+    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+
+    response = service.get_financial_statements(
+        str(tmp_path),
+        "600519.SH",
+        amount_basis="cumulative",
+        statements=["income"],
+        items=["营业成本", "扣非净利润", "营收"],
+    )
+
+    assert response["ok"] is True
+    assert response["status"] == "success"
+    assert response["failed_items"] == []
+    assert [(row["item_name"], row["amount"]) for row in response["rows"]] == [
+        ("归属于母公司股东的扣除非经常性损益的净利润", 18.0),
+        ("营业成本", 60.0),
+        ("营业收入", 90.0),
+    ]
+    assert response["notes"] == [
+        "科目“扣非净利润”按简称匹配为“归属于母公司股东的扣除非经常性损益的净利润”，并非精确名称匹配",
+        "科目“营收”按简称匹配为“营业收入”，并非精确名称匹配",
+        "科目名称等价：归属于母公司股东的扣除非经常性损益的净利润=扣非净利润=扣非归母净利润；营业收入=营收",
+    ]
+
+
+def test_financial_items_mapping_invariants():
+    from market_data_mcp import financial_items
+
+    table = financial_items.A_SHARE_ITEM_NAMES
+    full_names = [names[0] for names in table.values()]
+    aliases = [alias for names in table.values() for alias in names[1:]]
+    assert all(names for names in table.values())
+    assert len(aliases) == len(set(aliases))
+    duplicated = {name for name in full_names if full_names.count(name) > 1}
+    assert duplicated == {"利息收入", "信用减值损失", "资产减值损失"}
+    # 简称与全名重复的唯一例外：CASH_DEPOSIT_PBC（银行=现金及存放中央银行款项 /
+    # 金租=货币资金），显示名取银行口径，等价关系随返回 notes 说明
+    assert set(aliases) & set(full_names) == {"货币资金"}
+
+
+def test_financial_query_supports_template_alias_and_relation_note(tmp_path, monkeypatch):
+    provider = _provider_result()
+    provider["statements"]["balance"][0]["items"] = [
+        {"item_code": "CASH_DEPOSIT_PBC", "item_name": "CASH_DEPOSIT_PBC", "amount": 100.0, "source": "eastmoney"},
+    ]
+    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+
+    by_full = service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="cumulative",
+        statements=["balance"], items=["现金及存放中央银行款项"],
+    )
+    by_alias = service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="cumulative",
+        statements=["balance"], items=["货币资金"],
+    )
+
+    assert [(row["item_name"], row["amount"]) for row in by_full["rows"]] == [
+        ("现金及存放中央银行款项", 100.0),
+    ]
+    assert by_full["failed_items"] == []
+    assert "科目名称等价：现金及存放中央银行款项=货币资金" in by_full["notes"]
+    assert [(row["item_name"], row["amount"]) for row in by_alias["rows"]] == [
+        ("现金及存放中央银行款项", 100.0),
+    ]
+    assert "科目“货币资金”按简称匹配为“现金及存放中央银行款项”，并非精确名称匹配" in by_alias["notes"]
+    assert "科目名称等价：现金及存放中央银行款项=货币资金" in by_alias["notes"]

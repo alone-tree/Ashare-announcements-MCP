@@ -682,21 +682,30 @@ def _filter_financial_items(
     rows: list[dict], market: str, requested_items: list[str]
 ) -> tuple[list[dict], list[dict], list[str]]:
     by_code: dict[str, list[dict]] = {}
-    names: dict[str, str] = {}
+    match_names: dict[str, list[str]] = {}
     for row in rows:
         code = str(row.get("item_code") or "")
         by_code.setdefault(code, []).append(row)
-        names[code] = financial_items.display_name(market, code, row.get("item_name"))
+        match_names[code] = financial_items.match_names(market, code, row.get("item_name"))
     selected_codes: set[str] = set()
     failed_items: list[dict] = []
     notes: list[str] = []
     for requested in requested_items:
-        exact = [code for code, name in names.items() if name == requested]
-        candidates = exact or [code for code, name in names.items() if _ordered_keyword_match(requested, name)]
+        full_exact = [code for code, names in match_names.items() if names[0] == requested]
+        alias_exact = [
+            code for code, names in match_names.items() if len(names) > 1 and requested in names[1:]
+        ]
+        keyword = [
+            code for code, names in match_names.items() if _ordered_keyword_match(requested, names[0])
+        ]
+        candidates = full_exact or alias_exact or keyword
         if len(candidates) == 1:
             selected_codes.add(candidates[0])
-            if not exact:
-                notes.append(f"科目“{requested}”按关键词匹配为“{names[candidates[0]]}”，并非精确名称匹配")
+            full_name = match_names[candidates[0]][0]
+            if alias_exact:
+                notes.append(f"科目“{requested}”按简称匹配为“{full_name}”，并非精确名称匹配")
+            elif not full_exact:
+                notes.append(f"科目“{requested}”按关键词匹配为“{full_name}”，并非精确名称匹配")
             continue
         if not candidates:
             failed_items.append({
@@ -706,12 +715,12 @@ def _filter_financial_items(
             })
             continue
         candidate_items = []
-        for code in sorted(candidates, key=lambda value: names[value]):
+        for code in sorted(candidates, key=lambda value: match_names[value][0]):
             non_null = [row for row in by_code[code] if row.get("amount") is not None]
             latest = max(non_null or by_code[code], key=lambda row: row["report_date"])
             metadata = latest.get("report_metadata") or {}
             candidate_items.append({
-                "item_name": names[code],
+                "item_name": match_names[code][0],
                 "latest_report_date": latest.get("report_date"),
                 "latest_amount": latest.get("amount"),
                 "currency": metadata.get("CURRENCY"),
@@ -719,7 +728,7 @@ def _filter_financial_items(
         failed_items.append({
             "requested_name": requested,
             "reason": "multiple_candidates",
-            "match_type": "exact_duplicate" if exact else "keyword_candidates",
+            "match_type": "exact_duplicate" if full_exact else ("alias_duplicate" if alias_exact else "keyword_candidates"),
             "candidates": candidate_items,
         })
     selected = [row for row in rows if str(row.get("item_code") or "") in selected_codes]
@@ -856,6 +865,18 @@ def get_financial_statements(
         requested = list(dict.fromkeys(str(item).strip() for item in items))
         rows, failed_items, match_notes = _filter_financial_items(rows, mc.market, requested)
         notes.extend(match_notes)
+    relation_parts: list[str] = []
+    seen_codes: set[str] = set()
+    for row in rows:
+        code = str(row.get("item_code") or "")
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
+        names = financial_items.match_names(mc.market, code, row.get("item_name"))
+        if len(names) > 1:
+            relation_parts.append("=".join(names))
+    if relation_parts:
+        notes.append("科目名称等价：" + "；".join(relation_parts))
     rows = _localize_financial_rows(rows, mc.market)
     last_successful_update = bundle["metadata"].get("meta", {}).get("last_successful_update")
     source_values = sorted(
