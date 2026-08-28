@@ -74,6 +74,14 @@ def _fmt_financial_amount(value):
     return str(value)
 
 
+def _fmt_financial_meta(value):
+    """元信息文本展示：去除午夜时间后缀（缓存保留上游原值）。"""
+    if value is None:
+        return ""
+    text = str(value)
+    return text[:-len(" 00:00:00")] if text.endswith(" 00:00:00") else text
+
+
 def _render_financial_markdown(result: dict) -> dict:
     """把 get_financial_statements 的 rows 渲染为「变量 × 报告期」markdown 表。
 
@@ -111,7 +119,7 @@ def _render_financial_markdown(result: dict) -> dict:
                 f"## {title}（value_basis={value_basis}）",
                 "",
                 "| 科目 | " + " | ".join(dates) + " |",
-                "|---|" + "|---:" * len(dates),
+                "|---" + "|---:" * len(dates) + "|",
             ]
             items: dict[str, dict[str, str]] = {}
             meta_by_date: dict[str, dict] = {}
@@ -125,7 +133,7 @@ def _render_financial_markdown(result: dict) -> dict:
             for label, key in _FINANCIAL_META_ROWS:
                 md.append("| {} | {} |".format(
                     label,
-                    " | ".join(str((meta_by_date.get(d) or {}).get(key) or "") for d in dates),
+                    " | ".join(_fmt_financial_meta((meta_by_date.get(d) or {}).get(key)) for d in dates),
                 ))
         blocks.append("\n".join(md))
     result.pop("rows", None)

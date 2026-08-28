@@ -95,8 +95,9 @@ def test_financial_markdown_renders_variable_by_period_matrix():
     md = rendered["markdown"]
     assert "## 利润表（value_basis=single）" in md
     assert "| 科目 | 2026-03-31 | 2026-06-30 |" in md
+    assert "|---|---:|---:|" in md
     assert "| 营业收入 | 213359674.81 | 1105675.05 |" in md
-    assert "| 公告日 | 2026-04-29 00:00:00 | 2026-08-28 00:00:00 |" in md
+    assert "| 公告日 | 2026-04-29 | 2026-08-28 |" in md
     assert "| 货币 | CNY | CNY |" in md
     assert "rows" not in rendered
 
