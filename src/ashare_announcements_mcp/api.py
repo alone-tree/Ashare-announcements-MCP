@@ -176,7 +176,12 @@ def fetch_updates(
     ann_type: str = "A",
     expected_inner_code: str | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
-    """从最新页向后读取，遇到缓存中的公告后停止。"""
+    """从最新页向后读取，整页全是已缓存公告后才停止。
+
+    东财列表排序不保证严格按发布时间降序（同一 notice_date 的晚间批次，
+    新公告可能插在已知公告之后，如 000988 调研记录漏抓实例），因此按整页
+    判断：一页内发现任何新公告就继续翻页，直到某一页全部是已知公告才停止。
+    """
     new_items: list[dict[str, str]] = []
     source_total = 0
     fetched_pages = 0
@@ -193,15 +198,19 @@ def fetch_updates(
             time.sleep(0.12)
             continue
         empty_pages = 0
+        page_has_new = False
         for item in items:
             identity = str(item.get("code") or item.get("url") or "")
             if identity in known_codes:
-                return new_items, {
-                    "fetched_pages": fetched_pages,
-                    "source_total": source_total,
-                    "cache_complete": True,
-                }
+                continue
             new_items.append(item)
+            page_has_new = True
+        if not page_has_new:
+            return new_items, {
+                "fetched_pages": fetched_pages,
+                "source_total": source_total,
+                "cache_complete": True,
+            }
         if not expected_inner_code and len(new_items) >= source_total:
             break
         time.sleep(0.12)
