@@ -558,3 +558,34 @@ def test_sync_transcripts_8k_no_retrigger_after_ok(monkeypatch: pytest.MonkeyPat
     second = transcripts.sync_transcripts("AAPL", "AAPL")
     assert second["new"] == 0
     assert len(second["items"]) == 5
+
+
+def test_cloudflare_headers_with_cookie_file(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """cookie 文件存在 → 请求头带 cf_clearance + 文件内配套 UA。"""
+    (tmp_path / "alphaspread_cookies.json").write_text(
+        '{"user_agent": "TestUA/1.0", "cookie_value": "clearance-token"}', encoding="utf-8"
+    )
+    monkeypatch.setattr(transcripts, "app_root", lambda: tmp_path)
+
+    headers = transcripts._cloudflare_headers()
+
+    assert headers == {"User-Agent": "TestUA/1.0", "Cookie": "cf_clearance=clearance-token"}
+
+
+def test_cloudflare_headers_fallback_without_file(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """cookie 文件缺失 → 回退裸 UA（旧行为，不抛异常）。"""
+    monkeypatch.setattr(transcripts, "app_root", lambda: tmp_path)
+
+    headers = transcripts._cloudflare_headers()
+
+    assert headers == {"User-Agent": transcripts.ALPHA_UA}
+
+
+def test_cloudflare_headers_fallback_on_broken_json(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """cookie 文件损坏/字段缺失 → 回退裸 UA。"""
+    (tmp_path / "alphaspread_cookies.json").write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(transcripts, "app_root", lambda: tmp_path)
+
+    headers = transcripts._cloudflare_headers()
+
+    assert headers == {"User-Agent": transcripts.ALPHA_UA}

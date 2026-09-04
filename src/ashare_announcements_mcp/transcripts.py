@@ -1,6 +1,8 @@
 """美股电话会议（earnings call transcript）通道。
 
 数据流：公告列表（EDGAR submissions）→ 机械推算报告期序列 → Alpha Spread URL → 下载正文缓存。
+- Cloudflare：Alpha Spread 2026-09 起对脚本请求返回 403 managed challenge，请求须带
+  alphaspread_cookies.json 里的 cf_clearance + 配套 UA（_cloudflare_headers；文件缺失回退裸 UA）
 - 公告列表复用 sync_edgar_archive（先同步增量，再读 announcements.json）
 - 财季推算纯机械：锚定最近一份 10-K（= 财年结束 = Q4，year = 其 reportDate 年份），
   Q1→Q2→Q3→Q4→年份+1→Q1 固定循环；不读 XBRL、不下载公告正文
@@ -26,7 +28,7 @@ from typing import Any
 
 import requests
 
-from ashare_announcements_mcp.cache import load_cache, stock_cache_dir
+from ashare_announcements_mcp.cache import app_root, load_cache, stock_cache_dir
 from ashare_announcements_mcp.service import normalize_stock_code, resolve_company, sync_edgar_archive
 from ashare_announcements_mcp import us_edgar
 
@@ -370,9 +372,27 @@ def _parse_comments(html: str) -> list[dict[str, str]]:
     return parts
 
 
+def _cloudflare_headers() -> dict[str, str]:
+    """Alpha Spread 请求头：app_root 下 alphaspread_cookies.json 存在时带 cf_clearance + 配套 UA。
+
+    Alpha Spread 的 Cloudflare managed challenge 拒绝一切无浏览器指纹的请求（403，
+    2026-09 实测，改 UA/TLS 指纹/换 IP 均无效）——cf_clearance 需有头浏览器过挑战后
+    导出（绑定出口 IP + UA，签发/维护方式见 cookie 文件 renew 字段）。文件缺失或损坏
+    时回退裸 UA（旧行为）：反爬 cookie 是增强不是硬依赖，不抛异常。
+    """
+    path = app_root() / "alphaspread_cookies.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        ua = str(data["user_agent"])
+        clearance = str(data["cookie_value"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return {"User-Agent": ALPHA_UA}
+    return {"User-Agent": ua, "Cookie": f"cf_clearance={clearance}"}
+
+
 def _fetch_alpha(url: str) -> tuple[int, str]:
-    """GET Alpha Spread 页面；裸 UA（完整浏览器指纹反而 403）。"""
-    resp = requests.get(url, headers={"User-Agent": ALPHA_UA}, timeout=30)
+    """GET Alpha Spread 页面；带 cf_clearance（见 _cloudflare_headers）过 Cloudflare。"""
+    resp = requests.get(url, headers=_cloudflare_headers(), timeout=30)
     return resp.status_code, resp.text
 
 

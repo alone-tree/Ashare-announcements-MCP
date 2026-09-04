@@ -61,7 +61,7 @@ query_transcripts(
 - 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`），首次同步最近 12 财季、之后每次调用增量同步新财季、`force_refresh` 强制刷新。
 - 传 `period`（如 `FY2025-Q1`）：返回该财季完整正文（逐发言轮次：`author` + `text`）。
 - 索引以 10-Q/10-K 报告期为锚、纯机械推算财季标签（`FY{year}-{Q1/Q2/Q3/Q4}`，锚定最近一份 10-K，不解析 XBRL）；最新财报 8-K(2.02) 发布后提前下载下一财季，不必等 10-Q/10-K 提交。
-- 正文来源 Alpha Spread（裸 UA 直连）；404 标记 `missing`，429/5xx 标记 `temporary_failed` 下次重试。
+- 正文来源 Alpha Spread（Cloudflare 反爬，请求须带工具根目录 `alphaspread_cookies.json` 的 cf_clearance + 配套 UA，`_cloudflare_headers` 实现，文件缺失回退裸 UA；cookie 绑定出口 IP+UA，失效后有头浏览器过挑战重取）；404 标记 `missing`，429/5xx/403 标记 `temporary_failed` 下次重试。
 - 上游季度标签偶尔与申报财季错位（实测 LULU 偏移一年），正文第一句会注明实际报告期，由 AI 结合正文判断，不做代码级容错。
 
 ### `search_transcripts`

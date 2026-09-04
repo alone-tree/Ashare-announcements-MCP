@@ -10,6 +10,9 @@ tmp/
 # 用户本地配置（真实凭据，模板见 config.example.yaml）
 config.yaml
 
+# Alpha Spread 反爬 cookie（cf_clearance 凭据，绑定出口 IP+UA，各机器自行签发）
+alphaspread_cookies.json
+
 # market-data 审计日志（每次上游请求，本地评估用）
 logs/
 
