@@ -10,6 +10,10 @@
   必须严格按交易日历，不能用股本方案的日历月末采样）
 - `fetch_shares`：**全市场股本**（iFinD 主源）→ 写 total_shares + floating_shares
   （THS_DS 近 5 年逐日 + THS_BD 月频单点补更早，日历月末采样）
+- `fetch_statements`：**A/北交所三表**（2026-10-14 拍板切源，见架构设计 §3.8）
+  （THS_BD 报表科目单点，每报告期一次调用带全部 318 科目，报表类型只取 100=合并；
+  科目主数据=Excel 模板三表 sheet（financial_subjects.py）；THS_DS 不支持报表科目序列，
+  多期一律逐期单点，单点不限年限；增量=晚于缓存最新期的报告期 + 各表最新期重取）
 
 **铁律：iFinD 参数严禁猜测/试探变体**——所有参数写法来自官方手册与实测
 （字段与数据源支持情况.md §7/§9，2026-08-09 用户提供公式速查）。
@@ -27,8 +31,8 @@ from datetime import date, timedelta
 import iFinDPy as ths
 import yaml
 
-from market_data_mcp import audit, cache
-from market_data_mcp.routing import MarketCode
+from market_data_mcp import audit, cache, financial_cache, financial_subjects
+from market_data_mcp.routing import MarketCode, to_ifind
 
 # iFinD 为国内服务：清代理直连（与新浪/东财一致）
 for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
@@ -388,3 +392,254 @@ def fetch_shares(
                       fields="total_shares;floating_shares", start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
     return {"ok": True, "source": SOURCE, "fields": fields, "error": None, "notes": notes or None}
+
+
+# --- A/北交所三表（THS_BD 报表科目，架构设计 §3.8） ---
+
+_STATEMENTS = ("balance", "income", "cash_flow")
+_STATEMENT_BACKFILL_YEARS = 30  # 无缓存回补的硬上限，防死循环
+_STATEMENT_EMPTY_STOP = 8       # 回补时连续 N 期三表全空即停止（约等于上市前）
+_QUARTER_MD = ("03-31", "06-30", "09-30", "12-31")
+_QUARTER_NAMES = {"03-31": "一季报", "06-30": "半年报", "09-30": "三季报", "12-31": "年报"}
+_AUDIT_DD_CODE = "ths_regular_report_actual_dd_stock"  # 实际披露日 → metadata.NOTICE_DATE
+
+
+def _statement_codes() -> tuple[list[str], dict[str, list[str]]]:
+    """全部科目码（固定顺序）+ 按报表分组。"""
+    by_statement = {statement: financial_subjects.codes_for(statement) for statement in _STATEMENTS}
+    all_codes = [code for statement in _STATEMENTS for code in by_statement[statement]]
+    return all_codes, by_statement
+
+
+def _quarter_ends_desc(today: date) -> list[str]:
+    """从当期季度末往回的季度末列表（ISO 日期，降序），下限 today-N 年。"""
+    floor = (today.replace(year=today.year - _STATEMENT_BACKFILL_YEARS)).isoformat()
+    out: list[str] = []
+    year, quarter = today.year, (today.month - 1) // 3
+    while True:
+        md = _QUARTER_MD[quarter]
+        day = f"{year:04d}-{md}"
+        if day < floor:
+            break
+        out.append(day)
+        quarter -= 1
+        if quarter < 0:
+            year, quarter = year - 1, 3
+    return out
+
+
+def _read_statements_bundle(root: str, full_code: str) -> dict | None:
+    try:
+        return financial_cache.read_bundle(root, full_code)
+    except (OSError, ValueError):
+        return None
+
+
+def _bundle_latest_per_statement(bundle: dict | None) -> dict[str, str | None]:
+    latest: dict[str, str | None] = {}
+    for statement in _STATEMENTS:
+        reports = ((bundle or {}).get(statement) or {}).get("reports") or []
+        dates = [str(r["report_date"]) for r in reports if r.get("report_date")]
+        latest[statement] = max(dates) if dates else None
+    return latest
+
+
+def _current_version_report(report: dict) -> dict | None:
+    """把缓存报告还原成 merge_statement 的 fresh 形状（保持 present_in_latest_refresh 语义）。"""
+    current_id = report.get("current_version_id")
+    for version in report.get("versions") or []:
+        if version.get("version_id") == current_id:
+            return {
+                "report_date": str(report["report_date"]),
+                "metadata": version.get("metadata") or {},
+                "items": version.get("items") or [],
+            }
+    return None
+
+
+def _statement_value(value):
+    """THS_BD 单值 → JSON 安全原值（None/数值/字符串；其余 str()，不加工不改口径）。"""
+    value = _clean_value(value)
+    if value is None or isinstance(value, (int, float, str, bool)):
+        return value
+    return str(value)
+
+
+def _thbd_statement_period(root: str, full_code: str, period: str,
+                           all_codes: list[str]) -> dict[str, object]:
+    """一次 THS_BD 调用取单期全科目（报表类型 100=合并）；瞬时失败重试一次。"""
+    api_period = period.replace("-", "")  # SDK 报告期格式 YYYYMMDD
+    params = ";".join([f"{api_period},100"] * len(all_codes))
+    last_error = None
+    for _attempt in (1, 2):
+        started = time.time()
+        result = ths.THS_BD(full_code, ";".join(all_codes), params)
+        if result.errorcode == 0 and result.data is not None and len(result.data) > 0:
+            frame = result.data
+            row = frame.iloc[0]
+            values: dict[str, object] = {}
+            for code in all_codes:
+                values[code] = _statement_value(row[code]) if code in frame.columns else None
+            audit.log_request(root, source=SOURCE, market="A", code=full_code, api="THS_BD",
+                              fields=f"statements({len(all_codes)}科目)", start=period, end=period,
+                              ok=True, elapsed=time.time() - started)
+            return values
+        last_error = getattr(result, "errmsg", None) or f"errorcode={result.errorcode}"
+        time.sleep(0.5)
+    audit.log_request(root, source=SOURCE, market="A", code=full_code, api="THS_BD",
+                      fields=f"statements({len(all_codes)}科目)", start=period, end=period,
+                      ok=False, error=str(last_error), elapsed=time.time() - started)
+    raise RuntimeError(f"THS_BD {period} 三表请求失败：{last_error}")
+
+
+def _period_report(period: str, values: dict[str, object],
+                   by_statement: dict[str, list[str]]) -> tuple[dict[str, dict], bool]:
+    """单期取数结果 → {statement: report}；三表全空期不产出（返回 all_empty=True）。"""
+    notice_date = values.get(_AUDIT_DD_CODE)
+    metadata: dict[str, object] = {
+        "REPORT_DATE_NAME": f"{period[:4]}{_QUARTER_NAMES[period[5:]]}",
+        "CURRENCY": "CNY",
+    }
+    if notice_date is not None:
+        metadata["NOTICE_DATE"] = str(notice_date)[:10]
+    reports: dict[str, dict] = {}
+    has_value = False
+    for statement in _STATEMENTS:
+        items = [
+            {
+                "item_code": code,
+                "item_name": financial_subjects.display_name(code),
+                "amount": values.get(code),
+                "source": SOURCE,
+            }
+            for code in by_statement[statement]
+        ]
+        if any(item["amount"] is not None for item in items):
+            has_value = True
+        reports[statement] = {"report_date": period, "metadata": dict(metadata), "items": items}
+    return reports, not has_value
+
+
+def fetch_statements(
+    root: str,
+    mc: MarketCode,
+    existing_metadata: dict | None = None,
+) -> dict:
+    """A/北交所三表（iFinD 单源）：无缓存全历史回补（连续 8 期全空停止），
+    有缓存增量（晚于各表最新期的报告期 + 各表最新期重取）。
+    返回形状与 financial_statements.fetch 一致：{ok, source, statements, metadata, error, notes}。
+    任何组成部分失败返回 ok=false，不写缓存（service 回退旧缓存）。"""
+    full_code = to_ifind(mc)
+    t0 = time.time()
+    notes: list[str] = []
+    all_codes, by_statement = _statement_codes()
+    try:
+        _ensure_login(root)
+    except Exception as exc:  # noqa: BLE001
+        audit.log_request(root, source=SOURCE, market=mc.market, code=full_code,
+                          api="THS_iFinDLogin", fields="statements", ok=False,
+                          elapsed=time.time() - t0, error=str(exc))
+        return {"ok": False, "source": SOURCE, "statements": None, "metadata": None,
+                "error": f"iFinD 登录失败：{exc}", "notes": None}
+
+    bundle = _read_statements_bundle(root, f"{mc.code}.{mc.suffix}")
+    latest = _bundle_latest_per_statement(bundle)
+    today = date.today()
+    quarters_desc = _quarter_ends_desc(today)
+
+    fresh_by_statement: dict[str, list[dict]] = {statement: [] for statement in _STATEMENTS}
+    fetched_count = 0
+    if bundle is None or all(value is None for value in latest.values()):
+        # 全历史回补：先近后远，连续 _STATEMENT_EMPTY_STOP 期全空即停（约等于上市前）
+        collected: list[dict[str, dict]] = []  # 降序 [{statement: report}]
+        empty_streak = 0
+        seen_value = False
+        stopped = False
+        for period in quarters_desc:
+            if period > today.isoformat():
+                continue  # 未到期的报告期不请求
+            try:
+                values = _thbd_statement_period(root, full_code, period, all_codes)
+            except RuntimeError as exc:
+                return {"ok": False, "source": SOURCE, "statements": None, "metadata": None,
+                        "error": str(exc), "notes": None}
+            reports, all_empty = _period_report(period, values, by_statement)
+            collected.append(reports)
+            if all_empty:
+                empty_streak += 1
+                if empty_streak >= _STATEMENT_EMPTY_STOP:
+                    collected = collected[:-empty_streak]
+                    if seen_value:
+                        stopped = True
+                    break
+                continue
+            seen_value = True
+            empty_streak = 0
+        if not seen_value:
+            error = f"iFinD 三表请求完成但 {full_code} 无任何报告期数据（连续 {_STATEMENT_EMPTY_STOP} 期全空）"
+            audit.log_request(root, source=SOURCE, market=mc.market, code=full_code,
+                              api="THS_BD", fields="statements", ok=False,
+                              elapsed=time.time() - t0, error=error)
+            return {"ok": False, "source": SOURCE, "statements": None, "metadata": None,
+                    "error": error, "notes": None}
+        if not stopped:
+            notes.append(f"触及 {_STATEMENT_BACKFILL_YEARS} 年回补下限（{quarters_desc[-1]}），可能未到上市前")
+        collected.reverse()  # 升序
+        notes.append(f"全历史回补 {len(collected)} 期（最早 {collected[0]['balance']['report_date']}）")
+        fetched_count = len(collected)
+        for reports in collected:
+            for statement in _STATEMENTS:
+                fresh_by_statement[statement].append(reports[statement])
+    else:
+        # 增量：晚于各表最新期的报告期 + 各表最新期重取（修订检测）
+        oldest_needed = min(value for value in latest.values() if value)
+        fetch_periods = [p for p in quarters_desc if oldest_needed < p <= today.isoformat()]
+        for value in latest.values():
+            if value and value not in fetch_periods and value <= today.isoformat():
+                fetch_periods.append(value)
+        fetch_periods.sort(reverse=True)
+        notes.append(f"增量取 {len(fetch_periods)} 期（>= {oldest_needed}，含最新期重取）")
+        fetched_count = len(fetch_periods)
+        for period in fetch_periods:
+            try:
+                values = _thbd_statement_period(root, full_code, period, all_codes)
+            except RuntimeError as exc:
+                return {"ok": False, "source": SOURCE, "statements": None, "metadata": None,
+                        "error": str(exc), "notes": None}
+            reports, all_empty = _period_report(period, values, by_statement)
+            if all_empty:
+                continue
+            for statement in _STATEMENTS:
+                fresh_by_statement[statement].append(reports[statement])
+
+    # 已有缓存报告按当前版本重新产出，保持 present_in_latest_refresh 语义（内容不变则不新增版本）
+    statements: dict[str, list[dict]] = {}
+    if bundle is not None:
+        for statement in _STATEMENTS:
+            carried = []
+            for report in (bundle.get(statement) or {}).get("reports") or []:
+                current = _current_version_report(report)
+                if current is not None:
+                    carried.append(current)
+            statements[statement] = carried + fresh_by_statement[statement]
+    else:
+        statements = fresh_by_statement
+    for statement in _STATEMENTS:
+        statements[statement].sort(key=lambda report: report["report_date"])
+
+    audit.log_request(root, source=SOURCE, market=mc.market, code=full_code,
+                      api="THS_BD", fields=f"statements({fetched_count}期)",
+                      ok=True, elapsed=time.time() - t0)
+    return {
+        "ok": True,
+        "source": SOURCE,
+        "statements": statements,
+        "metadata": {
+            "code": f"{mc.code}.{mc.suffix}",
+            "market": mc.market,
+            "sources": {"statements": SOURCE},
+            "filings": [],
+        },
+        "error": None,
+        "notes": notes or None,
+    }

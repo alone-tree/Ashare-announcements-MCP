@@ -792,7 +792,11 @@ def get_financial_statements(
     refresh_error = None
     if should_refresh:
         existing_metadata = bundle.get("metadata") if bundle else None
-        fetched = financial_statements.fetch(root, mc, existing_metadata=existing_metadata)
+        # A/北交所三表唯一源 = iFinD（2026-10-14 拍板，架构设计 §3.8）；港美股东财不动
+        if mc.market in ("A", "BJ"):
+            fetched = ifind.fetch_statements(root, mc, existing_metadata=existing_metadata)
+        else:
+            fetched = financial_statements.fetch(root, mc, existing_metadata=existing_metadata)
         if not fetched.get("ok"):
             refresh_error = fetched.get("error") or "上游刷新失败"
             if bundle is None:

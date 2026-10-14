@@ -50,7 +50,7 @@ def test_cumulative_refreshes_bundle_then_reuses_cache(tmp_path, monkeypatch):
         calls.append((mc.code, existing_metadata))
         return _provider_result()
 
-    monkeypatch.setattr(service.financial_statements, "fetch", fake_fetch)
+    monkeypatch.setattr(service.ifind, "fetch_statements", fake_fetch)
 
     first = service.get_financial_statements(
         str(tmp_path),
@@ -105,7 +105,7 @@ def test_single_subtracts_continuous_periods_and_omits_non_additive(tmp_path, mo
             ],
         },
     ]
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: result)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: result)
 
     response = service.get_financial_statements(
         str(tmp_path),
@@ -141,7 +141,7 @@ def test_single_subtracts_continuous_periods_and_omits_non_additive(tmp_path, mo
 
 
 def test_refresh_failure_returns_stale_bundle_but_no_cache_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: _provider_result())
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: _provider_result())
     initial = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
     )
@@ -155,7 +155,7 @@ def test_refresh_failure_returns_stale_bundle_but_no_cache_fails(tmp_path, monke
         "error": "上游超时",
         "notes": None,
     }
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: failure)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: failure)
     stale = service.get_financial_statements(
         str(tmp_path),
         "600519.SH",
@@ -177,7 +177,7 @@ def test_refresh_failure_returns_stale_bundle_but_no_cache_fails(tmp_path, monke
 
 
 def test_financial_export_path_returns_metadata_only(tmp_path, monkeypatch):
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: _provider_result())
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: _provider_result())
     target = tmp_path / "out" / "financial.csv"
 
     response = service.get_financial_statements(
@@ -214,7 +214,7 @@ def test_versions_default_latest_and_include_versions_returns_history(tmp_path, 
     second_provider = _provider_result()
     second_provider["statements"]["income"][0]["items"][0]["amount"] = 120.0
     responses = iter([first_provider, second_provider])
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: next(responses))
 
     service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
@@ -251,6 +251,7 @@ def test_us_source_includes_eastmoney_and_sec(tmp_path, monkeypatch):
         "cik": "0000320193",
         "sec_history_complete": True,
     })
+    # 美股仍走东财 provider（A/BJ 才切 iFinD）
     monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
 
     response = service.get_financial_statements(
@@ -271,7 +272,7 @@ def test_financial_auto_exports_over_200_rows(tmp_path, monkeypatch):
         }
         for index in range(201)
     ]
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
 
     response = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
@@ -310,7 +311,7 @@ def test_data_catalog_reads_cached_non_null_items_across_versions_without_networ
         {"item_code": "OLD_ITEM", "item_name": "OLD_ITEM", "amount": 1.0, "source": "eastmoney"},
     ]
     responses = iter([first, second])
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: next(responses))
     service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
     )
@@ -318,8 +319,8 @@ def test_data_catalog_reads_cached_non_null_items_across_versions_without_networ
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"], force_refresh=True
     )
     monkeypatch.setattr(
-        service.financial_statements,
-        "fetch",
+        service.ifind,
+        "fetch_statements",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("目录工具不得联网")),
     )
 
@@ -349,7 +350,7 @@ def test_financial_query_accepts_exact_chinese_item_and_hides_english_code(tmp_p
         {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": 100.0, "source": "eastmoney"},
         {"item_code": "PARENT_NETPROFIT", "item_name": "PARENT_NETPROFIT", "amount": 20.0, "source": "eastmoney"},
     ]
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
 
     response = service.get_financial_statements(
         str(tmp_path),
@@ -373,7 +374,7 @@ def test_financial_query_returns_ambiguous_keyword_candidates_and_failed_items(t
         {"item_code": "PARENT_NETPROFIT", "item_name": "PARENT_NETPROFIT", "amount": 20.0, "source": "eastmoney"},
         {"item_code": "DEDUCT_PARENT_NETPROFIT", "item_name": "DEDUCT_PARENT_NETPROFIT", "amount": 18.0, "source": "eastmoney"},
     ]
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
 
     response = service.get_financial_statements(
         str(tmp_path),
@@ -427,7 +428,7 @@ def test_financial_report_types_support_annual_cumulative_and_q4_single(tmp_path
             ("2025-12-31", "年报", 400.0),
         )
     ]
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
 
     cumulative = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative",
@@ -450,7 +451,7 @@ def test_financial_query_accepts_alias_and_notes_substitute(tmp_path, monkeypatc
         {"item_code": "OPERATE_COST", "item_name": "OPERATE_COST", "amount": 60.0, "source": "eastmoney"},
         {"item_code": "DEDUCT_PARENT_NETPROFIT", "item_name": "DEDUCT_PARENT_NETPROFIT", "amount": 18.0, "source": "eastmoney"},
     ]
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
 
     response = service.get_financial_statements(
         str(tmp_path),
@@ -495,7 +496,7 @@ def test_financial_query_supports_template_alias_and_relation_note(tmp_path, mon
     provider["statements"]["balance"][0]["items"] = [
         {"item_code": "CASH_DEPOSIT_PBC", "item_name": "CASH_DEPOSIT_PBC", "amount": 100.0, "source": "eastmoney"},
     ]
-    monkeypatch.setattr(service.financial_statements, "fetch", lambda *args, **kwargs: provider)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
 
     by_full = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative",
