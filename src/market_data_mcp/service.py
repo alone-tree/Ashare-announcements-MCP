@@ -691,6 +691,7 @@ def _filter_financial_items(
     failed_items: list[dict] = []
     notes: list[str] = []
     for requested in requested_items:
+        code_exact = [code for code in by_code if code == requested]
         full_exact = [code for code, names in match_names.items() if names[0] == requested]
         alias_exact = [
             code for code, names in match_names.items() if len(names) > 1 and requested in names[1:]
@@ -698,10 +699,12 @@ def _filter_financial_items(
         keyword = [
             code for code, names in match_names.items() if _ordered_keyword_match(requested, names[0])
         ]
-        candidates = full_exact or alias_exact or keyword
+        candidates = code_exact or full_exact or alias_exact or keyword
         if len(candidates) == 1:
             selected_codes.add(candidates[0])
             full_name = match_names[candidates[0]][0]
+            if code_exact:
+                continue
             if alias_exact:
                 notes.append(f"科目“{requested}”按简称匹配为“{full_name}”，并非精确名称匹配")
             elif not full_exact:

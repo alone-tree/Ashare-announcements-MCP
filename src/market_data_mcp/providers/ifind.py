@@ -435,6 +435,20 @@ def _read_statements_bundle(root: str, full_code: str) -> dict | None:
         return None
 
 
+def _bundle_matches_subjects(bundle: dict | None) -> bool:
+    """缓存版本科目码是否全部属于 iFinD 注册表（东财旧缓存整体重建的判定）。"""
+    if bundle is None:
+        return False
+    for statement in _STATEMENTS:
+        for report in ((bundle.get(statement) or {}).get("reports") or []):
+            for version in report.get("versions") or []:
+                items = version.get("items") or []
+                if items and str(items[0].get("item_code") or "") in financial_subjects.BY_CODE:
+                    continue
+                return False
+    return True
+
+
 def _bundle_latest_per_statement(bundle: dict | None) -> dict[str, str | None]:
     latest: dict[str, str | None] = {}
     for statement in _STATEMENTS:
@@ -543,6 +557,9 @@ def fetch_statements(
                 "error": f"iFinD 登录失败：{exc}", "notes": None}
 
     bundle = _read_statements_bundle(root, f"{mc.code}.{mc.suffix}")
+    if bundle is not None and not _bundle_matches_subjects(bundle):
+        notes.append("检测到非 iFinD 科目的旧缓存，按设计整体重建")
+        bundle = None
     latest = _bundle_latest_per_statement(bundle)
     today = date.today()
     quarters_desc = _quarter_ends_desc(today)

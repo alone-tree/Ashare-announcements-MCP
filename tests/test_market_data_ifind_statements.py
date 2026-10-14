@@ -229,6 +229,46 @@ def test_fetch_statements_incremental_fetches_new_and_latest(tmp_path, monkeypat
     assert any("增量取 2 期" in note for note in fetched["notes"])
 
 
+def test_fetch_statements_rebuilds_legacy_east_cache(tmp_path, monkeypatch):
+    """旧东财科目码缓存 → 整体重建（全历史回补），不与新 iFinD 期混装。"""
+    from market_data_mcp import financial_cache
+
+    batch = "b0001"
+    metadata = {"meta": {"code": "600106.SH", "market": "A", "update_batch_id": batch,
+                         "last_successful_update": "2026-10-01T00:00:00"}}
+    legacy_report = {
+        "report_date": "2025-06-30",
+        "metadata": {"REPORT": "2025中报", "CURRENCY": "CNY"},
+        "items": [{"item_code": "MONETARYFUNDS", "item_name": "货币资金",
+                   "amount": 1.0, "source": "eastmoney"}],
+    }
+    payloads = {}
+    for statement in ("balance", "income", "cash_flow"):
+        payloads[statement] = financial_cache.merge_statement(
+            None, [legacy_report] if statement == "balance" else [],
+            code="600106.SH", market="A", statement=statement,
+            source="eastmoney", observed_at="2026-10-01T00:00:00", batch_id=batch)
+    financial_cache.commit_bundle(tmp_path, "600106.SH", metadata, payloads)
+
+    requested: list[str] = []
+
+    def responder(full, indicators, params):
+        period = params.split(";")[0].split(",")[0]
+        requested.append(period)
+        return _frame_for(full, indicators, period, {"ths_currency_fund_stock": 1.0})
+
+    _install_fake_ths(monkeypatch, responder)
+    fetched = ifind_provider.fetch_statements(str(tmp_path), _mk_mc())
+    assert fetched["ok"] is True
+    assert any("整体重建" in note for note in fetched["notes"])
+    assert any("全历史回补" in note for note in fetched["notes"])
+    assert len(requested) > 2, "必须走全历史回补而非 2 期增量"
+    codes = {item["item_code"]
+             for report in fetched["statements"]["balance"]
+             for item in report["items"]}
+    assert "MONETARYFUNDS" not in codes
+
+
 # --- service 层切源与渲染契约 ---
 
 def test_service_a_share_uses_ifind_and_renders(tmp_path, monkeypatch):
@@ -270,6 +310,37 @@ def test_service_a_share_uses_ifind_and_renders(tmp_path, monkeypatch):
     payload = json.loads((tmp_path / "cache" / "600106.SH" / "financial_statements" / "income.json").read_text(encoding="utf-8"))
     cached_items = payload["reports"][0]["versions"][0]["items"]
     assert cached_items[0]["item_code"] == "ths_operating_total_revenue_stock"
+
+
+def test_service_items_filter_accepts_ths_code_and_chinese(tmp_path, monkeypatch):
+    from market_data_mcp import service
+
+    all_codes, by_statement = ifind_provider._statement_codes()
+
+    def fake_fetch(root, mc, existing_metadata=None):
+        values = {code: None for code in all_codes}
+        values["ths_currency_fund_stock"] = 1.0
+        values["ths_operating_total_revenue_stock"] = 2.0
+        reports, _ = ifind_provider._period_report("2025-06-30", values, by_statement)
+        return {
+            "ok": True,
+            "source": "ifind",
+            "statements": {statement: [reports[statement]] for statement in ("balance", "income", "cash_flow")},
+            "metadata": {"code": "600106.SH", "market": "A",
+                         "sources": {"statements": "ifind"}, "filings": []},
+            "error": None,
+            "notes": None,
+        }
+
+    monkeypatch.setattr(service.ifind, "fetch_statements", fake_fetch)
+    result = service.get_financial_statements(
+        str(tmp_path), "600106.SH", amount_basis="cumulative",
+        items=["ths_operating_total_revenue_stock", "货币资金"],
+    )
+    assert result["ok"] is True
+    assert result["failed_items"] == []
+    got = sorted((row["item_name"], row["amount"]) for row in result["rows"])
+    assert got == [("营业总收入", 2.0), ("货币资金", 1.0)]
 
 
 def test_service_catalog_after_ifind_refresh(tmp_path, monkeypatch):

@@ -316,6 +316,8 @@ cache/{code}/financial_statements/
 - MCP 矩阵 / CLI 长表渲染契约不变；`single` 差分沿用；平衡校验（资产=负债+权益、流入-流出=净额）只写质检日志，不修正。
 - `get_data_catalog` 跟随新科目集，无需独立改造。
 
+**实现与验证（2026-10-14 完成）**：`financial_subjects.py` 注册表 318 科目（balance 131 + income 82 + cash_flow 105，非加总 5）、`providers/ifind.py::fetch_statements`（单期全科目 THS_BD、失败重试一次、连续 8 期空停、增量=新增期+最新期重取）、`service.py` 切源点按市场路由（A/BJ→ifind，其余→financial_statements）、items 匹配新增 ths_code 精确匹配（`_filter_financial_items` code_exact 最优先）。600106.SH 端到端实测：首刷回补 120 期（1996-12-31 起，触及 30 年下限），2025 中报营业总收入 56,316,328.4、三季 84,569,287.62 与手工核对值一致，货币资金与东财逐分一致；single 差分/catalog/自动导出/markdown 矩阵（公告日=披露日）全部正常。北交所 `.BJ` 后缀 THS_BD 实测可用（920002.BJ）。审计意见两码（`ths_audit_opinion_type_stock`/`ths_ica_opinion_type_stock`）在数据接口恒返回 None（单独请求 errorcode -209），矩阵「审计意见」行为空、按无数据处理，待官方手册确认；披露日码正常。回补耗时约 1 秒/期，首刷全历史约 2 分钟。
+
 ## 4. 衍生数据获取工具 `get_financial_ratios`
 
 ### 4.1 定位（决策）
