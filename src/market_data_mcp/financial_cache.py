@@ -17,6 +17,7 @@ FINANCIAL_FILES = {
     "balance": "balance.json",
     "income": "income.json",
     "cash_flow": "cash_flow.json",
+    "meta": "meta.json",
 }
 FRESH_FOR = timedelta(days=30)
 
@@ -32,7 +33,7 @@ def financial_path(root: str, code: str, name: str) -> Path:
 
 
 def read_bundle(root: str, code: str) -> dict[str, dict[str, Any]] | None:
-    """读取四个缓存文件；缺失、损坏或批次不一致都视为无可用完整缓存。"""
+    """读取五个缓存文件；缺失、损坏或批次不一致都视为无可用完整缓存。"""
     bundle: dict[str, dict[str, Any]] = {}
     try:
         for name in FINANCIAL_FILES:
@@ -52,13 +53,13 @@ def commit_bundle(
     metadata: dict[str, Any],
     statements: dict[str, dict[str, Any]],
 ) -> None:
-    """四文件先全部写临时文件，再替换正式文件；进程内失败时回滚旧文件。"""
+    """五个文件先全部写临时文件，再替换正式文件；进程内失败时回滚旧文件。"""
     payloads = {"metadata": metadata, **statements}
     if set(payloads) != set(FINANCIAL_FILES):
-        raise ValueError("财报批次必须同时包含 metadata/balance/income/cash_flow")
+        raise ValueError("财报批次必须同时包含 metadata/balance/income/cash_flow/meta")
     batch_ids = {payload.get("meta", {}).get("update_batch_id") for payload in payloads.values()}
     if None in batch_ids or len(batch_ids) != 1:
-        raise ValueError("财报四文件 update_batch_id 必须一致")
+        raise ValueError("财报五文件 update_batch_id 必须一致")
 
     directory = financial_dir(root, code)
     directory.mkdir(parents=True, exist_ok=True)

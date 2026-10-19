@@ -25,12 +25,12 @@ from market_data_mcp.routing import MarketCode  # noqa: E402
 # --- 科目注册表 ---
 
 def test_subject_registry_shape():
-    assert len(financial_subjects.SUBJECTS) == 318
+    assert len(financial_subjects.SUBJECTS) == 330
     codes = [s["ths_code"] for s in financial_subjects.SUBJECTS]
     assert len(codes) == len(set(codes)), "科目码必须唯一"
     counts = {statement: len(financial_subjects.subjects_for(statement))
-              for statement in ("balance", "income", "cash_flow")}
-    assert counts == {"balance": 131, "income": 82, "cash_flow": 105}
+              for statement in ("balance", "income", "cash_flow", "meta")}
+    assert counts == {"balance": 133, "income": 83, "cash_flow": 110, "meta": 4}
 
 
 def test_subject_registry_non_additive():
@@ -38,19 +38,37 @@ def test_subject_registry_non_additive():
     assert {s["ths_code"] for s in non_additive} == {
         "ths_basic_eps_stock",
         "ths_dlt_earnings_per_share_stock",
+        "ths_audit_institution_stock",
         "ths_regular_report_actual_dd_stock",
         "ths_audit_opinion_type_stock",
         "ths_ica_opinion_type_stock",
     }
 
 
+def test_subject_info_rows_named():
+    # 2026-10-19 用户编辑器公式：4 个报表信息行以编辑器名入表（原模板占位名「有数据」废弃）
+    assert financial_subjects.display_name("ths_audit_institution_stock") == "审计单位"
+    assert financial_subjects.display_name("ths_regular_report_actual_dd_stock") == "定期报告实际披露日期"
+    assert financial_subjects.display_name("ths_audit_opinion_type_stock") == "审计意见类型"
+    assert financial_subjects.display_name("ths_ica_opinion_type_stock") == "内控审计意见类型"
+
+
 def test_subject_display_and_resolve():
-    assert financial_subjects.display_name("ths_np_dnrgal_stock") == "扣非净利润"
+    # 扣非旧码 2026-10-19 拍板不保留，换新分析码
+    assert financial_subjects.display_name("ths_np_dnrgal_stock") is None
+    assert (
+        financial_subjects.display_name("ths_new_analyse_np_dnrgal_stock")
+        == "扣除非经常性损益后的归属母公司股东净利润"
+    )
     assert financial_subjects.resolve_name("货币资金")["ths_code"] == "ths_currency_fund_stock"
     assert financial_subjects.resolve_name("不存在的科目") is None
-    # 序号前缀已去除
+    # 序号前缀已去除（含 "N," 数字前缀）
     assert financial_subjects.resolve_name("一、营业总收入") is None
     assert financial_subjects.resolve_name("营业总收入")["ths_code"] == "ths_operating_total_revenue_stock"
+    assert (
+        financial_subjects.resolve_name("重新计量设定受益计划净负债或净资产的变动")["ths_code"]
+        == "ths_asset_change_due_to_remeasure_stock"
+    )
 
 
 # --- 测试工具 ---
@@ -92,7 +110,7 @@ def test_period_report_all_empty():
     values = {code: None for code in all_codes}
     reports, all_empty = ifind_provider._period_report("2025-09-30", values, by_statement)
     assert all_empty is True
-    assert set(reports) == {"balance", "income", "cash_flow"}
+    assert set(reports) == {"balance", "income", "cash_flow", "meta"}
 
 
 def test_period_report_metadata_and_items():
@@ -187,7 +205,7 @@ def _seed_cache(root, reports_balance):
     metadata = {"meta": {"code": "600106.SH", "market": "A", "update_batch_id": batch,
                          "last_successful_update": "2026-10-01T00:00:00"}}
     payloads = {}
-    for statement in ("balance", "income", "cash_flow"):
+    for statement in ("balance", "income", "cash_flow", "meta"):
         reports = reports_balance if statement == "balance" else []
         payloads[statement] = financial_cache.merge_statement(
             None, reports, code="600106.SH", market="A", statement=statement,
@@ -243,7 +261,7 @@ def test_fetch_statements_rebuilds_legacy_east_cache(tmp_path, monkeypatch):
                    "amount": 1.0, "source": "eastmoney"}],
     }
     payloads = {}
-    for statement in ("balance", "income", "cash_flow"):
+    for statement in ("balance", "income", "cash_flow", "meta"):
         payloads[statement] = financial_cache.merge_statement(
             None, [legacy_report] if statement == "balance" else [],
             code="600106.SH", market="A", statement=statement,

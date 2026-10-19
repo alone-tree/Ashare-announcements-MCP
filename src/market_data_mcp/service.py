@@ -368,7 +368,7 @@ def get_quote(
             "vars": vars, "source": source, "notes": notes or None, "rows": out_rows}
 
 
-VALID_STATEMENTS = ("balance", "income", "cash_flow")
+VALID_STATEMENTS = ("balance", "income", "cash_flow", "meta")
 VALID_AMOUNT_BASES = ("cumulative", "single")
 VALID_REPORT_TYPES = ("annual", "semiannual", "q1", "q3")
 
@@ -811,9 +811,11 @@ def get_financial_statements(
             statement_payloads = {}
             for statement in VALID_STATEMENTS:
                 existing_statement = bundle.get(statement) if bundle else None
+                # meta 仅 iFinD（A/北交所）上游提供；东财（港美）无此表，空表入缓存
+                fresh_reports = (fetched.get("statements") or {}).get(statement) or []
                 statement_payloads[statement] = financial_cache.merge_statement(
                     existing_statement,
-                    fetched["statements"][statement],
+                    fresh_reports,
                     code=full_code,
                     market=mc.market,
                     statement=statement,

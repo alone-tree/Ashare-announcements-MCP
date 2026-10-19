@@ -50,7 +50,7 @@ def test_merge_statement_preserves_versions_and_nulls():
     ]
 
 
-def test_bundle_has_four_files_and_shared_batch(tmp_path):
+def test_bundle_has_five_files_and_shared_batch(tmp_path):
     batch_id = "batch-1"
     statements = {
         name: financial_cache.merge_statement(
@@ -63,7 +63,7 @@ def test_bundle_has_four_files_and_shared_batch(tmp_path):
             observed_at="2026-08-09T10:00:00",
             batch_id=batch_id,
         )
-        for name in ("balance", "income", "cash_flow")
+        for name in ("balance", "income", "cash_flow", "meta")
     }
     metadata = {
         "meta": {
@@ -82,9 +82,9 @@ def test_bundle_has_four_files_and_shared_batch(tmp_path):
 
     assert bundle is not None
     assert set(path.name for path in (tmp_path / "cache" / "600519.SH" / "financial_statements").iterdir()) == {
-        "metadata.json", "balance.json", "income.json", "cash_flow.json"
+        "metadata.json", "balance.json", "income.json", "cash_flow.json", "meta.json"
     }
-    assert {bundle[name]["meta"]["update_batch_id"] for name in ("metadata", "balance", "income", "cash_flow")} == {batch_id}
+    assert {bundle[name]["meta"]["update_batch_id"] for name in ("metadata", "balance", "income", "cash_flow", "meta")} == {batch_id}
     assert financial_cache.is_fresh(
         bundle["metadata"], now=datetime(2026, 9, 8, 9, 59, 59)
     ) is True

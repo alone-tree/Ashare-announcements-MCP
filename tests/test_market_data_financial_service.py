@@ -68,7 +68,7 @@ def test_cumulative_refreshes_bundle_then_reuses_cache(tmp_path, monkeypatch):
     assert first["ok"] is True and second["ok"] is True
     assert len(calls) == 1
     assert {path.name for path in (tmp_path / "cache" / "600519.SH" / "financial_statements").iterdir()} == {
-        "metadata.json", "balance.json", "income.json", "cash_flow.json"
+        "metadata.json", "balance.json", "income.json", "cash_flow.json", "meta.json"
     }
     assert first["rows"][0]["item_name"] == "营业总收入"
     assert first["rows"][0]["value_basis"] == "cumulative"

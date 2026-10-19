@@ -36,7 +36,7 @@ CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）�
 | 工具 | 要点 |
 |---|---|
 | `get_quote` | 行情；code 带后缀、vars 字段列表（date 恒留）、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、**start_date 特殊值 "all"（end 空=全部数据；end 指定=只取 ≤end 早期数据，2026-08-10 为 chart 增加）**、超长(>200 行)自动导出、export_path 指定 CSV。**缓存为字段级 9 个 json**（open/high/low/close/close_hfq/volume/amount/total_shares/floating_shares，items `[{date,value,source}]` 每字段同日期仅一条），**每字段唯一数据源**（A/北交所流通股本=新浪、港美股=ifind 等），派生（qfq/市值/换手率/周月/hfq OHL 还原）全现算；**覆盖判定只看实际日期范围 + 固定 10 分钟重试窗口**（不判断盘中盘后/交易所时间；见架构文档 §1.8） |
-| `get_financial_statements` | 三表；科目名原样不翻译、不做跨市场映射；**A/北交所唯一源=iFinD THS_BD（2026-10-14 切换，模板 318 科目，审计意见行恒空见架构 §3.8），港美=东财**；`amount_basis` 必填（cumulative/single），30 天缓存+强制刷新，同报告期多版本，三表批次全有或全无；single 不返回 EPS/每股股息/加权平均股数等非加总科目；items 支持中文名/简称/科目码精确匹配 |
+| `get_financial_statements` | 三表；科目名原样不翻译、不做跨市场映射；**A/北交所唯一源=iFinD THS_BD（2026-10-14 切换，2026-10-19 扩全至编辑器清单：三表 326 科目 + 报表信息 meta 4 项、meta 独立成表不混三表，审计意见码恒空见架构 §3.8），港美=东财（无 meta 表）**；`amount_basis` 必填（cumulative/single），30 天缓存+强制刷新，同报告期多版本，三表批次全有或全无；single 不返回 EPS/每股股息/加权平均股数等非加总科目；items 支持中文名/简称/科目码精确匹配 |
 | `get_financial_ratios` | 财务衍生指标，东财英文列名原样 |
 | `get_company_profile` | 概况/分红/盈利预测，sections 可选 |
 

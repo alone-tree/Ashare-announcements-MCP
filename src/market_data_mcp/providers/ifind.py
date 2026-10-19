@@ -10,10 +10,12 @@
   必须严格按交易日历，不能用股本方案的日历月末采样）
 - `fetch_shares`：**全市场股本**（iFinD 主源）→ 写 total_shares + floating_shares
   （THS_DS 近 5 年逐日 + THS_BD 月频单点补更早，日历月末采样）
-- `fetch_statements`：**A/北交所三表**（2026-10-14 拍板切源，见架构设计 §3.8）
-  （THS_BD 报表科目单点，每报告期一次调用带全部 318 科目，报表类型只取 100=合并；
-  科目主数据=Excel 模板三表 sheet（financial_subjects.py）；THS_DS 不支持报表科目序列，
-  多期一律逐期单点，单点不限年限；增量=晚于缓存最新期的报告期 + 各表最新期重取）
+- `fetch_statements`：**A/北交所三表 + 报表信息 meta**（2026-10-14 拍板切源，见架构设计 §3.8）
+  （THS_BD 报表科目单点，每报告期一次调用带全部科目，报表类型只取 100=合并；
+  科目主数据=iFinD 编辑器清单三表 326 + meta 报表信息 4（financial_subjects.py，
+  2026-10-19 扩全；meta 独立成表不混三表，同批调用取回）；
+  THS_DS 不支持报表科目序列，多期一律逐期单点，单点不限年限；
+  增量=晚于缓存最新期的报告期 + 各表最新期重取）
 
 **铁律：iFinD 参数严禁猜测/试探变体**——所有参数写法来自官方手册与实测
 （字段与数据源支持情况.md §7/§9，2026-08-09 用户提供公式速查）。
@@ -396,7 +398,7 @@ def fetch_shares(
 
 # --- A/北交所三表（THS_BD 报表科目，架构设计 §3.8） ---
 
-_STATEMENTS = ("balance", "income", "cash_flow")
+_STATEMENTS = ("balance", "income", "cash_flow", "meta")
 _STATEMENT_BACKFILL_YEARS = 30  # 无缓存回补的硬上限，防死循环
 _STATEMENT_EMPTY_STOP = 8       # 回补时连续 N 期三表全空即停止（约等于上市前）
 _QUARTER_MD = ("03-31", "06-30", "09-30", "12-31")
@@ -503,12 +505,12 @@ def _thbd_statement_period(root: str, full_code: str, period: str,
     audit.log_request(root, source=SOURCE, market="A", code=full_code, api="THS_BD",
                       fields=f"statements({len(all_codes)}科目)", start=period, end=period,
                       ok=False, error=str(last_error), elapsed=time.time() - started)
-    raise RuntimeError(f"THS_BD {period} 三表请求失败：{last_error}")
+    raise RuntimeError(f"THS_BD {period} 报表科目请求失败：{last_error}")
 
 
 def _period_report(period: str, values: dict[str, object],
                    by_statement: dict[str, list[str]]) -> tuple[dict[str, dict], bool]:
-    """单期取数结果 → {statement: report}；三表全空期不产出（返回 all_empty=True）。"""
+    """单期取数结果 → {statement: report}；全部表（含 meta）全空期不产出（返回 all_empty=True）。"""
     notice_date = values.get(_AUDIT_DD_CODE)
     metadata: dict[str, object] = {
         "REPORT_DATE_NAME": f"{period[:4]}{_QUARTER_NAMES[period[5:]]}",

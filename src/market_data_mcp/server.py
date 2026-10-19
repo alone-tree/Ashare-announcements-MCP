@@ -3,8 +3,8 @@
 
 工具：
 - get_quote: 日/周/月线行情（raw/hfq/qfq + 量额/股本/市值，超长自动导出）
-- get_financial_statements: 三市场三表（累计/单期、版本、30 天缓存、超长自动导出）
-- get_data_catalog: 纯本地查询公司三表缓存支持的科目
+- get_financial_statements: 三市场财务报表（累计/单期、版本、30 天缓存、超长自动导出；A/北交所含报表信息 meta 表）
+- get_data_catalog: 纯本地查询公司财报缓存支持的科目
 
 代码强制市场后缀（600519.SH / 920002.BJ / 00700.HK / AAPL.US），程序按后缀路由市场。
 数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录），缓存与自动导出均在根目录下。
@@ -195,8 +195,10 @@ def create_server() -> Any:
             资产负债表始终为时点值。single 不返回 EPS、每股股息、加权平均股数等
             非加总科目；这些科目只能从 cumulative 获取。额外加工由调用方自行处理，
             本工具不提供支持。
-        statements: 可选 balance/income/cash_flow 子集；不传返回三表。上游刷新始终同时
-            获取三表，任一失败整批不更新。
+        statements: 可选 balance/income/cash_flow/meta 子集；不传返回三表+报表信息。
+            meta（报表信息：审计单位/审计意见类型/内控审计意见类型/定期报告实际披露日期）
+            仅 A股/北交所（iFinD）提供，港美股为空表。上游刷新始终同时获取全部表，
+            任一失败整批不更新。
         start_date/end_date: 按原始报告截止日筛选，格式 YYYY-MM-DD，含边界；不传为全部历史。
         include_versions: false=每个报告期仅最新版本；true=累计口径返回全部历史版本。
             single 始终只使用最新累计版本，不生成历史单期版本。
@@ -239,10 +241,10 @@ def create_server() -> Any:
         code: str,
         statements: list[str] | None = None,
     ) -> dict[str, Any]:
-        """查询公司财务三表缓存中实际可请求的科目名称（纯本地、轻量、不联网）。
+        """查询公司财务报表缓存中实际可请求的科目名称（纯本地、轻量、不联网）。
 
         code: 带市场后缀代码。
-        statements: balance/income/cash_flow 子集；不传返回三表科目。
+        statements: balance/income/cash_flow/meta 子集；不传返回全部表科目。
         仅返回该公司所有缓存报告期和历史版本中至少有一个非空金额的科目，附最早、
         最晚有效报告日。A股有可靠中文映射时只返回中文；未映射时保留原名。
         如果尚无完整缓存，提示先调用 get_financial_statements。
