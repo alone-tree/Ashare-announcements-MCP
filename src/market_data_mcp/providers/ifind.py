@@ -483,12 +483,17 @@ def _statement_value(value):
 
 def _thbd_statement_period(root: str, full_code: str, period: str,
                            all_codes: list[str]) -> dict[str, object]:
-    """一次 THS_BD 调用取单期全科目（报表类型 100=合并）；瞬时失败重试一次。"""
+    """一次 THS_BD 调用取单期全科目（报表类型 100=合并）；瞬时失败退避重试三次。
+
+    2026-10-19 实测：同花顺偶发 errorcode=-205「request data error」，数秒内自愈
+    （同参数单查立即成功），0.5 秒单次重试扛不住，改为 0.5/2/5 秒三次退避重试。"""
     api_period = period.replace("-", "")  # SDK 报告期格式 YYYYMMDD
     params = ";".join([f"{api_period},100"] * len(all_codes))
     last_error = None
-    for _attempt in (1, 2):
-        started = time.time()
+    started = time.time()
+    for attempt in range(4):
+        if attempt:
+            time.sleep((0.5, 2.0, 5.0)[attempt - 1])
         result = ths.THS_BD(full_code, ";".join(all_codes), params)
         if result.errorcode == 0 and result.data is not None and len(result.data) > 0:
             frame = result.data
@@ -501,7 +506,6 @@ def _thbd_statement_period(root: str, full_code: str, period: str,
                               ok=True, elapsed=time.time() - started)
             return values
         last_error = getattr(result, "errmsg", None) or f"errorcode={result.errorcode}"
-        time.sleep(0.5)
     audit.log_request(root, source=SOURCE, market="A", code=full_code, api="THS_BD",
                       fields=f"statements({len(all_codes)}科目)", start=period, end=period,
                       ok=False, error=str(last_error), elapsed=time.time() - started)

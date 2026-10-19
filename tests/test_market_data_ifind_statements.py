@@ -192,7 +192,7 @@ def test_fetch_statements_retries_then_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(ifind_provider.time, "sleep", lambda s: None)
     fetched = ifind_provider.fetch_statements(str(tmp_path), _mk_mc())
     assert fetched["ok"] is False
-    assert calls["n"] == 2, "失败须重试一次（共 2 次调用）"
+    assert calls["n"] == 4, "失败须退避重试三次（共 4 次调用）"
     assert "THS_BD" in fetched["error"]
 
 

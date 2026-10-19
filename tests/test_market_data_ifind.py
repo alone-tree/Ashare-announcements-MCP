@@ -136,6 +136,16 @@ class TestFetchUsAmount:
         assert data["items"] == [{"date": "2026-08-24", "value": 1.0, "source": "ifind"}]
 
     def test_backfill_uses_trade_days(self, tmp_path, monkeypatch):
+        # 冻结时钟：本用例假设"今天"在 2026-08-06 附近（写入时的真实日期），
+        # 5 年窗口边界随之固定；否则真实时钟走过 2026-08-10 后 THS_DS 分支被跳过。
+        from datetime import date as _date
+
+        class _FrozenDate(_date):
+            @classmethod
+            def today(cls):
+                return _date(2026, 8, 6)
+
+        monkeypatch.setattr(ifind, "date", _FrozenDate)
         _login_and_probe(monkeypatch)
         monkeypatch.setattr(ifind.ths, "THS_DS", lambda *a, **k: _r(_ds_df(
             ["2021-08-09"], [7.14e9], col="amt")))
