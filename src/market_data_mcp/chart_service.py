@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""market-data-chart MCP 绘图服务：K线/折线行情图（三 MCP 一体的第三块，与 market-data 紧密关联）。
+"""market-data 绘图服务：K线/折线行情图（原 market-data-chart MCP 引擎，2026-10-19 并入本包）。
 
 数据链路：直接 import 调用 market_data_mcp.service.get_quote()，不复制取数代码；
 绘图层完全不操心数据（有缓存用缓存，没缓存由 get_quote 自动补拉）。
@@ -12,6 +12,9 @@
 - 高低点标注（keypoints，仅折线图）：自动提取回撤阶段前高/低点，按回撤阈值过滤
 - 每次调用都重新绘图（不按参数做图缓存复用），PNG 落盘 {root}/cache/_charts/
 - 只返回文件路径，不返回图片内容
+
+历史决策（视觉/参数/输出口径）见 docs/chart-MCP绘图工具设计.md，并入记录见
+docs/market-data改造设计-2026-10-19.md §3.6 与 docs/market-data架构设计.md。
 """
 
 from __future__ import annotations
@@ -20,10 +23,7 @@ import csv
 import os
 from typing import Any
 
-try:
-    from market_data_mcp.service import get_quote as get_quote_service
-except ImportError:  # 用户版单独导出 chart 时缺 market-data（依赖检查，设计 §三.3）
-    get_quote_service = None  # type: ignore[assignment]
+from market_data_mcp.service import get_quote as get_quote_service
 
 # matplotlib 延迟导入（后端 Agg 无窗口）
 _MPL_READY = False

@@ -51,6 +51,7 @@ class TestServer:
         tools = list(mcp._tool_manager.list_tools())
         assert [t.name for t in tools] == [
             "get_quote", "get_financial_statements", "get_data_catalog", "get_company_profile",
+            "get_quote_chart",
         ]
         quote_schema = tools[0].parameters
         assert quote_schema.get("additionalProperties") is False

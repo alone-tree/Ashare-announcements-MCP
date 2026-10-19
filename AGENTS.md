@@ -5,14 +5,16 @@
 
 ## 一、项目是什么
 
-个人投资研究工具，仓库内含**三个并列的 MCP**：
+个人投资研究工具，仓库内含**两个并列的 MCP**：
 
-| | 公告 MCP | market-data MCP | market-data-chart MCP |
-|---|---|---|---|
-| 定位 | 公告/提交文档（非结构化）的发现、定位、阅读 | 行情/财报/指标/概况（结构化）数据获取 | 行情绘图（K线/折线，事件标注/高低点） |
-| 数据源 | A/B/H 股=东方财富；美股=SEC EDGAR；LOCAL-=本地材料 | 行情=新浪单源；财报=东财 datacenter；股本/美股后复权=iFinD | 复用 market-data get_quote（不复制取数代码） |
-| 状态 | **已实现、完善**（不要动坏） | **行情 + 财报三表已实现**（A/北交所三表唯一源=iFinD，2026-10-14 切换）；财务比率待实现 | **已实现**（get_quote_chart，2026-08 改名 market-data-chart + 事件/高低点） |
-| 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（决策）+ `字段与数据源支持情况.md`（客观能力） | `docs/chart-MCP绘图工具设计.md`（任务交接+全部决策） |
+| | 公告 MCP | market-data MCP |
+|---|---|---|
+| 定位 | 公告/提交文档（非结构化）的发现、定位、阅读 | 行情/财报/指标/概况（结构化）数据获取 + 行情绘图（K线/折线，事件标注/高低点） |
+| 数据源 | A/B/H 股=东方财富；美股=SEC EDGAR；LOCAL-=本地材料 | 行情=新浪单源；财报=东财 datacenter；股本/美股后复权=iFinD |
+| 状态 | **已实现、完善**（不要动坏） | **行情 + 财报三表已实现**（A/北交所三表唯一源=iFinD，2026-10-14 切换，2026-10-19 扩全 330 科目+meta 表）；财务比率待实现 |
+| 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（决策）+ `字段与数据源支持情况.md`（客观能力） |
+
+> 行情绘图原为独立 market-data-chart MCP，2026-10-19 并入 market-data（get_quote_chart 工具 + get_quote_chart_batch CLI，引擎 `src/market_data_mcp/chart_service.py`）；视觉/参数历史决策见 `docs/chart-MCP绘图工具设计.md`（已归档）。
 
 克制、数据准确真实、维护简单；不为假设中的需求增加抽象或字段。个人工具，不追求大而全。
 
@@ -31,7 +33,7 @@
 
 CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）：`query_batch`/`read_batch`/`search_batch`/`query_interactions_batch`，与 MCP 工具一一对应、能力一致。**CLI 顶层请求字段是 `tool`**（不是 `action`），响应字段也是 `tool`；建档子动作参数用 `action`（check/establish）。
 
-### market-data MCP（4 个工具，设计已定稿）
+### market-data MCP（5 个工具，设计已定稿）
 
 | 工具 | 要点 |
 |---|---|
@@ -39,6 +41,7 @@ CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）�
 | `get_financial_statements` | 三表；科目名原样不翻译、不做跨市场映射；**A/北交所唯一源=iFinD THS_BD（2026-10-14 切换，2026-10-19 扩全至编辑器清单：三表 326 科目 + 报表信息 meta 4 项、meta 独立成表不混三表，审计意见码恒空见架构 §3.8），港美=东财（无 meta 表）**；`amount_basis` 必填（cumulative/single），30 天缓存+强制刷新，同报告期多版本，三表批次全有或全无；single 不返回 EPS/每股股息/加权平均股数等非加总科目；items 支持中文名/简称/科目码精确匹配 |
 | `get_financial_ratios` | 财务衍生指标，东财英文列名原样 |
 | `get_company_profile` | 概况/分红/盈利预测，sections 可选 |
+| `get_quote_chart` | 行情绘图（2026-10-19 由 market-data-chart MCP 并入）：K线（蜡烛+成交量副图+MA5/10/20/60 按当前周期算）/折线（field=OHLC 单字段）；events 事件标注、keypoints 高低点（仅折线，回撤阈值 0.30）、log_scale 含 0/负自动退回、红涨绿跌；PNG 落 `cache/_charts/` 只返回路径；数据复用 get_quote（不复制取数）；CLI `get_quote_chart_batch` 同契约 |
 
 market-data 核心原则：**字段为中心、来源可插拔**；**强制市场后缀代码**（`.SZ/.SH/.HK/.US/.BJ`，脚本按后缀路由、禁止按位数猜市场）；**行情单源无回退**（raw=新浪；hfq=A/港新浪+美股 iFinD，失败即失败不混源）；下载到缓存+返回元信息、缓存优先增量更新。
 

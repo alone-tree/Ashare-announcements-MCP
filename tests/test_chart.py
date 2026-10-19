@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""chart MCP 测试：K线/折线绘图、start=all、log_scale 回退、CLI 双入口。
+"""行情绘图测试：K线/折线绘图、start=all、log_scale 回退、MCP/CLI 双入口。
+
+2026-10-19 chart 并入 market-data MCP（引擎 market_data_mcp/chart_service.py），
+本文件随迁，工具名与契约不变。
 
 绘图测试不联网：用伪造的行情缓存目录 + monkeypatch get_quote 返回固定 rows。
 """
@@ -18,7 +21,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from market_data_chart import service as chart_service
+from market_data_mcp import chart_service
 from market_data_mcp import service as md_service
 
 # 固定行情：12 天日线（够画 MA5/10，MA20/60 不足应不绘制）
@@ -115,7 +118,7 @@ def test_ma_not_drawn_when_insufficient(fake_root):
 
 def test_log_scale_fallback_nonpositive(fake_root, monkeypatch):
     """数据含 0/负值时 log_scale 自动退回普通坐标（不报错）。"""
-    import market_data_chart.service as svc
+    import market_data_mcp.chart_service as svc
 
     def fake_get_quote_zero(root, code, vars=None, adjust="raw", start_date=None,
                             end_date=None, period="daily", export_path=None):
@@ -139,7 +142,7 @@ def test_log_scale_positive_data(fake_root):
 
 
 def test_invalid_code(fake_root, monkeypatch):
-    import market_data_chart.service as svc
+    import market_data_mcp.chart_service as svc
 
     def fake_get_quote_err(root, code, **kwargs):
         return {"ok": False, "error": "代码格式错误"}
@@ -151,7 +154,7 @@ def test_invalid_code(fake_root, monkeypatch):
 
 def test_cli_line_and_kline(fake_root):
     """CLI 双入口：get_quote_chart_batch 画 K线 + 折线。"""
-    import market_data_chart.cli as cli_mod
+    import market_data_mcp.cli as cli_mod
 
     req = {"tool": "get_quote_chart_batch", "codes": ["600519.SH", "00700.HK"],
            "field": "close"}
@@ -164,14 +167,14 @@ def test_cli_line_and_kline(fake_root):
 
 
 def test_cli_unknown_tool():
-    import market_data_chart.cli as cli_mod
+    import market_data_mcp.cli as cli_mod
     with pytest.raises(ValueError):
         cli_mod.dispatch({"tool": "nope"})
 
 
 def test_cli_main_stdin_stdout(fake_root, monkeypatch, capsys):
     """CLI main()：stdin JSON → stdout JSON。"""
-    import market_data_chart.cli as cli_mod
+    import market_data_mcp.cli as cli_mod
     monkeypatch.setattr(cli_mod, "_data_root", lambda: fake_root)
     monkeypatch.setattr(sys, "stdin", type("S", (), {"read": lambda self: json.dumps(
         {"tool": "get_quote_chart_batch", "codes": ["600519.SH"]})})())

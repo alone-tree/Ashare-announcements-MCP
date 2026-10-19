@@ -293,6 +293,10 @@ cache/{code}/financial_statements/
 - 脆弱点：①AKShare 爬 HTML 取类型（东财改版即断；失败会报错回退旧缓存，不会静默给错模板）；②老 AJAX 为东财遗留通道，存在下线风险；③datacenter `v` 参数是 CDN 缓存键，复用同 v 会拿到旧响应。
 - 决策：**暂不切源**。切源（datacenter 四系直连）列为待办（§9），触发条件满足其一时执行：老 AJAX 通道失效或 AKShare 路由损坏；或下次需要大规模全量重抓财报数据时顺路迁移。迁移清单：companyType 路由改走 `RPT_F10_PUBLIC_COMPANYTPYE` JSON 接口、多期等价性复验、全量重抓、映射复验。
 
+### 3.9 行情绘图并入（get_quote_chart，2026-10-19）
+
+market-data-chart MCP 整体并入本包：工具 `get_quote_chart`（server.py 第 5 个工具）、CLI `get_quote_chart_batch`（契约与 MCP 一致，items 键 `results`）、引擎 `src/market_data_mcp/chart_service.py`（446 行，import 同包 service.get_quote，取数不复制）。原独立包 market_data_chart 已删除；包内部 try/except 依赖检查同步删除（同包必在）。`start_date` 特殊值 "all" 的语义（end 空=全部；end 指定=只取 ≤end 早期数据）保留。视觉/参数/事件标注/高低点口径决策记录在 docs/chart-MCP绘图工具设计.md（已归档，头注指向本节），功能面：K线（蜡烛+成交量副图+MA5/10/20/60 按当前周期算，数据不足不画）/折线（field 任选 OHLC 无均线）；events 对齐不早于事件日的最近交易日；keypoints 仅折线（回撤阈值默认 0.30）；log_scale 含 0/负自动退回；红涨绿跌；PNG 落 cache/_charts/ 只返回路径。导出脚本 scripts/export.py 改两 MCP 包（matplotlib 并入 market_data 依赖）。测试 tests/test_chart.py 随迁改 import（20 用例）。注册收尾：DSH 能力库 market-data-chart 条目停用、Hermes 侧注销、用户版重导出（待用户确认）。
+
 ### 3.8 A 股三表切换 iFinD（2026-10-14 拍板）
 
 **背景与决策**：需求文档（2026-10-14）拍板 iFinD 第一源。A 股/北交所三表唯一源切为 iFinD `THS_BD`，按字段独立、源可切换的框架不变；东财 A 股 statements 代码保留、不挂链、不保证可用（旧路径存在 bug 不修）；港美股不动（仍东财）。**只做一般企业**：金融企业（银行/保险/券商）不做行业适配，其专用科目取到 None 即按不适用处理，不显式报错、不补行业码（模板码对金融公司有缺口，补齐需用户提供 iFinD 行业模板码，实测见数据源文档 §7）。

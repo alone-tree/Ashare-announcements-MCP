@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-"""market_data MCP 服务器：三市场（A股/北交所/港股/美股）行情与基本面数据。
+"""market_data MCP 服务器：三市场（A股/北交所/港股/美股）行情、基本面与行情绘图。
 
 工具：
 - get_quote: 日/周/月线行情（raw/hfq/qfq + 量额/股本/市值，超长自动导出）
 - get_financial_statements: 三市场财务报表（累计/单期、版本、30 天缓存、超长自动导出；A/北交所含报表信息 meta 表）
 - get_data_catalog: 纯本地查询公司财报缓存支持的科目
+- get_company_profile: 公司概况/IPO/分红/盈利预测/股东
+- get_quote_chart: 行情绘图（K线/折线 PNG，事件标注/高低点；引擎 chart_service.py，
+  原 market-data-chart MCP，2026-10-19 并入）
 
 代码强制市场后缀（600519.SH / 920002.BJ / 00700.HK / AAPL.US），程序按后缀路由市场。
 数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录），缓存与自动导出均在根目录下。
@@ -34,7 +37,7 @@ try:
 except Exception:  # 兼容 mcp 版本差异
     pass
 
-from market_data_mcp import company_service
+from market_data_mcp import chart_service, company_service
 from market_data_mcp.service import get_data_catalog as get_data_catalog_service
 from market_data_mcp.service import get_financial_statements as get_financial_statements_service
 from market_data_mcp.service import get_quote as get_quote_service
@@ -274,6 +277,47 @@ def create_server() -> Any:
         """
         return _wrap(company_service.get_company_profile)(
             _data_root(), code, sections=sections, force_refresh=force_refresh,
+        )
+
+    @mcp.tool()
+    def get_quote_chart(
+        code: str,
+        adjust: str = "raw",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        period: str = "daily",
+        log_scale: bool = False,
+        field: str | None = None,
+        events: str | list | None = None,
+        keypoints: bool = False,
+        drawdown_threshold: float = 0.30,
+    ) -> dict[str, Any]:
+        """绘制行情图（K线或折线），输出一张 PNG，返回文件路径（A股/北交所/港股/美股）。
+
+        code: 带市场后缀代码（300308.SZ / 00700.HK / AAPL.US）。
+        adjust: raw=除权价、hfq=后复权、qfq=前复权。
+        start_date/end_date: YYYY-MM-DD；都不传 = 全部缓存数据（起点不限）；
+            start_date 传了而 end_date 留空 = 该日起至今；只传 end_date = 起点不限、
+            只取 ≤end_date 的早期数据。
+        period: daily/weekly/monthly（周/月由行情层按日线聚合，均线按当前周期计算：
+            周图 MA5 = 5 周均线）。
+        log_scale: 对数坐标；对 K线/折线/成交量副图都生效，数据含负值或 0 自动退回普通坐标。
+        field: 不传 = K线（蜡烛图 + 成交量副图 + MA5/10/20/60 均线）；传 open/high/low/close
+            任一 = 单字段走势折线（不带副图、不带均线）。
+        events: 事件标注（K线/折线都支持）——CSV 文件路径（date,description 两列，
+            兼容 events/{代码}_{简称}_事件.csv 约定）或 JSON 数组 [{date, description}]。
+            图上画绿色竖线 + 顶部错开文字标签，事件日期匹配到最近一个 >= 事件日的交易日。
+        keypoints: 高低点自动标注（仅折线图；K线传 true 报错）——自动提取回撤超过
+            drawdown_threshold 的阶段前高（绿）/低点（红）并标注价格数字。
+        drawdown_threshold: 回撤阈值（0~1，默认 0.30 = 30%），仅 keypoints=true 时生效。
+
+        返回 {ok, path, code, chart_type, start, end, period, adjust, rows, notes}；
+        path 为 PNG 文件路径，图片内容需自行读取。失败 {ok:false, error}。
+        """
+        return _wrap(chart_service.get_quote_chart)(
+            _data_root(), code, adjust=adjust, start_date=start_date,
+            end_date=end_date, period=period, log_scale=log_scale, field=field,
+            events=events, keypoints=keypoints, drawdown_threshold=drawdown_threshold,
         )
 
     return mcp

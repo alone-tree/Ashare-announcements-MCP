@@ -2,7 +2,8 @@
 """供确定性批处理脚本调用的 market-data JSON CLI。
 
 从 stdin 读取一个 JSON 请求，stdout 只输出一个 JSON 响应。
-tool 支持：get_quote_batch / get_financial_statements_batch / get_data_catalog_batch。
+tool 支持：get_quote_batch / get_financial_statements_batch / get_data_catalog_batch /
+get_company_profile_batch / get_quote_chart_batch。
 顶层请求字段是 `tool`（与公告 MCP CLI 一致），响应字段也是 `tool`。
 数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录）。
 """
@@ -18,7 +19,7 @@ from typing import Any, Callable
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from market_data_mcp import company_service, service
+from market_data_mcp import chart_service, company_service, service
 
 
 def _data_root() -> str:
@@ -135,11 +136,33 @@ def get_company_profile_batch(request: dict[str, Any]) -> dict[str, Any]:
     return _batch_response("get_company_profile_batch", items, "results")
 
 
+def get_quote_chart_batch(request: dict[str, Any]) -> dict[str, Any]:
+    codes = request.get("codes")
+    if not isinstance(codes, list) or not codes:
+        raise ValueError("codes 必须是非空数组")
+
+    common = {k: request.get(k) for k in
+              ("adjust", "start_date", "end_date", "period", "log_scale", "field",
+               "events", "keypoints", "drawdown_threshold")}
+    items = []
+    for value in codes:
+        code = str(value)
+        try:
+            result = chart_service.get_quote_chart(
+                _data_root(), code, **{k: v for k, v in common.items() if v is not None}
+            )
+            items.append({"code": code, **result})
+        except Exception as exc:  # noqa: BLE001 —— 单家公司失败不阻断批次
+            items.append({"code": code, "ok": False, "error": str(exc)})
+    return _batch_response("get_quote_chart_batch", items, "results")
+
+
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "get_quote_batch": get_quote_batch,
     "get_financial_statements_batch": get_financial_statements_batch,
     "get_data_catalog_batch": get_data_catalog_batch,
     "get_company_profile_batch": get_company_profile_batch,
+    "get_quote_chart_batch": get_quote_chart_batch,
 }
 
 
