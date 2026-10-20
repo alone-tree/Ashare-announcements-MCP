@@ -303,6 +303,10 @@ market-data-chart MCP 整体并入本包：工具 `get_quote_chart`（server.py 
 
 **取数全流程（2026-10-19 梳理，代码即口径）**：
 
+![财报取数全流程图](assets/financial-statements-flow.png)
+
+下面是同一张图的 mermaid 源码（改图改这里，PNG 为一次性渲染结果）：
+
 ```mermaid
 flowchart TD
     A["get_financial_statements<br/>code / amount_basis 必填"] --> B{"参数校验<br/>statements 子集 · 日期格式 · items / report_types"}
