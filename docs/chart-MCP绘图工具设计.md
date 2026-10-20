@@ -1,4 +1,4 @@
-> **[2026-10-19 归档]** market-data-chart MCP 已整体并入 market-data MCP（get_quote_chart 工具 + get_quote_chart_batch CLI，引擎 src/market_data_mcp/chart_service.py）。本文的视觉/参数/输出口径决策继续有效，并入过程与拍板见 docs/market-data改造设计-2026-10-19.md §3.6。
+> **[2026-10-19 归档]** market-data-chart MCP 已整体并入 market-data MCP（get_quote_chart 工具 + get_quote_chart_batch CLI，引擎 src/market_data_mcp/chart_service.py）。本文的视觉/参数/输出口径决策继续有效，现行行为见 `docs/market-data架构设计.md` §2.9，并入过程见 `docs/决策记录.md` 2026-10-19。
 
 # market-data-chart 绘图工具 —— 任务交接文档
 
