@@ -301,12 +301,51 @@ market-data-chart MCP 整体并入本包：工具 `get_quote_chart`（server.py 
 
 **背景与决策**：需求文档（2026-10-14）拍板 iFinD 第一源。A 股/北交所三表唯一源切为 iFinD `THS_BD`，按字段独立、源可切换的框架不变；东财 A 股 statements 代码保留、不挂链、不保证可用（旧路径存在 bug 不修）；港美股不动（仍东财）。**只做一般企业**：金融企业（银行/保险/券商）不做行业适配，其专用科目取到 None 即按不适用处理，不显式报错、不补行业码（模板码对金融公司有缺口，补齐需用户提供 iFinD 行业模板码，实测见数据源文档 §7）。
 
+**取数全流程（2026-10-19 梳理，代码即口径）**：
+
+```mermaid
+flowchart TD
+    A["get_financial_statements<br/>code / amount_basis 必填"] --> B{"参数校验<br/>statements 子集 · 日期格式 · items / report_types"}
+    B -->|失败| B1["ok=false + error"]
+    B -->|通过| C["读五文件缓存<br/>metadata + balance + income + cash_flow + meta"]
+    C --> D{"缓存完整？<br/>五文件齐 + update_batch_id 一致"}
+    D -->|否| E["按无缓存处理"]
+    D -->|是| F{"force_refresh 或 任一文件超 30 天？"}
+    F -->|否 · 命中缓存| K["_financial_rows 行展开<br/>默认只取 current_version_id"]
+    F -->|是| G
+    E --> G{"按市场路由"}
+    G -->|A 股 / 北交所| H["iFinD fetch_statements<br/>THS_BD 单期一次带全部 330 码"]
+    G -->|港股 / 美股| I["东财 financial_statements"]
+    H --> H1{"已有缓存？"}
+    H1 -->|否| H2["全历史回补<br/>季度末倒序 · 30 年硬上限 · 连续 8 期全空停"]
+    H1 -->|是| H3["增量<br/>晚于最新期的报告期 + 各表最新期重取"]
+    H2 --> J
+    H3 --> J
+    I --> J["merge_statement 版本合并<br/>version_id 变即新增版本，不覆盖旧版本"]
+    J --> J1{"刷新成功？"}
+    J1 -->|否 · 有旧缓存| K
+    J1 -->|否 · 无缓存| B1
+    J1 -->|是| J2["commit_bundle 原子提交<br/>五文件同批次，失败回滚"]
+    J2 --> K
+    K --> L{"amount_basis"}
+    L -->|cumulative| M["累计原值"]
+    L -->|single| N["差分现算<br/>Q1=原值；口径不一致或缺上期置 None"]
+    M --> O
+    N --> O["report_types / items 过滤<br/>科目码·全名精确 > 简称 > 关键词"]
+    O --> P{"输出形态"}
+    P -->|MCP| Q["markdown 矩阵<br/>科目 × 报告期"]
+    P -->|CLI / CSV| R["长表 rows"]
+    P -->|超过 200 行| S["自动导出 CSV 并返回路径"]
+```
+
+关键常量与拒绝点：30 天新鲜期（`financial_cache.FRESH_FOR`）、回补 30 年上限（`_STATEMENT_BACKFILL_YEARS`）、连续 8 期全空即停（`_STATEMENT_EMPTY_STOP`）、单期 1 次首发 + 3 次退避重试（0.5/2/5 秒）；任一报告期取数最终失败即整批不写缓存（三表 + meta 全有或全无）。
+
 **科目主数据（唯一基准 = Excel 模板三表 sheet）**：
 
 - 来源：`0-IPO信息+财报数据 ifind.xlsx` 三表 sheet 公式全集，共 321 行 = 资产负债表 132 + 利润表 83 + 现金流量表 106；其中纯科目 315、审计信息行 3（实际披露日/审计意见类型/内控意见类型）、表头伪行 3（`ths_gpjc_stock` 股票简称，不入注册表）。
 - 分层：一般企业法定科目（财会〔2019〕6号布局）约 230、金融类专用行约 40（一般企业取值为 None）、新旧准则并存行约 10、合计行约 15（iFinD 直接给值，不现算）、差额平衡行 24（`*_diff_*`，披露的「其他」兜底行）。
 - 落点：`financial_subjects.py` 静态注册表（statement / 中文名 / ths_code / 性质标签）；EPS 与审计行为非加总科目，`single` 差分排除。
-- 扣非双码：模板 `ths_np_dnrgal_stock` 与接口编辑器 `ths_new_analyse_np_dnrgal_stock` 实测同值，用模板码。
+- 扣非双码：模板 `ths_np_dnrgal_stock` 与接口编辑器 `ths_new_analyse_np_dnrgal_stock` 实测同值；2026-10-19 起以编辑器清单为准，保留 `ths_new_analyse_np_dnrgal_stock`，旧码 `ths_np_dnrgal_stock` 不保留。
 
 **取数协议（已实测，见数据源文档 §7）**：
 
