@@ -129,6 +129,10 @@ $env:PYTHONPATH = 'src'
 
 公告侧文档：`docs/AH公告与互动问答改造方案.md`（公告侧唯一权威）、`PROJECT.md`（公告 CLI/MCP 契约）、`docs/公告阅读产品设计.md`（阅读策略与验收标准）。
 
+**图表资产**：文档正文只放文字与图片。图片导出在 `docs/assets/*.png`，mermaid 源文件单独放 `docs/assets/src/*.mmd`（源文件不嵌进任何 md，因为本地编辑器无法渲染 mermaid）。改图先改 `.mmd`，再重新导出 PNG。
+
+**子文档**：行为细则过长时可按主题拆子文档（如 `docs/行为-财报工具.md`），仍属「行为规范」类，规则不变：其它文档只索引不复述。
+
 ## 九、关键坑（操作级，详见 skill a-share-announcements-mcp-dev）
 
 - FastMCP 未知参数静默忽略 → server.py 已设 `extra="forbid"` 严格模式（未知参数显式报错）。
