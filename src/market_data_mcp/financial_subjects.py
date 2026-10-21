@@ -164,7 +164,7 @@ SUBJECTS: Tuple[Subject, ...] = (
     {"statement": "income", "name": "手续费及佣金收入", "ths_code": "ths_fee_and_commi_income_stock", "additive": True},
     {"statement": "income", "name": "营业总收入差额(特殊报表科目)", "ths_code": "ths_operating_revenuediff_sri_stock", "additive": True},
     {"statement": "income", "name": "营业总收入差额(合计平衡科目)", "ths_code": "ths_operating_revenuediff_tbi_stock", "additive": True},
-    {"statement": "income", "name": "营业总成本", "ths_code": "ths_operating_total_cost_stock", "additive": True},
+    {"statement": "income", "name": "营业总成本", "ths_code": "ths_operating_cost_2_stock", "additive": True},
     {"statement": "income", "name": "营业成本", "ths_code": "ths_operating_cost_stock", "additive": True},
     {"statement": "income", "name": "利息支出", "ths_code": "ths_interest_payout_stock", "additive": True},
     {"statement": "income", "name": "手续费及佣金支出", "ths_code": "ths_charge_and_commi_expenses_stock", "additive": True},
