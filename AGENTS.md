@@ -11,7 +11,7 @@
 |---|---|---|
 | 定位 | 公告/提交文档（非结构化）的发现、定位、阅读 | 行情/财报/指标/概况（结构化）数据获取 + 行情绘图（K线/折线，事件标注/高低点） |
 | 数据源 | A/B/H 股=东方财富；美股=SEC EDGAR；LOCAL-=本地材料 | 行情=新浪单源；财报 A 股/北交所=iFinD、港美=东财 datacenter；股本/美股后复权=iFinD |
-| 状态 | **已实现、完善**（不要动坏） | **行情 + 绘图 + 财报三表已实现**（A/北交所三表唯一源=iFinD，330 科目 + 报表信息 meta 表）；财务比率未实现 |
+| 状态 | **已实现、完善**（不要动坏） | **行情 + 绘图 + 财报三表已实现**（A/北交所三表唯一源=iFinD，330项含报表信息 meta 4项）；财务比率未实现 |
 | 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（行为）+ `字段与数据源支持情况.md`（客观能力）+ `docs/决策记录.md`（变动历史） |
 
 > 行情绘图原为独立 market-data-chart MCP，2026-10-19 并入 market-data（get_quote_chart 工具 + get_quote_chart_batch CLI，引擎 `src/market_data_mcp/chart_service.py`）；视觉/参数历史决策见 `docs/chart-MCP绘图工具设计.md`（已归档）。
@@ -37,8 +37,8 @@ CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）�
 
 | 工具 | 要点 |
 |---|---|
-| `get_quote` | 行情；code 带后缀、vars 字段列表（date 恒留）、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、**start_date 特殊值 "all"（end 空=全部数据；end 指定=只取 ≤end 早期数据，2026-08-10 为 chart 增加）**、超长(>200 行)自动导出、export_path 指定 CSV。**缓存为字段级 9 个 json**（open/high/low/close/close_hfq/volume/amount/total_shares/floating_shares，items `[{date,value,source}]` 每字段同日期仅一条），**每字段唯一数据源**（A/北交所流通股本=新浪、港美股=ifind 等），派生（qfq/市值/换手率/周月/hfq OHL 还原）全现算；**覆盖判定只看实际日期范围 + 固定 10 分钟重试窗口**（不判断盘中盘后/交易所时间；见架构文档 §1.8） |
-| `get_financial_statements` | 三表；科目名原样不翻译、不做跨市场映射；**A/北交所唯一源=iFinD THS_BD（2026-10-14 切换，2026-10-19 扩全至编辑器清单：三表 326 科目 + 报表信息 meta 4 项、meta 独立成表不混三表，审计意见码恒空见架构 §3.7），港美=东财（无 meta 表）**；`amount_basis` 必填（cumulative/single），30 天缓存+强制刷新，同报告期多版本，三表批次全有或全无；single 不返回 EPS/每股股息/加权平均股数等非加总科目；items 支持中文名/简称/科目码精确匹配 |
+| `get_quote` | 行情；code 带后缀、vars 字段列表、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、start_date 特殊值 "all"、超长自动导出、export_path 指定 CSV。**缓存为字段级 json，每字段唯一数据源**，派生（qfq/市值/换手率/周月/hfq OHL 还原）全现算。参数、9个字段与覆盖判定见架构 §1.5/§1.6 |
+| `get_financial_statements` | 三表 + 报表信息 meta；科目名原样不翻译、不做跨市场映射；**A/北交所唯一源=iFinD `THS_BD`，港美=东财（无 meta 表）**；`amount_basis` 必填（cumulative/single）；30天整批缓存+强制刷新；同报告期多版本；三表批次全有或全无。科目数、非加总科目、审计意见口径、items 匹配见 `docs/行为-财报工具.md` |
 | `get_data_catalog` | 纯本地只读：汇总该公司已缓存报告期中出现过非空金额的科目 + 最早/最晚有效报告日；不联网不写缓存（惰性拉取语义下只反映已拉取的报告期） |
 | `get_company_profile` | 概况/分红/盈利预测，sections 可选 |
 | `get_quote_chart` | 行情绘图（2026-10-19 由 market-data-chart MCP 并入）：K线（蜡烛+成交量副图+MA5/10/20/60 按当前周期算）/折线（field=OHLC 单字段）；events 事件标注、keypoints 高低点（仅折线，回撤阈值 0.30）、log_scale 含 0/负自动退回、红涨绿跌；PNG 落 `cache/_charts/` 只返回路径；数据复用 get_quote（不复制取数）；CLI `get_quote_chart_batch` 同契约 |
@@ -93,7 +93,7 @@ market-data 核心原则：**字段为中心、来源可插拔**；**强制市�
 4. **不要随意改契约/命名**：CLI 顶层字段 `tool`、建档子动作 `action`、read 参数 `start_page`/`return_pages`、market-data 工具金融术语命名——改契约后必须 grep 全部调用点逐一核对（曾漏改 read_batch 导致正文读取全挂）。
 5. **文档唯一家原则**：一条信息只写在一处，别处只能指路、不能复述——协作规则→本文件；行为决策→架构设计；客观能力→支持情况；变动历史→决策记录；临时事项→调整方案稿。**永远不要重复维护同一规则**，重复维护是一切混乱的根源（2026-10-20 用户定，全项目适用，同样不要写进 skill/memory）。
 6. **重写/大改任何文档前必须先备份**（时间戳目录 `docs/backup-YYYYMMDD-HHMM/`）。
-7. 未经用户明确要求，不部署、不导出、不推送。**本地 commit 不用等提醒：每组改动完成并验证后直接 `git commit` 作为保存点（2026-10-19 用户拍板，废除本条旧的"不提交"限制；仍未要求不 push）**。
+7. 未经用户明确要求，不部署、不导出、不推送。**本地 commit 不用等提醒：每组改动完成并验证后直接 `git commit` 作为保存点；仍未要求不 push**。（规则变动过程见 `docs/决策记录.md` 2026-10-19）
 8. 临时探针放 `.codex-temp/`，不得混入生产模块。
 
 ## 七、开发方式

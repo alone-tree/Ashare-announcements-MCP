@@ -1,8 +1,6 @@
 flowchart LR
-    Q["行情字段"] --> S["新浪<br/>raw OHLCV · A/港 amount · A/港 hfq"]
-    Q --> I["iFinD<br/>美股 amount · 美股 hfq · 全市场股本"]
-    F["财报字段"] --> I
-    F --> E["东财<br/>港美三表"]
-    M["公司信息"] --> E
-    I -.->|THS_BD 单点| C["月配额 60 万点"]
-    I -.->|THS_DS 序列| C
+    Q["行情字段"] -->|"raw OHLCV · A/港 amount · A/港 hfq"| S["新浪"]
+    Q -->|"美股 amount/hfq · 股本"| I["iFinD"]
+    F["财报字段"] -->|"A股/北交所三表"| I
+    F -->|"港美三表"| E["东财 datacenter"]
+    M["公司信息"] -->|"profile/ipo/dividends/forecast"| N["巨潮 · 同花顺 · 经济通 · 东财<br/>按 section 分主源"]
