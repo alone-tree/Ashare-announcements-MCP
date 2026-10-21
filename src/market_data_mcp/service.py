@@ -370,7 +370,6 @@ def get_quote(
 
 VALID_STATEMENTS = ("balance", "income", "cash_flow", "meta")
 VALID_AMOUNT_BASES = ("cumulative", "single")
-VALID_REPORT_TYPES = ("annual", "semiannual", "q1", "q3")
 
 
 def get_data_catalog(
@@ -430,17 +429,128 @@ def get_data_catalog(
     }
 
 
-def _financial_cache_is_fresh(bundle: dict, now: datetime) -> bool:
-    payloads = [bundle[statement] for statement in VALID_STATEMENTS]
-    payloads.append(bundle["metadata"])
-    return all(financial_cache.is_fresh(payload, now=now) for payload in payloads)
+_QUARTER_ENDS = ("03-31", "06-30", "09-30", "12-31")
+_QUARTER_ORDINAL = {"03-31": 1, "06-30": 2, "09-30": 3, "12-31": 4}
+DEFAULT_PERIOD_COUNT = 5
+PROBE_TTL = timedelta(days=1)
+EASTMONEY_FRESH_FOR = timedelta(days=30)  # 港美本轮不动，沿用旧的固定新鲜期
+
+
+def _shift_period(period: str, delta: int) -> str:
+    """季度末日期平移 delta 个季度（跨年正确）。"""
+    index = int(period[:4]) * 4 + _QUARTER_ORDINAL[period[5:]] - 1 + delta
+    year, quarter = divmod(index, 4)
+    return f"{year:04d}-{_QUARTER_ENDS[quarter]}"
+
+
+def _parse_periods(periods: list[str] | None) -> tuple[list[str] | None, str | None]:
+    """校验 periods：非空数组、YYYY-MM-DD、季度末、不晚于今天；升序去重。"""
+    if periods is None:
+        return None, None
+    if not isinstance(periods, list) or not periods:
+        return None, "periods 必须是非空的 YYYY-MM-DD 数组"
+    today = date.today().isoformat()
+    out: list[str] = []
+    for raw in periods:
+        text = str(raw).strip()
+        try:
+            date.fromisoformat(text)
+        except ValueError:
+            return None, f"periods 元素必须是 YYYY-MM-DD：{raw}"
+        if text[5:] not in _QUARTER_ORDINAL:
+            return None, f"periods 元素必须是季度末 03-31/06-30/09-30/12-31：{raw}"
+        if text > today:
+            return None, f"periods 元素不能晚于今天：{raw}"
+        out.append(text)
+    return sorted(set(out)), None
+
+
+def _cached_report_periods(bundle: dict | None) -> set[str]:
+    """缓存中已有数据的报告期（三表任一张有当前版本即算有）。"""
+    found: set[str] = set()
+    for statement in VALID_STATEMENTS:
+        for report in ((bundle or {}).get(statement) or {}).get("reports") or []:
+            if report.get("current_version_id") and report.get("report_date"):
+                found.add(str(report["report_date"]))
+    return found
+
+
+def _single_pull_periods(periods: list[str]) -> list[str]:
+    """single 需要同一财年的上一期：Q2→Q1、Q3→Q2、年报→Q3；Q1 无上一期。"""
+    out = set(periods)
+    for period in periods:
+        if _QUARTER_ORDINAL[period[5:]] > 1:
+            out.add(_shift_period(period, -1))
+    return sorted(out)
+
+
+def _probe_anchor(root: str, mc: MarketCode, bundle: dict | None,
+                  force_refresh: bool, notes: list[str]) -> tuple[str | None, dict | None]:
+    """最新报告期锚点：优先 1 天内的探针缓存；探测失败退化为缓存已有最新期，不阻塞。"""
+    cached = ((bundle or {}).get("metadata") or {}).get("latest_report_probe") or {}
+    probed_at = cached.get("probed_at")
+    cached_date = str(cached.get("report_date") or "") or None
+    if not force_refresh and cached_date and probed_at:
+        try:
+            if datetime.now(timezone.utc) - datetime.fromisoformat(str(probed_at)) < PROBE_TTL:
+                return cached_date, None
+        except ValueError:
+            pass
+    result = ifind.probe_latest_report(root, mc)
+    if result.get("ok") and result.get("report_date"):
+        period = str(result["report_date"])
+        return period, {"report_date": period, "probed_at": datetime.now(timezone.utc).isoformat()}
+    cached_periods = _cached_report_periods(bundle)
+    anchor = max(cached_periods) if cached_periods else cached_date
+    notes.append(
+        f"探测最新报告期失败（{result.get('error')}），沿用已知最新报告期"
+        + (f" {anchor}" if anchor else "（无可用锚点）")
+        + f"；上次探测时间 {probed_at or '无记录'}"
+    )
+    return anchor, None
+
+
+def _financial_metadata(full_code: str, mc: MarketCode, source: str, batch_id: str,
+                        observed_at: str | None, probe: dict | None) -> dict:
+    payload: dict = {
+        "meta": {
+            "code": full_code,
+            "market": mc.market,
+            "update_batch_id": batch_id,
+            "last_successful_update": observed_at,
+            "last_refresh_attempt": observed_at,
+        },
+        "code": full_code,
+        "market": mc.market,
+        "sources": {"statements": source} if source else {},
+        "filings": [],
+    }
+    if probe:
+        payload["latest_report_probe"] = probe
+    return payload
+
+
+def _commit_with_probe(root: str, full_code: str, bundle: dict, probe: dict | None) -> dict | None:
+    """只更新 metadata（写入探针结果），其余四表原样重打批号提交。"""
+    if not probe:
+        return bundle
+    batch_id = uuid.uuid4().hex
+    statements = {}
+    for statement in VALID_STATEMENTS:
+        payload = json.loads(json.dumps(bundle[statement], ensure_ascii=False))
+        payload["meta"]["update_batch_id"] = batch_id
+        statements[statement] = payload
+    metadata = json.loads(json.dumps(bundle["metadata"], ensure_ascii=False))
+    metadata["meta"]["update_batch_id"] = batch_id
+    metadata["latest_report_probe"] = probe
+    financial_cache.commit_bundle(root, full_code, metadata, statements)
+    return financial_cache.read_bundle(root, full_code)
 
 
 def _financial_rows(
     bundle: dict,
     statements: list[str],
-    start_date: str | None,
-    end_date: str | None,
+    periods: set[str] | None,
     include_versions: bool,
 ) -> list[dict]:
     rows: list[dict] = []
@@ -448,9 +558,7 @@ def _financial_rows(
         payload = bundle[statement]
         for report in payload.get("reports") or []:
             report_date = str(report.get("report_date") or "")
-            if start_date and report_date < start_date:
-                continue
-            if end_date and report_date > end_date:
+            if periods is not None and report_date not in periods:
                 continue
             versions = report.get("versions") or []
             if not include_versions:
@@ -550,13 +658,6 @@ def _period_identity(row: dict) -> tuple[str, int | None] | None:
     if start_date:
         return (f"start:{str(start_date)[:10]}", None)
     return None
-
-
-def _report_type(row: dict) -> str | None:
-    identity = _period_identity(row)
-    if identity is None:
-        return None
-    return {1: "q1", 2: "semiannual", 3: "q3", 4: "annual"}.get(identity[1])
 
 
 def _same_financial_basis(current: dict, previous: dict) -> bool:
@@ -738,20 +839,185 @@ def _filter_financial_items(
     return selected, failed_items, notes
 
 
+def _refresh_ifind(
+    root: str,
+    mc: MarketCode,
+    full_code: str,
+    bundle: dict | None,
+    requested_periods: list[str] | None,
+    amount_basis: str,
+    force_refresh: bool,
+    observed_at: str,
+    notes: list[str],
+) -> tuple[dict | None, set[str] | None, set[str] | None, bool, str | None]:
+    """A/北交所惰性拉取：探最新期 → 算所需期 → 只拉缺失期 → 每期独立提交。
+
+    返回 (bundle, 请求期, 拉取期, stale, refresh_error)。"""
+    source = ifind.SOURCE
+    anchor, probe = _probe_anchor(root, mc, bundle, force_refresh, notes)
+    if requested_periods is None:
+        if anchor is None:
+            return bundle, None, None, False, (
+                "无法确定报告期：最新报告期探测失败且本地无缓存，请显式传 periods"
+            )
+        requested = [_shift_period(anchor, -index) for index in range(DEFAULT_PERIOD_COUNT)]
+    else:
+        requested = list(requested_periods)
+    pull = _single_pull_periods(requested) if amount_basis == "single" else list(requested)
+    cached = _cached_report_periods(bundle)
+    if anchor is not None:
+        latest: str | None = anchor
+    elif cached:
+        latest = max(cached)
+    else:
+        latest = None
+    if latest is not None:
+        beyond = [period for period in pull if period > latest]
+        if beyond:
+            notes.append(f"晚于最新已披露报告期（{latest}），未请求：{', '.join(beyond)}")
+    to_fetch = [
+        period for period in pull
+        if (latest is None or period <= latest) and (force_refresh or period not in cached)
+    ]
+    if amount_basis == "single":
+        extra = sorted(set(pull) - set(requested))
+        if extra:
+            notes.append(f"为计算单期，自动补拉上一期：{', '.join(extra)}")
+
+    probe_state = probe or ((bundle or {}).get("metadata") or {}).get("latest_report_probe")
+    if bundle is None:
+        batch_id = uuid.uuid4().hex
+        financial_cache.commit_bundle(
+            root,
+            full_code,
+            financial_cache.empty_metadata(full_code, mc.market, source, batch_id),
+            {
+                statement: financial_cache.empty_statement(
+                    full_code, mc.market, statement, source, batch_id
+                )
+                for statement in VALID_STATEMENTS
+            },
+        )
+        bundle = financial_cache.read_bundle(root, full_code)
+        bundle = _commit_with_probe(root, full_code, bundle, probe_state) or bundle
+
+    if not to_fetch:
+        bundle = _commit_with_probe(root, full_code, bundle, probe_state) or bundle
+        return bundle, set(requested), set(pull), False, None
+
+    fetched = ifind.fetch_statements(root, mc, to_fetch)
+    if not fetched.get("ok"):
+        error = fetched.get("error") or "iFinD 三表请求失败"
+        if not _cached_report_periods(bundle):
+            return None, set(requested), set(pull), False, error
+        notes.append(f"刷新失败，返回已有缓存：{error}")
+        return bundle, set(requested), set(pull), True, error
+
+    for period in sorted(fetched.get("periods") or {}):
+        reports_by_statement = fetched["periods"][period]
+        batch_id = uuid.uuid4().hex
+        statements = {
+            statement: financial_cache.merge_statement(
+                bundle.get(statement),
+                [reports_by_statement[statement]],
+                code=full_code,
+                market=mc.market,
+                statement=statement,
+                source=source,
+                observed_at=observed_at,
+                batch_id=batch_id,
+            )
+            for statement in VALID_STATEMENTS
+        }
+        metadata = _financial_metadata(full_code, mc, source, batch_id, observed_at, probe_state)
+        financial_cache.commit_bundle(root, full_code, metadata, statements)
+        bundle = financial_cache.read_bundle(root, full_code)
+
+    fetched_periods = sorted(fetched.get("periods") or {})
+    if fetched_periods:
+        notes.append(f"本次拉取 {len(fetched_periods)} 期：{', '.join(fetched_periods)}")
+    empty_periods = list(fetched.get("empty") or [])
+    if empty_periods:
+        notes.append(f"上游无数据、未产出：{', '.join(empty_periods)}")
+    failures = list(fetched.get("failed") or [])
+    refresh_error = None
+    if failures:
+        refresh_error = "; ".join(f"{item['period']}：{item['error']}" for item in failures)
+        notes.append(f"{len(failures)} 期拉取失败：{refresh_error}")
+        if not any(period in _cached_report_periods(bundle) for period in pull):
+            return None, set(requested), set(pull), True, refresh_error
+    return bundle, set(requested), set(pull), bool(failures), refresh_error
+
+
+def _refresh_eastmoney(
+    root: str,
+    mc: MarketCode,
+    full_code: str,
+    bundle: dict | None,
+    requested_periods: list[str] | None,
+    force_refresh: bool,
+    observed_at: str,
+    notes: list[str],
+) -> tuple[dict | None, set[str] | None, set[str] | None, bool, str | None]:
+    """港美东财：本轮不动，沿用固定新鲜期与整体刷新。"""
+    requested = set(requested_periods) if requested_periods else None
+    existing_metadata = (bundle or {}).get("metadata") or None
+    if bundle is not None and not force_refresh:
+        updated = (existing_metadata or {}).get("meta", {}).get("last_successful_update")
+        if updated:
+            try:
+                if datetime.now(timezone.utc) - datetime.fromisoformat(str(updated)) < EASTMONEY_FRESH_FOR:
+                    return bundle, requested, requested, False, None
+            except ValueError:
+                pass
+    fetched = financial_statements.fetch(root, mc, existing_metadata=existing_metadata)
+    if not fetched.get("ok"):
+        error = fetched.get("error") or "上游刷新失败"
+        if bundle is None:
+            return None, requested, requested, False, error
+        notes.append(f"刷新失败，返回上一批缓存：{error}")
+        return bundle, requested, requested, True, error
+    batch_id = uuid.uuid4().hex
+    statements = {
+        statement: financial_cache.merge_statement(
+            bundle[statement] if bundle else None,
+            (fetched.get("statements") or {}).get(statement) or [],
+            code=full_code,
+            market=mc.market,
+            statement=statement,
+            source=fetched.get("source") or "eastmoney",
+            observed_at=observed_at,
+            batch_id=batch_id,
+        )
+        for statement in VALID_STATEMENTS
+    }
+    metadata_payload = {
+        "meta": {
+            "code": full_code,
+            "market": mc.market,
+            "update_batch_id": batch_id,
+            "last_successful_update": observed_at,
+            "last_refresh_attempt": observed_at,
+        },
+        **(fetched.get("metadata") or {}),
+    }
+    financial_cache.commit_bundle(root, full_code, metadata_payload, statements)
+    notes.extend(fetched.get("notes") or [])
+    return financial_cache.read_bundle(root, full_code), requested, requested, False, None
+
+
 def get_financial_statements(
     root: str,
     code: str,
     amount_basis: str,
     statements: list[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
+    items: list[str] | None = None,
+    periods: list[str] | None = None,
     include_versions: bool = False,
     force_refresh: bool = False,
     export_path: str | None = None,
-    items: list[str] | None = None,
-    report_types: list[str] | None = None,
 ) -> dict:
-    """获取三大财务报表；缓存累计原值，单期金额按最新累计版本现算。"""
+    """获取三大财务报表；缓存累计原值，单期按最新累计版本现算；只拉未缓存的报告期。"""
     try:
         mc = parse_code(code)
     except ValueError as exc:
@@ -762,27 +1028,14 @@ def get_financial_statements(
     if not selected or any(statement not in VALID_STATEMENTS for statement in selected):
         return {"ok": False, "error": f"statements 必须是 {list(VALID_STATEMENTS)} 的非空子集"}
     selected = list(dict.fromkeys(selected))
-    try:
-        if start_date:
-            date.fromisoformat(start_date)
-        if end_date:
-            date.fromisoformat(end_date)
-    except ValueError:
-        return {"ok": False, "error": "start_date/end_date 必须是 YYYY-MM-DD"}
-    if start_date and end_date and start_date > end_date:
-        return {"ok": False, "error": "start_date 不能晚于 end_date"}
+    requested_periods, period_error = _parse_periods(periods)
+    if period_error:
+        return {"ok": False, "error": period_error}
     if items is not None and (not isinstance(items, list) or not items or any(not str(item).strip() for item in items)):
         return {"ok": False, "error": "items 必须是非空科目名称数组"}
-    if report_types is not None and (
-        not isinstance(report_types, list)
-        or not report_types
-        or any(report_type not in VALID_REPORT_TYPES for report_type in report_types)
-    ):
-        return {"ok": False, "error": f"report_types 必须是 {list(VALID_REPORT_TYPES)} 的非空子集"}
 
     full_code = f"{mc.code}.{mc.suffix}"
-    now = datetime.now(timezone.utc)
-    observed_at = now.isoformat()
+    observed_at = datetime.now(timezone.utc).isoformat()
     notes: list[str] = []
     try:
         bundle = financial_cache.read_bundle(root, full_code)
@@ -790,74 +1043,32 @@ def get_financial_statements(
         bundle = None
         notes.append(f"现有财报缓存不可用：{exc}")
 
-    should_refresh = force_refresh or bundle is None or not _financial_cache_is_fresh(bundle, now)
-    stale = False
-    refresh_error = None
-    if should_refresh:
-        existing_metadata = bundle.get("metadata") if bundle else None
-        # A/北交所三表唯一源 = iFinD（2026-10-14 拍板，架构设计 §3.8）；港美股东财不动
-        if mc.market in ("A", "BJ"):
-            fetched = ifind.fetch_statements(root, mc, existing_metadata=existing_metadata)
-        else:
-            fetched = financial_statements.fetch(root, mc, existing_metadata=existing_metadata)
-        if not fetched.get("ok"):
-            refresh_error = fetched.get("error") or "上游刷新失败"
-            if bundle is None:
-                return {"ok": False, "code": full_code, "market": mc.market, "error": refresh_error}
-            stale = True
-            notes.append(f"刷新失败，返回上一批缓存：{refresh_error}")
-        else:
-            batch_id = uuid.uuid4().hex
-            statement_payloads = {}
-            for statement in VALID_STATEMENTS:
-                existing_statement = bundle.get(statement) if bundle else None
-                # meta 仅 iFinD（A/北交所）上游提供；东财（港美）无此表，空表入缓存
-                fresh_reports = (fetched.get("statements") or {}).get(statement) or []
-                statement_payloads[statement] = financial_cache.merge_statement(
-                    existing_statement,
-                    fresh_reports,
-                    code=full_code,
-                    market=mc.market,
-                    statement=statement,
-                    source=fetched.get("source") or "eastmoney",
-                    observed_at=observed_at,
-                    batch_id=batch_id,
-                )
-            metadata_payload = {
-                "meta": {
-                    "code": full_code,
-                    "market": mc.market,
-                    "update_batch_id": batch_id,
-                    "last_successful_update": observed_at,
-                    "last_refresh_attempt": observed_at,
-                },
-                **(fetched.get("metadata") or {}),
-            }
-            financial_cache.commit_bundle(root, full_code, metadata_payload, statement_payloads)
-            bundle = financial_cache.read_bundle(root, full_code)
-            notes.extend(fetched.get("notes") or [])
-
-    assert bundle is not None
+    if mc.market in ("A", "BJ"):
+        if bundle is not None and not ifind.bundle_matches_subjects(bundle):
+            notes.append("检测到非 iFinD 科目的旧缓存，按设计整体重建")
+            bundle = None
+        bundle, requested, pull_periods, stale, refresh_error = _refresh_ifind(
+            root, mc, full_code, bundle, requested_periods, amount_basis,
+            force_refresh, observed_at, notes,
+        )
+    else:
+        bundle, requested, pull_periods, stale, refresh_error = _refresh_eastmoney(
+            root, mc, full_code, bundle, requested_periods, force_refresh, observed_at, notes,
+        )
+    if bundle is None:
+        return {"ok": False, "code": full_code, "market": mc.market, "error": refresh_error}
     rows = _financial_rows(
         bundle,
         selected,
-        start_date if amount_basis == "cumulative" else None,
-        end_date if amount_basis == "cumulative" else None,
+        pull_periods,
         include_versions if amount_basis == "cumulative" else False,
     )
     if amount_basis == "single":
         rows, skipped_dates = _derive_single_rows(rows)
-        rows = [
-            row
-            for row in rows
-            if (not start_date or row["report_date"] >= start_date)
-            and (not end_date or row["report_date"] <= end_date)
-        ]
         skipped_dates = [
             report_date
             for report_date in skipped_dates
-            if (not start_date or report_date >= start_date)
-            and (not end_date or report_date <= end_date)
+            if requested is None or report_date in requested
         ]
         notes.append(
             "single 不返回 EPS、每股股息、加权平均股数等非加总科目；这些科目只能从累计报表获取，额外加工由调用方自行处理，工具不提供支持"
@@ -866,9 +1077,8 @@ def get_financial_statements(
             notes.append(f"{len(skipped_dates)} 个报告期因无法确认累计区间连续性而未生成单期金额")
         if include_versions:
             notes.append("amount_basis=single 只使用各报告期最新累计版本现算；include_versions 不生成历史单期版本")
-    if report_types is not None:
-        selected_report_types = set(report_types)
-        rows = [row for row in rows if _report_type(row) in selected_report_types]
+    if requested is not None:
+        rows = [row for row in rows if row["report_date"] in requested]
     failed_items: list[dict] = []
     if items is not None:
         requested = list(dict.fromkeys(str(item).strip() for item in items))
@@ -915,6 +1125,14 @@ def get_financial_statements(
         "start": rows[0]["report_date"] if rows else None,
         "end": rows[-1]["report_date"] if rows else None,
     }
+    period_tag = "all"
+    if requested:
+        ordered_requested = sorted(requested)
+        period_tag = (
+            ordered_requested[0]
+            if len(ordered_requested) == 1
+            else f"{ordered_requested[0]}_{ordered_requested[-1]}"
+        )
     if export_path:
         _export_financial_csv(export_path, rows)
         result.pop("rows")
@@ -924,7 +1142,7 @@ def get_financial_statements(
             root,
             "cache",
             "_auto_export",
-            f"{full_code}_financial_{amount_basis}_{start_date or 'all'}_{end_date or 'all'}.csv",
+            f"{full_code}_financial_{amount_basis}_{period_tag}.csv",
         )
         _export_financial_csv(auto_path, rows)
         result.pop("rows")

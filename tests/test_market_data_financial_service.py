@@ -43,12 +43,85 @@ def _provider_result():
     }
 
 
+_QUARTER_NAMES = {"03-31": "一季报", "06-30": "半年报", "09-30": "三季报", "12-31": "年报"}
+_STATEMENTS = ("balance", "income", "cash_flow", "meta")
+
+
+def _as_periods(provider, periods):
+    """旧形状 {statement: [report]} → 惰性拉取形状 {periods: {period: {statement: report}}}。"""
+    by_period: dict = {}
+    for statement, reports in (provider.get("statements") or {}).items():
+        for report in reports:
+            period = report["report_date"]
+            if period in periods:
+                by_period.setdefault(period, {})[statement] = report
+    for period, reports in by_period.items():
+        for statement in _STATEMENTS:
+            reports.setdefault(
+                statement,
+                {
+                    "report_date": period,
+                    "metadata": {
+                        "REPORT_DATE_NAME": f"{period[:4]}{_QUARTER_NAMES[period[5:]]}",
+                        "CURRENCY": "人民币",
+                    },
+                    "items": [],
+                },
+            )
+    return {
+        "ok": True,
+        "source": provider.get("source") or "ifind",
+        "periods": by_period,
+        "failed": [],
+        "empty": [],
+        "error": None,
+        "notes": None,
+    }
+
+
+def _patch_probe(monkeypatch, probe="2025-12-31"):
+    monkeypatch.setattr(
+        service.ifind,
+        "probe_latest_report",
+        lambda root, mc: {"ok": True, "report_date": probe, "error": None},
+    )
+    # 本文件的桩数据用东财科目码，跳过「必须全是 iFinD 科目」的旧缓存判定，
+    # 该判定本身在 tests/test_market_data_ifind_statements.py 单独覆盖。
+    monkeypatch.setattr(service.ifind, "bundle_matches_subjects", lambda bundle: True)
+
+
+def _patch_fetch(monkeypatch, provider):
+    _patch_probe(monkeypatch)
+    monkeypatch.setattr(
+        service.ifind,
+        "fetch_statements",
+        lambda root, mc, periods: _as_periods(provider, periods),
+    )
+
+
+def _patch_raw(monkeypatch, response):
+    _patch_probe(monkeypatch)
+    monkeypatch.setattr(service.ifind, "fetch_statements", lambda root, mc, periods: response)
+
+
+def _patch_sequence(monkeypatch, providers):
+    _patch_probe(monkeypatch)
+    responses = iter(providers)
+    monkeypatch.setattr(
+        service.ifind,
+        "fetch_statements",
+        lambda root, mc, periods: _as_periods(next(responses), periods),
+    )
+
+
 def test_cumulative_refreshes_bundle_then_reuses_cache(tmp_path, monkeypatch):
     calls = []
 
-    def fake_fetch(root, mc, existing_metadata=None):
-        calls.append((mc.code, existing_metadata))
-        return _provider_result()
+    _patch_probe(monkeypatch)
+
+    def fake_fetch(root, mc, periods):
+        calls.append((mc.code, list(periods)))
+        return _as_periods(_provider_result(), periods)
 
     monkeypatch.setattr(service.ifind, "fetch_statements", fake_fetch)
 
@@ -63,10 +136,14 @@ def test_cumulative_refreshes_bundle_then_reuses_cache(tmp_path, monkeypatch):
         "600519.SH",
         amount_basis="cumulative",
         statements=["income"],
+        periods=["2025-12-31"],
     )
 
     assert first["ok"] is True and second["ok"] is True
     assert len(calls) == 1
+    assert calls[0][1] == [
+        "2025-12-31", "2025-09-30", "2025-06-30", "2025-03-31", "2024-12-31",
+    ]
     assert {path.name for path in (tmp_path / "cache" / "600519.SH" / "financial_statements").iterdir()} == {
         "metadata.json", "balance.json", "income.json", "cash_flow.json", "meta.json"
     }
@@ -74,6 +151,7 @@ def test_cumulative_refreshes_bundle_then_reuses_cache(tmp_path, monkeypatch):
     assert first["rows"][0]["value_basis"] == "cumulative"
     assert first["rows"][0]["version_count"] == 1
     assert first["stale"] is False
+    assert second["rows"] == first["rows"]
 
 
 def test_single_subtracts_continuous_periods_and_omits_non_additive(tmp_path, monkeypatch):
@@ -105,57 +183,57 @@ def test_single_subtracts_continuous_periods_and_omits_non_additive(tmp_path, mo
             ],
         },
     ]
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: result)
+    _patch_fetch(monkeypatch, result)
 
     response = service.get_financial_statements(
         str(tmp_path),
         "600519.SH",
         amount_basis="single",
         statements=["income"],
+        periods=["2025-06-30"],
         include_versions=True,
     )
 
     assert response["ok"] is True
     assert [(row["report_date"], row["amount"]) for row in response["rows"]] == [
-        ("2025-03-31", 100.0),
         ("2025-06-30", 160.0),
     ]
+    assert any("自动补拉上一期" in note for note in response["notes"])
     assert all(row["item_name"] == "营业总收入" and "item_code" not in row for row in response["rows"])
-    assert response["rows"][1]["value_basis"] == "single"
-    assert len(response["rows"][1]["derived_from_version_ids"]) == 2
+    assert response["rows"][0]["value_basis"] == "single"
+    assert len(response["rows"][0]["derived_from_version_ids"]) == 2
     assert any("非加总科目" in note for note in response["notes"])
     assert any("include_versions" in note for note in response["notes"])
 
-    q2_only = service.get_financial_statements(
+    q1_only = service.get_financial_statements(
         str(tmp_path),
         "600519.SH",
         amount_basis="single",
         statements=["income"],
-        start_date="2025-06-30",
-        end_date="2025-06-30",
+        periods=["2025-03-31"],
     )
-    assert [(row["report_date"], row["amount"]) for row in q2_only["rows"]] == [
-        ("2025-06-30", 160.0),
+    assert [(row["report_date"], row["amount"]) for row in q1_only["rows"]] == [
+        ("2025-03-31", 100.0),
     ]
-    assert not any("无法确认累计区间连续性" in note for note in (q2_only["notes"] or []))
+    assert not any("无法确认累计区间连续性" in note for note in (q1_only["notes"] or []))
 
 
 def test_refresh_failure_returns_stale_bundle_but_no_cache_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: _provider_result())
+    _patch_fetch(monkeypatch, _provider_result())
     initial = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
     )
     assert initial["ok"] is True
 
-    failure = {
+    _patch_raw(monkeypatch, {
         "ok": False,
-        "source": "eastmoney",
-        "statements": None,
-        "metadata": None,
+        "source": "ifind",
+        "periods": {},
+        "failed": [],
+        "empty": [],
         "error": "上游超时",
         "notes": None,
-    }
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: failure)
+    })
     stale = service.get_financial_statements(
         str(tmp_path),
         "600519.SH",
@@ -177,7 +255,7 @@ def test_refresh_failure_returns_stale_bundle_but_no_cache_fails(tmp_path, monke
 
 
 def test_financial_export_path_returns_metadata_only(tmp_path, monkeypatch):
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: _provider_result())
+    _patch_fetch(monkeypatch, _provider_result())
     target = tmp_path / "out" / "financial.csv"
 
     response = service.get_financial_statements(
@@ -213,8 +291,7 @@ def test_versions_default_latest_and_include_versions_returns_history(tmp_path, 
     first_provider = _provider_result()
     second_provider = _provider_result()
     second_provider["statements"]["income"][0]["items"][0]["amount"] = 120.0
-    responses = iter([first_provider, second_provider])
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: next(responses))
+    _patch_sequence(monkeypatch, [first_provider, second_provider])
 
     service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
@@ -224,6 +301,7 @@ def test_versions_default_latest_and_include_versions_returns_history(tmp_path, 
         "600519.SH",
         amount_basis="cumulative",
         statements=["income"],
+        periods=["2025-12-31"],
         force_refresh=True,
     )
     history = service.get_financial_statements(
@@ -231,6 +309,7 @@ def test_versions_default_latest_and_include_versions_returns_history(tmp_path, 
         "600519.SH",
         amount_basis="cumulative",
         statements=["income"],
+        periods=["2025-12-31"],
         include_versions=True,
     )
 
@@ -272,7 +351,7 @@ def test_financial_auto_exports_over_200_rows(tmp_path, monkeypatch):
         }
         for index in range(201)
     ]
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
+    _patch_fetch(monkeypatch, provider)
 
     response = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
@@ -290,11 +369,13 @@ def test_financial_parameter_validation(tmp_path):
         root, "600519.SH", amount_basis="cumulative", statements=["ratios"]
     )["ok"] is False
     assert service.get_financial_statements(
-        root,
-        "600519.SH",
-        amount_basis="cumulative",
-        start_date="2025-12-31",
-        end_date="2025-01-01",
+        root, "600519.SH", amount_basis="cumulative", periods=[]
+    )["ok"] is False
+    assert service.get_financial_statements(
+        root, "600519.SH", amount_basis="cumulative", periods=["2025-02-15"]
+    )["ok"] is False
+    assert service.get_financial_statements(
+        root, "600519.SH", amount_basis="cumulative", periods=["2999-12-31"]
     )["ok"] is False
 
 
@@ -310,8 +391,7 @@ def test_data_catalog_reads_cached_non_null_items_across_versions_without_networ
         {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": 80.0, "source": "eastmoney"},
         {"item_code": "OLD_ITEM", "item_name": "OLD_ITEM", "amount": 1.0, "source": "eastmoney"},
     ]
-    responses = iter([first, second])
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: next(responses))
+    _patch_sequence(monkeypatch, [first, second])
     service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
     )
@@ -350,7 +430,7 @@ def test_financial_query_accepts_exact_chinese_item_and_hides_english_code(tmp_p
         {"item_code": "OPERATE_INCOME", "item_name": "OPERATE_INCOME", "amount": 100.0, "source": "eastmoney"},
         {"item_code": "PARENT_NETPROFIT", "item_name": "PARENT_NETPROFIT", "amount": 20.0, "source": "eastmoney"},
     ]
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
+    _patch_fetch(monkeypatch, provider)
 
     response = service.get_financial_statements(
         str(tmp_path),
@@ -374,7 +454,7 @@ def test_financial_query_returns_ambiguous_keyword_candidates_and_failed_items(t
         {"item_code": "PARENT_NETPROFIT", "item_name": "PARENT_NETPROFIT", "amount": 20.0, "source": "eastmoney"},
         {"item_code": "DEDUCT_PARENT_NETPROFIT", "item_name": "DEDUCT_PARENT_NETPROFIT", "amount": 18.0, "source": "eastmoney"},
     ]
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
+    _patch_fetch(monkeypatch, provider)
 
     response = service.get_financial_statements(
         str(tmp_path),
@@ -411,7 +491,7 @@ def test_financial_query_returns_ambiguous_keyword_candidates_and_failed_items(t
     assert "不计算衍生指标" in response["failed_items"][1]["hint"]
 
 
-def test_financial_report_types_support_annual_cumulative_and_q4_single(tmp_path, monkeypatch):
+def test_financial_periods_support_annual_cumulative_and_q4_single(tmp_path, monkeypatch):
     provider = _provider_result()
     provider["statements"]["income"] = [
         {
@@ -428,15 +508,15 @@ def test_financial_report_types_support_annual_cumulative_and_q4_single(tmp_path
             ("2025-12-31", "年报", 400.0),
         )
     ]
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
+    _patch_fetch(monkeypatch, provider)
 
     cumulative = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative",
-        statements=["income"], report_types=["annual"], items=["营业收入"],
+        statements=["income"], periods=["2025-12-31"], items=["营业收入"],
     )
     single = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="single",
-        statements=["income"], report_types=["annual"], items=["营业收入"],
+        statements=["income"], periods=["2025-12-31"], items=["营业收入"],
     )
 
     assert [(row["report_date"], row["amount"]) for row in cumulative["rows"]] == [("2025-12-31", 400.0)]
@@ -451,7 +531,7 @@ def test_financial_query_accepts_alias_and_notes_substitute(tmp_path, monkeypatc
         {"item_code": "OPERATE_COST", "item_name": "OPERATE_COST", "amount": 60.0, "source": "eastmoney"},
         {"item_code": "DEDUCT_PARENT_NETPROFIT", "item_name": "DEDUCT_PARENT_NETPROFIT", "amount": 18.0, "source": "eastmoney"},
     ]
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
+    _patch_fetch(monkeypatch, provider)
 
     response = service.get_financial_statements(
         str(tmp_path),
@@ -469,7 +549,8 @@ def test_financial_query_accepts_alias_and_notes_substitute(tmp_path, monkeypatc
         ("营业成本", 60.0),
         ("营业收入", 90.0),
     ]
-    assert response["notes"] == [
+    notes = [note for note in response["notes"] if not note.startswith("本次拉取")]
+    assert notes == [
         "科目“扣非净利润”按简称匹配为“归属于母公司股东的扣除非经常性损益的净利润”，并非精确名称匹配",
         "科目“营收”按简称匹配为“营业收入”，并非精确名称匹配",
         "科目名称等价：归属于母公司股东的扣除非经常性损益的净利润=扣非净利润=扣非归母净利润；营业收入=营收",
@@ -496,7 +577,7 @@ def test_financial_query_supports_template_alias_and_relation_note(tmp_path, mon
     provider["statements"]["balance"][0]["items"] = [
         {"item_code": "CASH_DEPOSIT_PBC", "item_name": "CASH_DEPOSIT_PBC", "amount": 100.0, "source": "eastmoney"},
     ]
-    monkeypatch.setattr(service.ifind, "fetch_statements", lambda *args, **kwargs: provider)
+    _patch_fetch(monkeypatch, provider)
 
     by_full = service.get_financial_statements(
         str(tmp_path), "600519.SH", amount_basis="cumulative",

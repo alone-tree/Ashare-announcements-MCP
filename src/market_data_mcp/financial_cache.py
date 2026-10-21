@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import tempfile
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +18,6 @@ FINANCIAL_FILES = {
     "cash_flow": "cash_flow.json",
     "meta": "meta.json",
 }
-FRESH_FOR = timedelta(days=30)
 
 
 def financial_dir(root: str, code: str) -> Path:
@@ -97,15 +95,41 @@ def commit_bundle(
                 backup.unlink()
 
 
-def is_fresh(metadata: dict[str, Any], now: datetime | None = None) -> bool:
-    text = metadata.get("meta", {}).get("last_successful_update")
-    if not text:
-        return False
-    try:
-        updated = datetime.fromisoformat(str(text))
-    except ValueError:
-        return False
-    return (now or datetime.now()) - updated < FRESH_FOR
+def empty_metadata(code: str, market: str, source: str, batch_id: str) -> dict[str, Any]:
+    """空公司级 metadata（首次调用建档，尚无任何报告期）。"""
+    return {
+        "meta": {
+            "code": code,
+            "market": market,
+            "update_batch_id": batch_id,
+            "last_successful_update": None,
+            "last_refresh_attempt": None,
+        },
+        "code": code,
+        "market": market,
+        "sources": {"statements": source} if source else {},
+        "filings": [],
+    }
+
+
+def empty_statement(code: str, market: str, statement: str, source: str, batch_id: str) -> dict[str, Any]:
+    """空报表 payload（建档用：0 个报告期、未成功更新）。"""
+    return {
+        "meta": {
+            "schema_version": 1,
+            "code": code,
+            "market": market,
+            "statement": statement,
+            "source": source,
+            "last_successful_update": None,
+            "last_refresh_attempt": None,
+            "update_batch_id": batch_id,
+            "date_range": {"start": None, "end": None},
+            "shape": {"reports": 0},
+        },
+        "item_catalog": [],
+        "reports": [],
+    }
 
 
 def _version_id(report: dict[str, Any]) -> str:
@@ -159,9 +183,10 @@ def merge_statement(
     observed_at: str,
     batch_id: str,
 ) -> dict[str, Any]:
-    """把一次全历史刷新合并进单张报表缓存，同报告期内容变化时保留新旧版本。"""
+    """把一批报告期合并进单张报表缓存，同报告期内容变化时保留新旧版本。
+
+    fresh_reports 可以是全历史刷新，也可以只是单期（惰性拉取逐期提交）。"""
     old_by_date = {report["report_date"]: report for report in (existing or {}).get("reports", [])}
-    fresh_dates: set[str] = set()
     ordered_fresh = sorted(fresh_reports, key=lambda report: report["report_date"])
 
     catalog: dict[tuple[str, str], dict[str, str]] = {}
@@ -177,13 +202,12 @@ def merge_statement(
 
     for fresh in ordered_fresh:
         report_date = fresh["report_date"]
-        fresh_dates.add(report_date)
         for item in fresh.get("items") or []:
             key = (str(item.get("item_code") or ""), str(item.get("item_name") or ""))
             catalog[key] = {"item_code": key[0], "item_name": key[1]}
         entry = old_by_date.setdefault(
             report_date,
-            {"report_date": report_date, "current_version_id": None, "present_in_latest_refresh": True, "versions": []},
+            {"report_date": report_date, "current_version_id": None, "versions": []},
         )
         version_id = _version_id(fresh)
         known = next((version for version in entry["versions"] if version["version_id"] == version_id), None)
@@ -208,11 +232,6 @@ def merge_statement(
         else:
             known["last_seen_at"] = observed_at
         entry["current_version_id"] = version_id
-        entry["present_in_latest_refresh"] = True
-
-    for report_date, entry in old_by_date.items():
-        if report_date not in fresh_dates:
-            entry["present_in_latest_refresh"] = False
 
     reports = sorted(old_by_date.values(), key=lambda report: report["report_date"])
     return {
@@ -226,10 +245,10 @@ def merge_statement(
             "last_refresh_attempt": observed_at,
             "update_batch_id": batch_id,
             "date_range": {
-                "start": ordered_fresh[0]["report_date"] if ordered_fresh else None,
-                "end": ordered_fresh[-1]["report_date"] if ordered_fresh else None,
+                "start": reports[0]["report_date"] if reports else None,
+                "end": reports[-1]["report_date"] if reports else None,
             },
-            "shape": {"reports": len(ordered_fresh)},
+            "shape": {"reports": len(reports)},
         },
         "item_catalog": [catalog[key] for key in sorted(catalog)],
         "reports": reports,

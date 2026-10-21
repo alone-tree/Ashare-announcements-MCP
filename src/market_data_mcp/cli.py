@@ -76,13 +76,11 @@ def get_financial_statements_batch(request: dict[str, Any]) -> dict[str, Any]:
         for key in (
             "amount_basis",
             "statements",
-            "start_date",
-            "end_date",
+            "periods",
             "include_versions",
             "force_refresh",
             "export_path",
             "items",
-            "report_types",
         )
     }
     items = []

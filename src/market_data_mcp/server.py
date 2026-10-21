@@ -183,13 +183,11 @@ def create_server() -> Any:
         code: str,
         amount_basis: str,
         statements: list[str] | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        periods: list[str] | None = None,
         include_versions: bool = False,
         force_refresh: bool = False,
         export_path: str | None = None,
         items: list[str] | None = None,
-        report_types: list[str] | None = None,
     ) -> dict[str, Any]:
         """获取三大财务报表原始科目（A股/北交所/港股/美股）。
 
@@ -200,12 +198,15 @@ def create_server() -> Any:
             本工具不提供支持。
         statements: 可选 balance/income/cash_flow/meta 子集；不传返回三表+报表信息。
             meta（报表信息：审计单位/审计意见类型/内控审计意见类型/定期报告实际披露日期）
-            仅 A股/北交所（iFinD）提供，港美股为空表。上游刷新始终同时获取全部表，
-            任一失败整批不更新。
-        start_date/end_date: 按原始报告截止日筛选，格式 YYYY-MM-DD，含边界；不传为全部历史。
+            仅 A股/北交所（iFinD）提供，港美股为空表。
+        periods: 要取哪些报告期，YYYY-MM-DD 数组，每个元素必须是季度末
+            （03-31/06-30/09-30/12-31，如 2025-12-31=FY25年报），且不晚于今天。
+            不传则以最新已披露报告期往前取 5 期。已缓存过的报告期不重拉，
+            只拉缺失期；financial_statements 的读取因此是增量的。amount_basis=single
+            时工具自动补拉同一财年的上一期（调用方不用自己补），返回只含请求的期。
         include_versions: false=每个报告期仅最新版本；true=累计口径返回全部历史版本。
             single 始终只使用最新累计版本，不生成历史单期版本。
-        force_refresh: true=忽略固定 30 天新鲜期，强制联网刷新。
+        force_refresh: true=忽略探针 1 天缓存并重拉请求范围内的已有期（用于重述/更正）。
         export_path: 指定则导出 CSV；未指定且超过 200 行时自动导出并返回路径。
         items: 可选中文名称或科目码列表，支持中文全名、常用简称（如 扣非净利润/
             归母净利润/营收）与内部科目码精确匹配（如 ths_currency_fund_stock）。
@@ -215,28 +216,25 @@ def create_server() -> Any:
             失败，工具不计算毛利、毛利率等衍生指标。
             返回 rows 涉及的带简称科目会在 notes 附「科目名称等价」关系行
             （如 现金及存放中央银行款项=货币资金），据此识别跨模板行名差异。
-        report_types: 可选 annual/semiannual/q1/q3 列表；可组合。不传返回全部报告节点。
-            与 amount_basis 组合时，annual+single 表示第四季度单季，semiannual+single
-            表示第二季度单季，q3+single 表示第三季度单季。
         返回 JSON 信封（ok/status/failed_items/notes 等）+ markdown 字段：markdown 为
         「变量 × 报告期」表格，每 statement 一张表，公告日/东财更新日/货币/审计意见
-        作为行，金额保留 2 位小数；列名=上游原始报告截止日，不做推断（美/港股财年
-        截止日灵活）。include_versions=true 时为版本审计长表（含 version_id 等列）。
+        作为行，金额保留 2 位小数；列名=上游原始报告截止日，不做推断，但 A股本就
+        是传入的季度末日期。include_versions=true 时为版本审计长表（含 version_id 等列）。
         有可靠中文名时不暴露英文代码，未映射时保留原名。不返回同比/环比比例，
         不自行修正上游值。CLI 与 CSV 导出维持长表格式（机器消费）。
+        惰性拉取失败语义：单期失败不影响其余期，返回 ok=true+stale=true，notes 列出
+        失败期；最新报告期探针失败不阻塞，沿用已知最新期并在 notes 说明。
         """
         return _render_financial_markdown(_wrap(get_financial_statements_service)(
             _data_root(),
             code,
             amount_basis=amount_basis,
             statements=statements,
-            start_date=start_date,
-            end_date=end_date,
+            periods=periods,
             include_versions=include_versions,
             force_refresh=force_refresh,
             export_path=export_path,
             items=items,
-            report_types=report_types,
         ))
 
     @mcp.tool()

@@ -64,9 +64,11 @@ class TestServer:
         assert financial_schema.get("additionalProperties") is False
         assert set(financial_schema["required"]) == {"code", "amount_basis"}
         assert {
-            "code", "amount_basis", "statements", "start_date", "end_date",
+            "code", "amount_basis", "statements", "periods", "items",
             "include_versions", "force_refresh", "export_path",
         } <= set(financial_schema["properties"])
+        assert "start_date" not in financial_schema["properties"]
+        assert "report_types" not in financial_schema["properties"]
 
     def test_strict_args_rejected(self):
         import asyncio
