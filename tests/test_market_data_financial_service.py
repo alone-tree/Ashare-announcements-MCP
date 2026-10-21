@@ -2,6 +2,7 @@
 """get_financial_statements 工具层测试。"""
 
 import csv
+import json
 import os
 
 from market_data_mcp import service
@@ -359,6 +360,74 @@ def test_financial_auto_exports_over_200_rows(tmp_path, monkeypatch):
 
     assert response["auto_exported"] is True and response["total_items"] == 201
     assert "rows" not in response and os.path.exists(response["path"])
+
+
+def test_probe_failure_falls_back_to_cached_latest_period(tmp_path, monkeypatch):
+    """探针失败不阻塞：以缓存已有最新期为锚，照常返回并记 notes。"""
+    _patch_fetch(monkeypatch, _provider_result())
+    service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="cumulative",
+        statements=["income"], periods=["2025-12-31"],
+    )
+
+    probe_path = tmp_path / "cache" / "600519.SH" / "financial_statements" / "metadata.json"
+    payload = json.loads(probe_path.read_text(encoding="utf-8"))
+    payload["latest_report_probe"]["probed_at"] = "2020-01-01T00:00:00+00:00"
+    probe_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        service.ifind,
+        "probe_latest_report",
+        lambda root, mc: {"ok": False, "report_date": None, "error": "request data error"},
+    )
+    result = service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="cumulative", statements=["income"]
+    )
+
+    assert result["ok"] is True and result["stale"] is False
+    assert any(
+        "探测最新报告期失败" in note and "上次探测时间 2020-01-01" in note
+        for note in result["notes"]
+    )
+    assert [row["report_date"] for row in result["rows"]] == ["2025-12-31"]
+
+
+def test_probe_failure_without_cache_errors_and_asks_for_periods(tmp_path, monkeypatch):
+    monkeypatch.setattr(service.ifind, "bundle_matches_subjects", lambda bundle: True)
+    monkeypatch.setattr(
+        service.ifind,
+        "probe_latest_report",
+        lambda root, mc: {"ok": False, "report_date": None, "error": "request data error"},
+    )
+    result = service.get_financial_statements(str(tmp_path), "600519.SH", amount_basis="cumulative")
+
+    assert result["ok"] is False
+    assert "请显式传 periods" in result["error"]
+
+
+def test_probe_failure_with_explicit_periods_still_fetches(tmp_path, monkeypatch):
+    _patch_probe(monkeypatch)
+    monkeypatch.setattr(
+        service.ifind,
+        "probe_latest_report",
+        lambda root, mc: {"ok": False, "report_date": None, "error": "request data error"},
+    )
+    fetched = []
+
+    def fake_fetch(root, mc, periods):
+        fetched.append(list(periods))
+        return _as_periods(_provider_result(), periods)
+
+    monkeypatch.setattr(service.ifind, "fetch_statements", fake_fetch)
+    result = service.get_financial_statements(
+        str(tmp_path), "600519.SH", amount_basis="cumulative",
+        statements=["income"], periods=["2025-09-30"],
+    )
+
+    assert result["ok"] is True
+    assert fetched == [["2025-09-30"]]
+    assert result["rows"] == []  # 桩数据只有 2025-12-31，2025-09-30 无数据
+    assert any("探测最新报告期失败" in note for note in result["notes"])
 
 
 def test_financial_parameter_validation(tmp_path):
