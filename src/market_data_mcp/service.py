@@ -532,7 +532,7 @@ def _financial_metadata(full_code: str, mc: MarketCode, source: str, batch_id: s
 
 def _commit_with_probe(root: str, full_code: str, bundle: dict, probe: dict | None) -> dict | None:
     """只更新 metadata（写入探针结果），其余四表原样重打批号提交。"""
-    if not probe:
+    if not probe or bundle is None:
         return bundle
     batch_id = uuid.uuid4().hex
     statements = {}

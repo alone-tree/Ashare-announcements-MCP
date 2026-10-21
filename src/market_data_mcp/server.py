@@ -3,7 +3,7 @@
 
 工具：
 - get_quote: 日/周/月线行情（raw/hfq/qfq + 量额/股本/市值，超长自动导出）
-- get_financial_statements: 三市场财务报表（累计/单期、版本、30 天缓存、超长自动导出；A/北交所含报表信息 meta 表）
+- get_financial_statements: 三市场财务报表（累计/单期、版本、惰性拉取、超长自动导出；A/北交所含报表信息 meta 表）
 - get_data_catalog: 纯本地查询公司财报缓存支持的科目
 - get_company_profile: 公司概况/IPO/分红/盈利预测/股东
 - get_quote_chart: 行情绘图（K线/折线 PNG，事件标注/高低点；引擎 chart_service.py，
