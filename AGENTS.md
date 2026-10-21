@@ -38,7 +38,7 @@ CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）�
 | 工具 | 要点 |
 |---|---|
 | `get_quote` | 行情；code 带后缀、vars 字段列表、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、start_date 特殊值 "all"、超长自动导出、export_path 指定 CSV。**缓存为字段级 json，每字段唯一数据源**，派生（qfq/市值/换手率/周月/hfq OHL 还原）全现算。参数、9个字段与覆盖判定见架构 §1.5/§1.6 |
-| `get_financial_statements` | 三表 + 报表信息 meta；科目名原样不翻译、不做跨市场映射；**A/北交所唯一源=iFinD `THS_BD`，港美=东财（无 meta 表）**；`amount_basis` 必填（cumulative/single）；30天整批缓存+强制刷新；同报告期多版本；三表批次全有或全无。科目数、非加总科目、审计意见口径、items 匹配见 `docs/行为-财报工具.md` |
+| `get_financial_statements` | 三表 + 报表信息 meta；科目名原样不翻译、不做跨市场映射；**A/北交所唯一源=iFinD `THS_BD`，港美=东财（无 meta 表）**；`amount_basis` 必填（cumulative/single）；已披露的历史期不重拉，缺失期探测已披露才拉（不传日期默认最近5期）；同报告期多版本；每期独立原子提交。科目数、非加总科目、审计意见口径、items 匹配见 `docs/行为-财报工具.md` |
 | `get_data_catalog` | 纯本地只读：汇总该公司已缓存报告期中出现过非空金额的科目 + 最早/最晚有效报告日；不联网不写缓存（惰性拉取语义下只反映已拉取的报告期） |
 | `get_company_profile` | 概况/分红/盈利预测，sections 可选 |
 | `get_quote_chart` | 行情绘图（2026-10-19 由 market-data-chart MCP 并入）：K线（蜡烛+成交量副图+MA5/10/20/60 按当前周期算）/折线（field=OHLC 单字段）；events 事件标注、keypoints 高低点（仅折线，回撤阈值 0.30）、log_scale 含 0/负自动退回、红涨绿跌；PNG 落 `cache/_charts/` 只返回路径；数据复用 get_quote（不复制取数）；CLI `get_quote_chart_batch` 同契约 |
