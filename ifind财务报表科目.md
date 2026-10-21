@@ -155,7 +155,7 @@
 | 利润表 | 手续费及佣金收入 | ths_fee_and_commi_income_stock |  |
 | 利润表 | 营业总收入差额(特殊报表科目) | ths_operating_revenuediff_sri_stock |  |
 | 利润表 | 营业总收入差额(合计平衡科目) | ths_operating_revenuediff_tbi_stock |  |
-| 利润表 | 营业总成本 | ths_operating_cost_2_stock | 公告口径；四家八期与公告逐字一致（2026-10-21 更正，原定 total_cost） |
+| 利润表 | 营业总成本 | ths_operating_cost_2_stock | 公告口径（按公布值）；四家八期与公告逐字一致。2019 中报前后口径不同：此前公告含减值、之后不含（2026-10-21 更正，原定 total_cost） |
 | 利润表 | 营业总成本(含减值，不采用) | ths_operating_total_cost_stock | 编辑器名「营业总成本」，把信用/资产减值净额并入，偏离公告列报 |
 | 利润表 | 营业成本 | ths_operating_cost_stock |  |
 | 利润表 | 利息支出 | ths_interest_payout_stock |  |
