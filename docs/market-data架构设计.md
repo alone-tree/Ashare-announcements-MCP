@@ -73,7 +73,16 @@
 | 财报三表 + meta | **iFinD（A股/北交所，见 §3）** | 东财 datacenter | 东财 datacenter |
 | 财务指标/概况 | 东财 datacenter | 东财 | 东财（缺失类别 → SEC 公告） |
 
-![图1 字段与数据源归属：每个字段只在链上的一个源取数](assets/fig-data-sources.png)
+**图1 字段与数据源归属：每个字段只在链上的一个源取数**
+
+```mermaid
+flowchart LR
+    Q["行情字段"] -->|"raw OHLCV · A/港 amount · A/港 hfq"| S["新浪"]
+    Q -->|"美股 amount/hfq · 股本"| I["iFinD"]
+    F["财报字段"] -->|"A股/北交所三表"| I
+    F -->|"港美三表"| E["东财 datacenter"]
+    M["公司信息"] -->|"profile/ipo/dividends/forecast"| N["巨潮 · 同花顺 · 经济通 · 东财<br/>按 section 分主源"]
+```
 
 **字段链原则**：链上任一源拿到即填入缓存，全链失败才标注该字段缺失；某字段不稳定只调该字段的链，不动其他字段。选源时先看字段再谈数据源——同一个工具里不同字段可以来自不同源（例如行情 raw 来自新浪、美股成交额来自 iFinD），但不允许同一字段出现两个源的值。
 
@@ -124,7 +133,19 @@
 
 ### 1.8 代码架构（模块化，2026-08-08 讨论定稿）
 
-![图2 代码分层与数据流：入口、调度、取数、缓存、输出、审计](assets/fig-arch-layers.png)
+**图2 代码分层与数据流：入口、调度、取数、缓存、输出、审计**
+
+```mermaid
+flowchart TD
+    A["MCP 入口 server.py<br/>5 工具 · 严格参数模式"] --> B["CLI 入口 cli.py<br/>stdin JSON → stdout JSON"]
+    A --> C["调度层 service.py<br/>参数校验 · 市场路由 · 筛选 · 派生"]
+    B --> C
+    C --> D["取数层 providers/<br/>新浪 · iFinD · 东财 · SEC"]
+    C --> E["缓存层 cache / financial_cache<br/>JSON 文件 + 版本链"]
+    D --> E
+    C --> F["审计 logs/requests.jsonl<br/>每次上游请求一条"]
+    E --> G["输出<br/>markdown 矩阵 · 长表 · CSV · PNG"]
+```
 
 图中入口=`server.py`/`cli.py`、调度层=`service.py`、取数层=`providers/`、缓存层=`cache.py` 与 `financial_cache.py`。行情另有一个字段聚合器 `aggregator.py`（对应下面三层结构里的中层），财报不走它。每次真正打到上游的请求都往 `logs/requests.jsonl` 追加一条审计记录，只用于评估源可靠性，不参与业务判断。
 
@@ -165,7 +186,23 @@
 
 ### 2.1.1 底层逻辑
 
-![图3 行情取数链路：字段组装、缓存覆盖判定、补拉与派生](assets/fig-quote-pipeline.png)
+**图3 行情取数链路：字段组装、缓存覆盖判定、补拉与派生**
+
+```mermaid
+flowchart TD
+    A["get_quote<br/>code · vars · adjust · 周期"] --> B["后缀 → 市场路由"]
+    B --> C["字段链：每个字段唯一源"]
+    C --> D{"缓存覆盖请求范围?"}
+    D -- 是 --> H["组装行<br/>日期骨架 = 新浪价格序列"]
+    D -- 否 --> E{"距上次成功<br/>不足 10 分钟?"}
+    E -- 是 --> H
+    E -- 否 --> F["按字段链补拉<br/>写字段级 json"]
+    F --> H
+    H --> G["派生：qfq · 市值 · 换手率<br/>周月线 · hfq OHL 还原"]
+    G --> I{"超过 200 行?"}
+    I -- 是 --> J["导出 CSV<br/>返回路径"]
+    I -- 否 --> K["返回 rows"]
+```
 
 行情工具是「按字段组装」的：先用代码后缀确定市场，再为每个被请求的字段查到它唯一的数据源，然后判断缓存是否已经覆盖请求范围。覆盖就本地组装，不覆盖才按字段链补拉并写回字段级缓存。组装时日期骨架只取新浪价格序列的日期，iFinD 的股本、美股成交额这类字段只做「按日期给值」，不参与产生日期——这样上游对未收盘日返回的伪行不会混进结果。最后所有派生量（前复权、市值、换手率、周月线、hfq 的 OHLC 还原）都在本地现算，不落盘；结果超过200行自动导出CSV（阈值见 §1.6），只返回路径。
 
