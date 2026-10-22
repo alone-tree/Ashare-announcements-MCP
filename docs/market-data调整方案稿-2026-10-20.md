@@ -73,10 +73,10 @@
 |---|---|
 | D1 | `statements` 默认五表全含（不传=含 business_segments） |
 | D2 | 只做累计披露原值：不参与 single 单季差分，`amount_basis` 对其无效果 |
-| D3 | 期集与三表一致：季报照常请求，没数据留空（维度空数组/行值 null），期级全空也产出空结构 |
+| D3 | 期集与三表一致：季报照常请求；每期每维度**固定返回排名1-5共5行、字段全齐**，iFinD返回什么填什么（0/空串/`--`/`-` 全部原样保留，不做判断与清洗；仅pandas缺失NaN转null——那不是上游值，是序列化要求） |
 | D4 | 不聚合：按维度长表，行=报告期×排名×项目，字段零增减，跨期同名不合并 |
 | D5 | 保留 rank（上游排名参数原值 1-5） |
-| D6 | 金额=元原值；不造"成本"字段；占比/毛利率 JSON 不出现、markdown 现算 |
+| D6 | 金额=元原值；**营收占比（income_ratio）与毛利率（gross_margin）系统内部计算**，随行返回并入库，调用方无需再算；不造"成本"字段 |
 | D7 | 无版本链：同期重拉整期覆盖 |
 | D8 | items 支持维度值过滤 bs（名称见 P7），与科目名过滤混用互不干扰 |
 | D9 | export_path 导出含 bs（形态见 P8） |
@@ -92,17 +92,19 @@
 | include_versions | 对 bs 无效果（D7） |
 | force_refresh | 对 bs 同效：重拉范围内已有期 |
 
-**输出**：顶层 `business_segments` 键（与 `rows` 平级，不混入科目长表）：
+**输出**：与三表同模式——**数据本体渲染进 `markdown` 字段，JSON 不返回 business_segments 数据区块**（rows 同待遇）。markdown 中每维度一张长表：
 
-```json
-"business_segments": {
-  "product":   {"rows": [{"period": "2025-12-31", "rank": 1, "name": "茅台酒", "income": 146499906480.49, "gross_profit": 137015148654.95}, "…"]},
-  "industry":  {"rows": ["…"]},
-  "district":  {"rows": ["…"]}
-}
+```markdown
+## 主营构成——按产品（单位：元）
+
+| 报告期 | rank | 项目 | 收入 | 毛利 | 营收占比 | 毛利率 |
+|---|---|---|---:|---:|---:|---:|
+| 2025-12-31 | 1 | 茅台酒 | 146499906480.49 | 137015148654.95 | 41.2% | 93.5% |
+| 2025-12-31 | 4 |  |  |  |  |  |
 ```
 
-长表行五字段 `period/rank/name/income/gross_profit`；金额=元；空=null 保留行。markdown 每维度透视宽表（行=项目按首现序，列=期），毛利率/收入占比现算（占比需 income 表当期营业总收入可用，否则省略+notes）。
+- 行=报告期×排名×项目；iFinD原值原样（`--`/`-`/空串照写）；营收占比=income÷当期营业总收入（分母取income表，该期不可用时该列留空+notes）、毛利率=gross_profit÷income；上游值非数值（如`--`）时派生列留空
+- 计算在 service 组装时完成（分母来自同批拉取的 income 表），**随行入库、随行返回**，调用方无需再处理
 
 **缓存**：第六文件 `business_segments.json`（与三表文件同构，reports 按期排）：
 
@@ -113,15 +115,20 @@
   "reports": [
     {"report_date": "2025-06-30", "observed_at": "…",
      "dimensions": {
-       "product":  [{"rank": 1, "name": "茅台酒", "income": 75589948903.79, "gross_profit": 70940650242.56}, "…共5行…"],
-       "industry": [],
-       "district": [{"rank": 1, "name": "国内", "income": 86490107535.14, "gross_profit": 78945741785.69}, "…"]
+       "product":  [
+         {"rank": 1, "name": "茅台酒", "income": 75589948903.79, "gross_profit": 70940650242.56, "income_ratio": 0.4120, "gross_margin": 0.9383},
+         {"rank": 4, "name": null, "income": null, "gross_profit": null, "income_ratio": null, "gross_margin": null}
+       ],
+       "industry": [
+         {"rank": 1, "name": "酒类", "income": "168774585187.65", "gross_profit": "--", "income_ratio": null, "gross_margin": null}
+       ],
+       "district": [{"rank": 1, "name": "国内", "income": 86490107535.14, "gross_profit": 78945741785.69, "income_ratio": 0.5288, "gross_margin": 0.9131}]
      }}
   ]
 }
 ```
 
-六文件强一致（旧五文件缓存整体重建）；无版本链（同期覆盖）；期级全空产出空 dimensions 不反复重拉；`get_data_catalog` 对无 versions 表自然跳过。
+行六字段 `rank/name/income/gross_profit/income_ratio/gross_margin`（period 在桶级 report_date，组装返回时并入行）；**值原样透传**：上游给 0/空串/`--`/`-` 原样存（示例 industry 行 gross_profit="--"），仅 pandas 缺失 NaN 转 null（序列化要求，非上游值）；派生两字段仅当 income/gross_profit 与分母均为数值时计算，否则 null。六文件强一致（旧五文件缓存整体重建）；无版本链（同期覆盖）；`get_data_catalog` 对无 versions 表自然跳过。
 
 **拉取**（一次无缓存调用 600519 cumulative 全量）：
 
@@ -135,7 +142,7 @@
 
 **实现步骤**（敲定后）：① 缓存层 `FINANCIAL_FILES`+`merge_business_segments` ② `ifind.fetch_business_segments`+login 自愈 ③ service 分表差分+`_refresh_ifind` 重写+东财分支 bs 空 payload ④ 主函数 items 分离+bs 组装+export 两文件 ⑤ server.py docstring+宽表渲染 ⑥ cli 对齐 ⑦ 测试（fixture 补第六文件+联网6场景）⑧ 文档并入+方案稿步骤关闭 ⑨ 分步提交。
 
-**bs 验收**（补充 §5）：首拉六文件齐且 bs 有值；重复请求 0 联网；single 时 bs 行数不变；items 维度过滤生效；00700.HK bs=null+notes；期级全空不重拉；旧缓存自动重建。
+**bs 验收**（补充 §5）：首拉六文件齐且 bs 有值；重复请求 0 联网；single 时 bs 行数不变；items 维度过滤生效；00700.HK bs=null+notes；季报期上游无值时 5 行与字段仍齐全、原值原样入库；旧缓存自动重建。
 
 ## 5. 验收样例（剩余步骤的合格标准）
 
