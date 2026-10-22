@@ -1,19 +1,17 @@
 """美股电话会议（earnings call transcript）通道。
 
-数据流：公告列表（EDGAR submissions）→ 机械推算报告期序列 → Alpha Spread URL → 下载正文缓存。
-- Cloudflare：Alpha Spread 2026-09 起对脚本请求返回 403 managed challenge，请求须带
-  alphaspread_cookies.json 里的 cf_clearance + 配套 UA（_cloudflare_headers；文件缺失回退裸 UA）
-- 公告列表复用 sync_edgar_archive（先同步增量，再读 announcements.json）
-- 财季推算纯机械：锚定最近一份 10-K（= 财年结束 = Q4，year = 其 reportDate 年份），
-  Q1→Q2→Q3→Q4→年份+1→Q1 固定循环；不读 XBRL、不下载公告正文
-- 8-K(2.02) 触发：最新财报 8-K 发布日 > 最新已确认报告期时，把推算序列的下一财季
-  提前加入待下载——财报发布当天即可尝试获取电话会议，不必等 10-Q/10-K 提交
-  （8-K 只做触发信号，财季归属仍由 10-K/10-Q 推算决定；未收录时不落索引、下次重试）
-- 历史下限：Alpha Spread 覆盖从 2018 财季起（实测），更早无数据
-- 增量：推算集合 − 本地已保存 = 待获取；404 表示该财季电话会议未出（刚披露/未开），
-  不保存、下次再试；force_refresh 重试全部 404/missing
-- 上游季度标签偶尔与申报财季错位（如部分公司偏移一年），正文第一句注明实际报告期，
-  由 AI 结合正文判断，不做代码级容错
+数据源：stockanalysis.com（站点级提取器，2026-10-22 起唯一正文源）
+- 索引页 /stocks/{ticker}/transcripts/ 直接列出全部电话会（“Earnings Call: Q2 2026”+链接），
+  标签就是公司财季（META Q2 2026、NVDA Q2 2027），不需要推算，也不需要 cookie/浏览器：
+  纯 requests + 普通 UA 即可 200（Alpha Spread 的 cf_clearance 绑定出口 IP，换节点即 403，
+  2026-09 起长期失效；AlphaStreet 整站 CloudFront 403，二者均已退役）。
+- 正文页按 turn 分块：div.border-t... 内含 speaker（div.text-lg.font-bold）与段落 <p>，
+  站点级规则，不做公司级适配。
+- report_date（报告期）只从本地公告缓存里的 10-Q/10-K 反查，有则附上，没有留空——
+  是否“有电话会”完全由索引页决定（20-F/6-K 公司 TSM/BABA 等同样可用）。
+- 首次同步默认只下载最近 RECENT_QUARTERS 季，更早的按需补下载（target_period）。
+- 状态语义：ok=正文已缓存；missing=页面 404（该季未收录）；failed=网络/HTTP 异常（带 http_status），
+  不把失败冒充“上游未收录”。
 """
 
 from __future__ import annotations
@@ -22,24 +20,27 @@ import html as html_mod
 import json
 import re
 import time
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import requests
 
-from ashare_announcements_mcp.cache import app_root, load_cache, stock_cache_dir
+from ashare_announcements_mcp.cache import load_cache, stock_cache_dir
 from ashare_announcements_mcp.service import normalize_stock_code, resolve_company, sync_edgar_archive
-from ashare_announcements_mcp import us_edgar
 
-ALPHA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-ALPHA_BASE = "https://www.alphaspread.com/security/nasdaq/{ticker}/investor-relations/earnings-call/q{num}-{year}"
-# AlphaStreet 备用源（最新季 Alpha Spread 未收录时补位；仅覆盖近 ~8 季）
-ALPHA_STREET_BASE = "https://news.alphastreet.com/{slug}-{ticker}-q{num}-{year}-earnings-call-transcript/"
-MIN_YEAR = 2018  # Alpha Spread 历史覆盖下限（实测 AAPL/LULU 2018 起才有）
+SA_BASE = "https://stockanalysis.com/stocks/{ticker}/transcripts/"
+SA_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+)
 # 首次同步默认只下载最近 N 个财季（避免全量下载超时；更早的按需补下载）
 RECENT_QUARTERS = 12
-REQUEST_DELAY = 1.0  # Alpha 串行限速（秒）
+REQUEST_DELAY = 1.0  # 串行限速（秒）
+
+_INDEX_ENTRY = re.compile(
+    r'href="(?:https://stockanalysis\.com)?(/stocks/[^"]+/transcripts/\d+-q(\d)-(\d{4})/)"'
+)
 
 
 def _transcripts_path(code: str) -> Path:
@@ -89,15 +90,6 @@ def _company_cik(code: str) -> str | None:
     return None
 
 
-def _company_name(code: str) -> str | None:
-    """从 companies.json 取 US 证券的公司名（用于 AlphaStreet URL slug）。"""
-    _key, securities = resolve_company(code)
-    for sec in securities:
-        if sec.get("market") == "US":
-            return sec.get("name") or ""
-    return None
-
-
 def _report_items(code: str) -> list[dict[str, Any]]:
     """从公告档案中筛出 10-Q/10-K（含 report_date/form/accession）。
 
@@ -121,6 +113,8 @@ def _report_items(code: str) -> list[dict[str, Any]]:
     missing = [r for r in reports if not r["report_date"]]
     if missing:
         try:
+            from ashare_announcements_mcp import us_edgar
+
             cik = _company_cik(code)
             if cik:
                 submissions = us_edgar.fetch_submissions(cik)
@@ -132,7 +126,7 @@ def _report_items(code: str) -> list[dict[str, Any]]:
                     if not item["report_date"]:
                         item["report_date"] = by_accession.get(item["accession"], "")
         except Exception:
-            pass  # 补齐失败则跳过该批（AI 可重建公告缓存）
+            pass  # 补齐失败则跳过该批（报告期只是附注，不影响取正文）
     return [item for item in reports if item.get("report_date")]
 
 
@@ -158,25 +152,20 @@ def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
     财季分配：同一财年内按时间顺序，锚点 10-K 之前的 10-Q 依次为 Q3、Q2、Q1；
     锚点 10-K 之后的 10-Q 属于下一财年 Q1、Q2…
     （Q1→Q2→Q3→Q4→年份+1→Q1 固定循环，纯机械，不读 XBRL）
-    范围：[max(MIN_YEAR, 最早报告期财年) , 最新报告期]。
+    仅用于把财季标签对上报告期（report_date），是否存在电话会由 stockanalysis 索引决定。
     """
     if not reports:
         return []
-    # 按 report_date 升序的真实报告期
     ordered = sorted(reports, key=lambda r: r["report_date"])
 
-    # 锚点：最近一份 10-K
     k10s = [r for r in ordered if r["form"] == "10-K"]
     if k10s:
         anchor = k10s[-1]
         anchor_year = int(anchor["report_date"][:4])
     else:
-        # 无 10-K（刚上市）：以最新报告期所在年份为锚
         anchor_year = int(ordered[-1]["report_date"][:4])
 
     quarters: list[dict[str, str]] = []
-    # 从锚点往前倒序处理；每个 10-K 独立确定财年（year = report_date 年份），
-    # 其后（时间更早）的 10-Q 按 Q3→Q2→Q1 归入该财年
     before = [r for r in ordered if r["report_date"] < anchor["report_date"]] if k10s else ordered[:-1]
     current_fy = anchor_year
     q_next = "Q3"
@@ -201,9 +190,7 @@ def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
         )
         q_next = {"Q3": "Q2", "Q2": "Q1", "Q1": None}.get(q_next)
         if q_next is None:
-            # 该财年已分完 Q1-Q3，剩余 10-Q 属于更早财年（由下一轮 10-K 重新对齐）
             q_next = "Q3"
-    # 锚点本身
     if k10s:
         quarters.append(
             {
@@ -212,7 +199,6 @@ def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
                 "form": "10-K",
             }
         )
-    # 锚点之后：下一财年 Q1、Q2…
     if k10s:
         after = [r for r in ordered if r["report_date"] > anchor["report_date"]]
     else:
@@ -231,310 +217,173 @@ def _derive_quarters(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
         if q_idx == 4:
             q_idx = 1
             y_after += 1
-    # 过滤 MIN_YEAR 下限（财年标签年份）
-    quarters = [q for q in quarters if int(q["fiscal_quarter"][2:6]) >= MIN_YEAR]
     return quarters
 
 
-def _next_fiscal_quarter(fiscal_quarter: str) -> str:
-    """财季标签后继：Q1→Q2→Q3→Q4→下一财年 Q1（8-K 触发下载用）。"""
-    year = int(fiscal_quarter[2:6])
-    label = fiscal_quarter[7:]
-    if label == "Q4":
-        return f"FY{year + 1}-Q1"
-    order = ["Q1", "Q2", "Q3", "Q4"]
-    return f"FY{year}-{order[order.index(label) + 1]}"
-
-
-def _earnings_k8_items(code: str) -> list[dict[str, str]]:
-    """筛出财报 8-K（items 含 2.02）的记录：filing_date（发布日）/report_date/accession。
-
-    只读公告缓存的结构化字段，不读 8-K 正文；历史分片无 items 字段，
-    不会被识别为财报 8-K（触发只看最近提交，recent 1000 条有 items）。
-    """
-    cached = load_cache(code)
-    items = cached.get("items") or []
-    k8s: list[dict[str, str]] = []
-    for item in items:
-        if str(item.get("form") or "") != "8-K":
-            continue
-        item_codes = {p.strip() for p in str(item.get("items") or "").split(",")}
-        if "2.02" not in item_codes:
-            continue
-        filing_date = str(item.get("display_time") or "")[:10]
-        if not filing_date:
-            continue
-        k8s.append(
-            {
-                "filing_date": filing_date,
-                "report_date": str(item.get("report_date") or ""),
-                "accession": str(item.get("accession") or ""),
-            }
-        )
-    return k8s
-
-
-def _k8_trigger_fetch(
-    derived: list[dict[str, str]], items: list[dict[str, Any]], code: str
-) -> dict[str, str] | None:
-    """最新财报 8-K(2.02) 发布日 > 最新已确认报告期 → 返回下一财季待下载记录。
-
-    8-K 只回答"该下载了"，财季标签来自推算序列的后继（Q1→Q2→Q3→Q4→下财年 Q1）；
-    report_date 暂存 8-K 发布日（财季末未知，10-Q/10-K 提交后由正式记录覆盖）。
-    该财季已有成功记录时不重复触发；无触发返回 None。
-    """
-    if not derived:
-        return None
-    k8s = _earnings_k8_items(code)
-    if not k8s:
-        return None
-    latest_confirmed = max(q["report_date"] for q in derived)
-    k8_latest = max(k["filing_date"] for k in k8s)
-    if k8_latest <= latest_confirmed:
-        return None
-    latest_fq = max(derived, key=lambda q: q["report_date"])["fiscal_quarter"]
-    next_fq = _next_fiscal_quarter(latest_fq)
-    existing_ok = any(
-        str(it.get("fiscal_quarter") or "") == next_fq and it.get("status") == "ok"
-        for it in items
-    )
-    if existing_ok:
-        return None
+def _report_dates(code: str) -> dict[str, dict[str, str]]:
+    """财季标签 → {report_date, form}；只有 10-Q/10-K 公司才有，没有则空表。"""
     return {
-        "fiscal_quarter": next_fq,
-        "report_date": k8_latest,
-        "form": "8-K",
-        "trigger_source": "8-K",
+        q["fiscal_quarter"]: {"report_date": q["report_date"], "form": q["form"]}
+        for q in _derive_quarters(_report_items(code))
     }
 
 
-def _build_alpha_url(ticker: str, q_num: str, year: str) -> str:
-    return ALPHA_BASE.format(ticker=ticker.lower(), num=q_num, year=year)
-
-
-def _company_slug(company_name: str) -> str:
-    """公司名 → AlphaStreet URL slug：'Lumentum Holdings Inc' → 'lumentum-holdings-inc'。"""
-    slug = company_name.lower()
-    slug = re.sub(r"\s*\(.*?\)\s*", "", slug)  # 去括号内容
-    slug = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
-    return slug
-
-
-def _build_alpha_street_url(company_name: str, ticker: str, q_num: str, year: str) -> str:
-    slug = _company_slug(company_name)
-    return ALPHA_STREET_BASE.format(slug=slug, ticker=ticker.lower(),
-                                    num=q_num, year=year)
-
-
-def _parse_alphastreet(html: str) -> list[dict[str, str]]:
-    """AlphaStreet 站点提取器：正文容器（entry-content）内全部 <p> 段落。
-
-    站点级规则（AlphaStreet 是 WordPress 站，正文在 entry-content 容器）；
-    不做公司级矫正（各公司开场白/参与者列表措辞不同，不逐一适配）。
-    无独立 speaker 标记，每段一条 {author: "", text}；正文语义由 AI 读全文判断。
-    """
-    m = re.search(r'<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>(.*?)</div>', html, re.S)
-    body = m.group(1) if m else html
-
-    parts: list[dict[str, str]] = []
-    for m in re.finditer(r"<p>(.*?)</p>", body, re.S):
-        text = re.sub(r"<br\s*/?>", "\n", m.group(1))
-        text = re.sub(r"<[^>]+>", "", text)
-        text = html_mod.unescape(text)
-        text = re.sub(r"[ \t]+\n", "\n", text)
-        text = re.sub(r"\n[ \t]+", "\n", text)
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()
-        if text:
-            parts.append({"author": "", "text": text})
-    return parts
-
-
-def _parse_comments(html: str) -> list[dict[str, str]]:
-    """解析 Alpha Spread 正文 comment 块：每块 author + text。"""
-    parts: list[dict[str, str]] = []
-    # 末尾追加哨兵，保证最后一块 comment 也能匹配（正则依赖块后有分隔符）
-    body = html + '<div class="comment">'
-    for m in re.finditer(
-        r'<div class="author">(.*?)(?=<div class="comment">|<div class="author">)', body, re.S
-    ):
-        block = m.group(1)
-        am = re.match(r"\s*(.*?)(?:\s*<!--|\s*<div)", block, re.S)
-        author = re.sub(r"<[^>]+>", "", am.group(1)).strip() if am else ""
-        tm = re.search(r'<div class="text">(.*?)</div>', block, re.S)
-        if not tm:
-            continue
-        text = re.sub(r"<br\s*/?>", "\n", tm.group(1))
-        text = re.sub(r"<[^>]+>", "", text)
-        text = re.sub(r"[ \t]+\n", "\n", text)  # 行尾缩进噪声
-        text = re.sub(r"\n[ \t]+", "\n", text)
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()
-        parts.append({"author": author, "text": text})
-    return parts
-
-
-def _cloudflare_headers() -> dict[str, str]:
-    """Alpha Spread 请求头：app_root 下 alphaspread_cookies.json 存在时带 cf_clearance + 配套 UA。
-
-    Alpha Spread 的 Cloudflare managed challenge 拒绝一切无浏览器指纹的请求（403，
-    2026-09 实测，改 UA/TLS 指纹/换 IP 均无效）——cf_clearance 需有头浏览器过挑战后
-    导出（绑定出口 IP + UA，签发/维护方式见 cookie 文件 renew 字段）。文件缺失或损坏
-    时回退裸 UA（旧行为）：反爬 cookie 是增强不是硬依赖，不抛异常。
-    """
-    path = app_root() / "alphaspread_cookies.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        ua = str(data["user_agent"])
-        clearance = str(data["cookie_value"])
-    except (OSError, json.JSONDecodeError, KeyError, TypeError):
-        return {"User-Agent": ALPHA_UA}
-    return {"User-Agent": ua, "Cookie": f"cf_clearance={clearance}"}
-
-
-def _fetch_alpha(url: str) -> tuple[int, str]:
-    """GET Alpha Spread 页面；带 cf_clearance（见 _cloudflare_headers）过 Cloudflare。"""
-    resp = requests.get(url, headers=_cloudflare_headers(), timeout=30)
+def _fetch_html(url: str) -> tuple[int, str]:
+    """GET 目标页面，返回 (status_code, text)；网络异常向上抛。"""
+    resp = requests.get(url, headers={"User-Agent": SA_UA}, timeout=40)
     return resp.status_code, resp.text
 
 
-def _download_body(
-    code: str, ticker: str, q_num: str, year: str
-) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """下载单个财季的电话会议正文；Alpha Spread 缺失时尝试 AlphaStreet 备用源。
+def _index_url(ticker: str) -> str:
+    return SA_BASE.format(ticker=ticker.lower())
 
-    返回 (body_dict | None, meta)；meta.status 标记结果，成功时 meta.source
-    标记实际来源（alphaspread/alphastreet），备源结果下次同步仍会重试主源。
+
+def _parse_index(html: str) -> dict[tuple[int, int], str]:
+    """索引页 → {(财年, 季度号): 相对 URL}；只收 'Earnings Call' 的 qN-YYYY 条目。"""
+    entries: dict[tuple[int, int], str] = {}
+    for href, q_num, year in _INDEX_ENTRY.findall(html):
+        key = (int(year), int(q_num))
+        if key not in entries:
+            entries[key] = href
+    return entries
+
+
+def _clean(fragment: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", fragment)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_mod.unescape(text)
+    text = re.sub(r"[ \t\u00a0]+", " ", text)
+    return text.strip()
+
+
+def _parse_transcript(html: str) -> list[dict[str, str]]:
+    """正文页 → [{author, text}]；按 turn 分块（div.border-t + div.text-lg.font-bold）。"""
+    start = html.find('id="transcript-panel-full"')
+    body = html[start:] if start != -1 else html
+    end = body.find('id="transcript-panel-')
+    if end > 0:
+        body = body[:end]
+
+    parts: list[dict[str, str]] = []
+    for chunk in re.split(r'<div class="border-t border-sharp pt-5', body)[1:]:
+        speaker = re.search(r'<div class="text-lg font-bold[^"]*">(.*?)</div>', chunk, re.S)
+        if not speaker:
+            continue
+        author = _clean(speaker.group(1))
+        rest = chunk[speaker.end():]
+        paragraphs = [_clean(p) for p in re.findall(r"<p[^>]*>(.*?)</p>", rest, re.S)]
+        text = "\n".join(p for p in paragraphs if p)
+        if text:
+            parts.append({"author": author, "text": text})
+    return parts
+
+
+def _download_body(code: str, url: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """下载单个财季正文；返回 (body|None, meta)。
+
+    meta.status：ok / missing（404）/ failed（其他 HTTP 或解析不出轮次）。
     """
-    url = _build_alpha_url(ticker, q_num, year)
-    status, html = _fetch_alpha(url)
+    try:
+        status, html = _fetch_html(url)
+    except Exception as exc:  # 网络异常：明确报错，不冒充未收录
+        return None, {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:200]}
     if status == 404:
-        comments = []  # 主源无收录 → 走备用源
-    elif status != 200:
-        return None, {"status": "temporary_failed", "http_status": status}
-    else:
-        comments = _parse_comments(html)
-    if comments:
-        return {"meta": {"source": "alphaspread", "url": url,
-                         "fetched_at": date.today().isoformat()},
-                "body": comments}, {"status": "ok", "source": "alphaspread"}
-
-    # Alpha Spread 无收录（404 或无 comment 块）→ 尝试 AlphaStreet 备用源
-    company_name = _company_name(code)
-    if not company_name:
         return None, {"status": "missing"}
-    alt_url = _build_alpha_street_url(company_name, ticker, q_num, year)
-    astatus, ahtml = _fetch_alpha(alt_url)
-    if astatus != 200:
-        return None, {"status": "missing"}
-    a_comments = _parse_alphastreet(ahtml)
-    if not a_comments:
-        return None, {"status": "missing"}
-    return {"meta": {"source": "alphastreet", "url": alt_url,
-                     "fetched_at": date.today().isoformat()},
-            "body": a_comments}, {"status": "ok", "source": "alphastreet"}
+    if status != 200:
+        return None, {"status": "failed", "http_status": status}
+    turns = _parse_transcript(html)
+    if not turns:
+        return None, {"status": "failed", "error": "正文页解析不出发言轮次（站点结构可能改版）"}
+    return {
+        "meta": {"source": "stockanalysis", "url": url, "fetched_at": date.today().isoformat()},
+        "body": turns,
+    }, {"status": "ok"}
 
 
 def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
                      only_recent: bool = True,
                      target_period: str | None = None) -> dict[str, Any]:
-    """维护电话会议索引：先同步公告列表，再机械推算报告期，差集下载正文。
+    """维护电话会议索引：拉 stockanalysis 索引页，差集下载正文。
 
-    每次调用都同步公告列表增量（复用 sync_edgar_archive，廉价）；
-    已保存财季不重试；404 财季保持未保存（下次再试）；
-    force_refresh 时重试全部 missing/temporary_failed 财季。
-    only_recent=True（默认）：只下载最近 RECENT_QUARTERS 个财季（首次同步防超时），
-    更早的财季保持未下载，query_transcripts(period=早期季) 时按需补下载。
-    target_period 指定（如 FY2020-Q1）：只下载该财季（按需补下载早期季，避免全量）。
-    8-K(2.02) 触发：最新财报 8-K 发布日 > 最新已确认报告期时，提前尝试下载
-    推算序列的下一财季（财报发布当天即可获取，不必等 10-Q/10-K 提交）；
-    触发版未收录（404）不落索引，下次同步自动重试。
+    - 索引页就是“有哪些财季电话会”的唯一依据（不再推算、不再猜 URL）；
+    - report_date/form 从本地 10-Q/10-K 反查（没有则留空）；
+    - 已缓存 ok 的财季不重下；missing/failed 每次同步重试；force_refresh 重试全部非 ok；
+    - only_recent=True（默认）只下载最近 RECENT_QUARTERS 季，更早的按需补（target_period）。
     """
-    # 1. 同步公告列表（保证最新）
     cik = _company_cik(code)
     if cik:
-        sync_edgar_archive(code, cik)
+        sync_edgar_archive(code, cik)  # 仅为 report_date 提供最新 10-Q/10-K
 
-    cached = load_transcripts(code)
-    items = cached.get("items") or []
+    status, html = _fetch_html(_index_url(ticker))
+    if status == 404:
+        # 站点没有该公司的电话会页面（如部分 20-F 发行人）：保留既有缓存，不报错
+        cached_items = load_transcripts(code)["items"]
+        return {"items": cached_items, "meta": {"source": "stockanalysis", "cache_complete": True},
+                "new": 0, "index_available": False}
+    if status != 200:
+        raise RuntimeError(f"stockanalysis 索引页请求失败：HTTP {status}")
+    entries = _parse_index(html)
+    if not entries:
+        raise RuntimeError("stockanalysis 索引页没有解析到任何电话会（站点结构可能改版）")
 
-    # 2. 读公告列表 → 推算报告期集合
-    reports = _report_items(code)
-    derived = _derive_quarters(reports)
-    derived_by_date = {q["report_date"]: q for q in derived}
-    reported_dates = {r["report_date"] for r in reports}
+    cached = {str(it.get("fiscal_quarter") or ""): it for it in load_transcripts(code)["items"]}
+    report_info = _report_dates(code)
 
-    # 3. 差集 = 推算集合 − 已保存集合
-    # 已保存 = 主源已收录（source=alphaspread 的 ok/missing 都算）或临时失败；
-    # 备源结果（source=alphastreet）不算已保存 —— 下次仍试主源，主源收录后覆盖
-    saved_by_date = {
-        str(it.get("report_date") or "")
-        for it in items
-        if it.get("source") != "alphastreet"
-    }
-    to_fetch = [
-        q for q in derived
-        if q["report_date"] not in saved_by_date
-        and q["report_date"] in reported_dates  # 财报已披露才请求
-    ]
-    # 8-K(2.02) 触发：最新财报 8-K 发布日 > 最新已确认报告期 → 下一财季提前待下载
-    k8_trigger = _k8_trigger_fetch(derived, items, code)
-    if k8_trigger:
-        to_fetch.append(k8_trigger)
-    # only_recent：只下载最近 RECENT_QUARTERS 个财季（按 report_date 倒序取前 N）
-    if only_recent and len(to_fetch) > RECENT_QUARTERS:
-        to_fetch = sorted(to_fetch, key=lambda q: q["report_date"], reverse=True)[:RECENT_QUARTERS]
-    # target_period：只下载指定财季（按需补下载早期季）
-    if target_period:
-        to_fetch = [q for q in to_fetch if q["fiscal_quarter"] == target_period]
-    if force_refresh:
-        for it in items:
-            if it.get("status") in ("missing", "temporary_failed"):
-                q = derived_by_date.get(str(it.get("report_date") or ""))
-                if q and q["report_date"] in reported_dates:
-                    to_fetch.append(q)
-
-    # 4. 下载差集
-    changed = 0
-    for q in to_fetch:
-        fiscal_quarter = q["fiscal_quarter"]
-        q_num = fiscal_quarter.split("-")[-1].lstrip("Q") or "4"
-        year = fiscal_quarter.split("-")[0][2:]
-        body, meta = _download_body(code, ticker, q_num, year)
-        record = {
-            "fiscal_quarter": fiscal_quarter,
-            "report_date": q["report_date"],
-            "form": q["form"],
-            "alpha_url": _build_alpha_url(ticker, q_num, year),
+    items: list[dict[str, Any]] = []
+    for (year, q_num), url in sorted(entries.items(), reverse=True):
+        label = f"FY{year}-Q{q_num}"
+        info = report_info.get(label) or {}
+        old = cached.get(label) or {}
+        item: dict[str, Any] = {
+            "fiscal_quarter": label,
+            "report_date": info.get("report_date") or str(old.get("report_date") or ""),
+            "form": info.get("form") or str(old.get("form") or ""),
+            "url": url if url.startswith("http") else f"https://stockanalysis.com{url}",
         }
-        if q.get("trigger_source"):
-            record["trigger_source"] = q["trigger_source"]
+        if (
+            not force_refresh
+            and old.get("status") == "ok"
+            and old.get("body_file")
+            and Path(str(old["body_file"])).exists()
+        ):
+            item["status"] = "ok"
+            item["body_file"] = old["body_file"]
+            item["source"] = old.get("source", "stockanalysis")
+            # 复用旧正文时保留其原始 URL（可能是已退役来源），便于追溯内容出处
+            item["url"] = str(old.get("url") or old.get("alpha_url") or item["url"])
+        items.append(item)
+
+    # only_recent：只看最近 RECENT_QUARTERS 季（含已缓存），更早的等 period 指定再补
+    scope = items[:RECENT_QUARTERS] if only_recent and not target_period else items
+    to_fetch = [it for it in scope if it.get("status") != "ok"]
+    if target_period:
+        to_fetch = [it for it in to_fetch if it["fiscal_quarter"] == target_period]
+
+    changed = 0
+    for item in to_fetch:
+        fiscal_quarter = str(item["fiscal_quarter"])
+        body, meta = _download_body(code, str(item["url"]))
         if body is None:
-            if q.get("trigger_source") == "8-K":
-                # 8-K 触发的财季尚未被上游收录（电话会议未开/未更）：不落索引，下次同步自动重试
-                continue
-            record["status"] = meta.get("status", "missing")
+            item["status"] = meta.get("status", "failed")
             if meta.get("http_status"):
-                record["http_status"] = meta["http_status"]
+                item["http_status"] = meta["http_status"]
+            if meta.get("error"):
+                item["error"] = meta["error"]
         else:
-            record["status"] = "ok"
-            record["source"] = meta.get("source", "alphaspread")
+            item["status"] = "ok"
+            item["source"] = body["meta"]["source"]
             body_path = _body_path(code, fiscal_quarter)
             temporary = body_path.with_suffix(".json.tmp")
-            temporary.write_text(
-                json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            temporary.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(body_path)
-            record["body_file"] = str(body_path)
-        # 同一财季只保留一条（8-K 触发版在 10-Q/10-K 提交后被正式版覆盖）
-        items = [it for it in items if str(it.get("fiscal_quarter") or "") != fiscal_quarter]
-        items.append(record)
+            item["body_file"] = str(body_path)
         changed += 1
         time.sleep(REQUEST_DELAY)
 
-    items.sort(key=lambda it: str(it.get("report_date") or ""), reverse=True)
-    save_transcripts(code, items, {"source": "alphaspread", "cache_complete": True})
+    save_transcripts(code, items, {"source": "stockanalysis", "cache_complete": True})
     return {
         "items": items,
-        "meta": {"source": "alphaspread", "cache_complete": True},
+        "meta": {"source": "stockanalysis", "cache_complete": True},
         "new": changed,
     }
 
@@ -544,7 +393,7 @@ def query_transcripts(
     period: str | None = None,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """查询电话会议索引；period 指定财季（如 FY2025-Q1）时返回该季正文。"""
+    """查询电话会议索引；period 指定财季（如 FY2026-Q3）时返回该季正文。"""
     code = normalize_stock_code(stock_code)
     _company_key, securities = resolve_company(code)
     us = [s for s in securities if s.get("market") == "US"]
@@ -557,19 +406,20 @@ def query_transcripts(
             "results": [],
         }
     ticker = us[0]["code"]
-    # 无 period：常规同步（仅最近 RECENT_QUARTERS 季）
-    result = sync_transcripts(code, ticker, force_refresh=force_refresh,
-                              only_recent=True)
+    result = sync_transcripts(code, ticker, force_refresh=force_refresh, only_recent=True)
     items = result["items"]
+    if result.get("index_available") is False and not items:
+        return {
+            "stock_code": code,
+            "applicable": True,
+            "total_transcripts": 0,
+            "matched": 0,
+            "results": [],
+            "note": "stockanalysis 没有该公司的电话会页面（ADR/外国私人发行人常见），暂无数据",
+        }
 
     if period:
         match = [it for it in items if str(it.get("fiscal_quarter") or "") == period]
-        # 目标财季未下载（早期季或首次同步范围外）：按需单独补下载该季
-        if not match or match[0].get("status") not in ("ok", "missing"):
-            result = sync_transcripts(code, ticker, force_refresh=force_refresh,
-                                      only_recent=False, target_period=period)
-            items = result["items"]
-            match = [it for it in items if str(it.get("fiscal_quarter") or "") == period]
         if not match:
             return {
                 "stock_code": code,
@@ -577,17 +427,30 @@ def query_transcripts(
                 "fiscal_quarter": period,
                 "matched": 0,
                 "results": [],
-                "note": f"未找到财季 {period} 的电话会议（可能上游无收录或未开电话会）",
+                "note": f"未找到财季 {period} 的电话会议（stockanalysis 索引里没有该季）",
             }
         record = match[0]
         if record.get("status") != "ok":
+            # 目标财季未缓存（早期季或首次同步范围外）：按需单独补下载该季
+            result = sync_transcripts(code, ticker, force_refresh=force_refresh,
+                                      only_recent=False, target_period=period)
+            items = result["items"]
+            match = [it for it in items if str(it.get("fiscal_quarter") or "") == period]
+            record = match[0] if match else record
+        if record.get("status") != "ok":
+            status = record.get("status")
+            if status == "missing":
+                note = f"该财季页面 404：上游未收录（尚未开或刚开完，等一两天）"
+            else:
+                detail = record.get("error") or f"HTTP {record.get('http_status')}"
+                note = f"获取失败：{detail}"
             return {
                 "stock_code": code,
                 "applicable": True,
                 "fiscal_quarter": period,
                 "matched": 0,
                 "results": [record],
-                "note": f"该财季电话会议状态为 {record.get('status')}（上游未收录）",
+                "note": note,
             }
         body = json.loads(Path(record["body_file"]).read_text(encoding="utf-8"))
         return {
@@ -596,7 +459,7 @@ def query_transcripts(
             "fiscal_quarter": period,
             "report_date": record.get("report_date"),
             "matched": 1,
-            "source": body.get("meta", {}).get("source", "alphaspread"),
+            "source": body.get("meta", {}).get("source", "stockanalysis"),
             "body": body["body"],
         }
 

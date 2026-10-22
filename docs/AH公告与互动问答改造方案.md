@@ -669,31 +669,38 @@ post_id去重后             1697
 
 首次建档翻完所有页面；后续从第一页开始增量抓取，遇到已有 `post_id` 后停止。
 
-### 8.5 Alpha Spread 电话会议（2026-08 实测）
+### 8.5 电话会议正文源（stockanalysis，2026-10-22 起）
 
-**URL 规则**（可预测，不依赖搜索）：
+**索引页**（“有哪些财季电话会”的唯一依据）：
 
 ```text
-https://www.alphaspread.com/security/nasdaq/{ticker}/investor-relations/earnings-call/q{num}-{year}
-例：/security/nasdaq/aapl/investor-relations/earnings-call/q3-2026
+https://stockanalysis.com/stocks/{ticker}/transcripts/
 ```
 
-- **market 段（nasdaq/nyse）不影响解析**：同一 ticker 两个段都返回 200，统一用 nasdaq 段即可。
-- **直连要求**：裸 UA（`Mozilla/5.0 (Windows NT 10.0; Win64; x64)`）200；**带完整浏览器指纹 header 反而 403**（Cloudflare 判定基于 header 指纹）。
-- **正文结构**：`<div class="comment">` 逐发言轮次（author + text），可结构化解析；实测 LULU Q2-2025 49 块 / 48.9K 字符、AAPL Q3-2026 54 块。页首无独立日期字段，报告期靠正文第一句开场白（如 "First Quarter 2025 Conference Call"）确认。
-- **覆盖**：实测到微型股（REFR ~$1亿）都有；未开电话会的公司（如 BRK.A）404 属正常。
-- **404 vs 限流**：404 = Alpha 明确无该季度（永久 missing，不重试）；429/5xx = 临时失败（下次重试）。实测连续探测 28 个 URL 无 429。
+- 页面直接列出全部电话会条目（`Earnings Call: Q2 2026` + 链接），条目标签就是公司财季（META `Q2 2026`、NVDA `Q2 2027`），与 `FY{year}-Q{q}` 一一对应；`qN-YYYY` 之外的条目（keynote、AGM 等）按正则排除。
+- 实测覆盖：META 58 季（2012Q2–2026Q3）、NVDA 64 季（2011Q1–2027Q2）、LITE 30 季、APH 54 季；当天开完的电话会当天就有稿。
+- 访问：纯 `requests` + 普通 Chrome UA 200，无 Cloudflare 挑战、无 cookie；连续请求未见 429（仍保留 1 秒串行限速）。
 
-**财季标签来源（决策：纯机械推算，锚定最近 10-K；标签用 Q4 不用 FY）**：
+**正文页**：`/stocks/{ticker}/transcripts/{id}-q{q}-{year}/`
 
-- 报告列表复用公告档案（`query_announcements` 的 10-Q/10-K items），纯机械推算财季标签 `FY{year}-{Q1/Q2/Q3/Q4}`：锚定最近一份 10-K（= 财年结束 = Q4），Q1→Q2→Q3→Q4→年份+1→Q1 固定循环，不解析 XBRL。
-- 标签用 Q4 不用 FY：FY 是 SEC XBRL 字段值（`DocumentFiscalPeriodFocus` 年报值="FY"）照搬，与 Q1-Q3 序列不统一；2026-08-14 统一改 Q4（Alpha URL 仍 `q4-{year}`，上游无感）。
-- 最新财报 8-K(2.02) 发布日 > 最新已确认报告期时，提前下载推算序列的下一财季（不必等 10-Q/10-K 提交）。
-- **实测 6/7 公司（AAPL/NVDA/COHR/LITE/TSLA/MSFT）Alpha URL 标签与申报财季一致；LULU 偏移一年**（申报 FY2026-Q1 的正文实际是 "First Quarter 2025"）。偏移与财年结构无关（NVDA 财年同样 1 月底结束但不偏移），是 Alpha Spread 数据源自身标签问题。
-- 不做候选集探测、不做偏移试探：URL 直接按申报财季构造，错位的正文靠正文第一句注明实际报告期，AI 结合正文判断（工具描述已有提示）。
-- 旧版建档缓存缺 `report_date` 字段时，从 EDGAR submissions 按 accession 补齐（上游原始字段，不推算）。
+- 结构：`#transcript-panel-full` 内每个发言轮次是 `div.border-t.border-sharp.pt-5`，内含 speaker（`div.text-lg.font-bold`）与若干 `<p>`（句子包在 `span.transcript-sentence`）；站点级解析，不做公司级适配。
+- 无独立日期字段；报告期不进正文，由工具从公告档案反查（见下）。
 
-**缓存**：全文缓存（每财季一篇 ~50K 字符）；首次同步最近 12 财季、每次调用增量、`force_refresh` 强制；增量只往后探测新报告期，已有财季不重试（8-K 触发版 404 不落索引、下次同步自动重试）。
+**财季标签与 report_date**：
+
+- 财季标签直接取索引页的 `q{q}-{year}`，不再由 10-Q/10-K 推算（`_derive_quarters` 只保留用于把标签映射到报告期）。
+- `report_date`/`form` 从本地公告档案的 10-Q/10-K 反查：有则附上，没有留空；刚开完会尚未提交 10-Q 时为空属正常（如 2026-10-21 的 META FY2026-Q3）。
+- 是否存在电话会完全由索引页决定，不再受「有没有 10-Q/10-K」影响；但站点是否收录该公司另说：实测 TSM、BABA、NIO（20-F/ADR）索引页 404，此时返回空索引 + note，不报错也不冒充有数据。
+
+**状态与缓存**：
+
+- `ok`=正文已缓存；`missing`=正文页 404（该季上游未收录）；`failed`=网络/HTTP/解析异常（带 `http_status` 或 `error`）。
+- 全文缓存（每财季一篇 ~40–60K 字符）；首次同步下载最近 12 财季，`period` 指定早期季时按需补下载；`force_refresh` 重试全部非 `ok` 财季。
+
+**已退役来源（2026-10-22）**：
+
+- Alpha Spread：原主源，正文是 `div.comment` 结构。2026-09 起 Cloudflare managed challenge，须 `alphaspread_cookies.json` 的 cf_clearance + 配套 UA，而 cf_clearance 绑定出口 IP，2026-09-10 之后长期 403；同时站点改版（`div.comment` → `article.earnings-call__turn`）使旧解析器取不到正文。已整体移除。
+- AlphaStreet（`news.alphastreet.com`）：原备用源（Alpha Spread 404 时补位，只覆盖最近约 8 季）。CloudFront 对整站（含 robots.txt）返回 403，换 UA/有头浏览器均无效（区域/IP 级封锁），不可用。
 
 ## 9. 当前代码入口与工作区状态
 

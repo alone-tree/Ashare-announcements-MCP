@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import pytest
@@ -9,38 +10,49 @@ import pytest
 from ashare_announcements_mcp import transcripts
 
 
+class _NoSleep:
+    def sleep(self, _seconds: float) -> None:  # pragma: no cover - 仅替换限速
+        pass
+
+
 def _report(form: str, report_date: str, accession: str) -> dict[str, Any]:
-    return {
-        "form": form,
-        "report_date": report_date,
-        "accession": accession,
-    }
+    return {"form": form, "report_date": report_date, "accession": accession}
 
 
-def _alpha_html(first_line: str = "First Quarter 2025 Conference Call") -> str:
-    def comment(author: str, text: str) -> str:
-        return (
-            '<div class="comment">'
-            '<div class="avatar-container"><div class="avatar">'
-            f'<div class="author">{author}'
-            '<div class="description">executive</div>'
-            "</div></div></div>"
-            '<div class="content"><div class="text">'
-            f"<p>{text}</p>"
-            "</div></div></div>"
-        )
+def _index_html(labels: list[tuple[int, int]]) -> str:
+    rows = "".join(
+        f'<a href="/stocks/aapl/transcripts/{900000 + year * 10 + q}-q{q}-{year}/">'
+        f"Earnings Call: Q{q} {year}</a>"
+        for year, q in labels
+    )
+    return f'<html><body><div class="transcript-list">{rows}</div></body></html>'
 
+
+def _turn(author: str, *paragraphs: str) -> str:
+    body = "".join(
+        f'<p class="text-default mt-2"><span class="transcript-sentence rounded">'
+        f"{p}</span></p>"
+        for p in paragraphs
+    )
     return (
-        comment("Operator", first_line)
-        + comment("Tim Cook", "We delivered record revenue.")
-        + comment("Analyst", "Question about guidance.")
-        + comment("Operator", "Thank you.")
+        '<div class="border-t border-sharp pt-5 first:border-t-0 first:pt-0">'
+        f'<div class="text-lg font-bold text-default md:text-xl">{author}</div>'
+        f"{body}</div>"
+    )
+
+
+def _transcript_html() -> str:
+    return (
+        '<html><body><div id="transcript-panel-full" role="region">'
+        '<div class="space-y-6">'
+        + _turn("Operator", "Good afternoon.", "My name is Krista.")
+        + _turn("Tim Cook", "We delivered record revenue of $100 billion.")
+        + _turn("Analyst", "Question about guidance.")
+        + '</div></div><div id="transcript-panel-preview"></div></body></html>'
     )
 
 
 def test_add_months() -> None:
-    from datetime import date
-
     assert transcripts._add_months(date(2026, 3, 31), -3) == date(2025, 12, 31)
     assert transcripts._add_months(date(2026, 3, 31), -6) == date(2025, 9, 30)
     assert transcripts._add_months(date(2026, 3, 31), -9) == date(2025, 6, 30)
@@ -71,521 +83,266 @@ def test_derive_quarters_anchors_on_latest_10k() -> None:
     assert by_date["2024-06-30"]["fiscal_quarter"] == "FY2024-Q4"
 
 
-def test_derive_quarters_respects_min_year() -> None:
-    """早期报告期（<2018 财年）不应被推算（Alpha 无数据）。"""
-    reports = [
-        _report("10-K", "2000-06-30", "O1"),
-        _report("10-K", "2024-06-30", "A1"),
-        _report("10-K", "2025-06-30", "A2"),
-    ]
-    quarters = transcripts._derive_quarters(reports)
-    # 财季标签 FY 年份 ≥ 2018（FY2018-Q1 报告期在 2017 自然年属正常）
-    years = {int(q["fiscal_quarter"][2:6]) for q in quarters}
-    assert all(y >= 2018 for y in years)
-    # 2000 年报告期被忽略
-    assert "2000-06-30" not in {q["report_date"] for q in quarters}
+def test_parse_index() -> None:
+    html = _index_html([(2026, 3), (2026, 2), (2025, 4)])
+    entries = transcripts._parse_index(html)
+    assert set(entries) == {(2026, 3), (2026, 2), (2025, 4)}
+    assert entries[(2026, 3)] == f"/stocks/aapl/transcripts/{900000 + 2026 * 10 + 3}-q3-2026/"
 
 
-def test_derive_quarters_handles_new_fiscal_q1_after_latest_10k() -> None:
-    """最新 10-K 之后还有新财年 Q1（如最新披露报告期晚于锚点）。"""
-    reports = [
-        _report("10-K", "2025-06-30", "A1"),
-        _report("10-Q", "2025-09-30", "A2"),
-    ]
-    quarters = transcripts._derive_quarters(reports)
-    by_date = {q["report_date"]: q for q in quarters}
-    assert by_date["2025-09-30"]["fiscal_quarter"] == "FY2026-Q1"
-
-
-def test_derive_quarters_no_10k_falls_back_to_latest() -> None:
-    """无 10-K（刚上市只有 10-Q）：以最新报告期为锚。"""
-    reports = [
-        _report("10-Q", "2026-03-31", "N1"),
-        _report("10-Q", "2026-06-30", "N2"),
-    ]
-    quarters = transcripts._derive_quarters(reports)
-    # 最新 2026-06-30 视为该财年 Q3（anchor 估算）
-    assert quarters  # 不崩溃，返回非空
-
-
-def test_parse_comments() -> None:
-    comments = transcripts._parse_comments(_alpha_html())
-    assert len(comments) == 4
-    assert comments[0]["author"] == "Operator"
-    assert "record revenue" in comments[1]["text"]
-
-
-def test_build_alpha_url() -> None:
-    url = transcripts._build_alpha_url("AAPL", "3", "2026")
-    assert url == (
-        "https://www.alphaspread.com/security/nasdaq/aapl/"
-        "investor-relations/earnings-call/q3-2026"
+def test_parse_index_ignores_non_earnings_entries() -> None:
+    html = (
+        '<a href="/stocks/aapl/transcripts/759230-meta-connect-2026-opening-keynote/">Keynote</a>'
+        + _index_html([(2026, 2)])
     )
+    entries = transcripts._parse_index(html)
+    assert set(entries) == {(2026, 2)}
 
 
-def test_sync_transcripts_fetches_derived_quarters(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    reports = [
-        _report("10-K", "2025-06-30", "A1"),
-        _report("10-Q", "2025-09-30", "A2"),
-        _report("10-Q", "2025-12-31", "A3"),
-        _report("10-Q", "2026-03-31", "A4"),
-        _report("10-K", "2026-06-30", "A5"),
-    ]
+def test_parse_transcript() -> None:
+    turns = transcripts._parse_transcript(_transcript_html())
+    assert [t["author"] for t in turns] == ["Operator", "Tim Cook", "Analyst"]
+    assert "record revenue" in turns[1]["text"]
+    assert "My name is Krista." in turns[0]["text"]
+    assert "transcript-panel-preview" not in turns[-1]["text"]
+
+
+def _fake_fetch(index_html: str, body_html: str, status: int = 200):
+    def fetch(url: str) -> tuple[int, str]:
+        if url.endswith("/transcripts/"):
+            return 200, index_html
+        return status, body_html
+
+    return fetch
+
+
+def _setup(monkeypatch: pytest.MonkeyPatch, tmp_path, reports: list[dict[str, Any]]) -> None:
     monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
     monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
     monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports, "meta": {}})
     monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
     monkeypatch.setattr(
-        transcripts,
-        "_fetch_alpha",
-        lambda url: (200, _alpha_html("Earnings Conference Call")),
+        transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL"
     )
-    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
-    monkeypatch.setattr(transcripts, "time", _FakeTime())
+    monkeypatch.setattr(transcripts, "time", _NoSleep())
+
+
+def test_sync_transcripts_downloads_and_maps_report_date(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    reports = [
+        _report("10-K", "2025-09-30", "A1"),
+        _report("10-Q", "2025-12-31", "A2"),
+        _report("10-Q", "2026-03-31", "A3"),
+    ]
+    _setup(monkeypatch, tmp_path, reports)
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_html",
+        _fake_fetch(_index_html([(2026, 2), (2026, 1), (2025, 4)]), _transcript_html()),
+    )
 
     result = transcripts.sync_transcripts("AAPL", "AAPL")
+    items = {it["fiscal_quarter"]: it for it in result["items"]}
 
-    assert result["new"] == 5
-    items = result["items"]
-    fiscal_quarters = {it["fiscal_quarter"] for it in items}
-    assert fiscal_quarters == {"FY2025-Q4", "FY2026-Q1", "FY2026-Q2", "FY2026-Q3", "FY2026-Q4"}
-    assert all(it["status"] == "ok" for it in items)
+    assert result["new"] == 3
+    assert set(items) == {"FY2026-Q2", "FY2026-Q1", "FY2025-Q4"}
+    assert all(it["status"] == "ok" for it in items.values())
+    assert items["FY2026-Q2"]["report_date"] == "2026-03-31"
+    assert items["FY2026-Q1"]["report_date"] == "2025-12-31"
+    assert items["FY2026-Q1"]["form"] == "10-Q"
+    assert items["FY2025-Q4"]["report_date"] == "2025-09-30"
+    assert items["FY2025-Q4"]["form"] == "10-K"
+    assert items["FY2026-Q2"]["url"].startswith("https://stockanalysis.com/stocks/aapl/")
+    body = __import__("json").loads(
+        __import__("pathlib").Path(items["FY2026-Q2"]["body_file"]).read_text(encoding="utf-8")
+    )
+    assert body["meta"]["source"] == "stockanalysis"
+    assert len(body["body"]) == 3
 
 
-class _FakeTime:
-    def sleep(self, _seconds: float) -> None:
-        return None
+def test_sync_transcripts_marks_missing_and_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _setup(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_html",
+        _fake_fetch(_index_html([(2026, 1)]), "<html>error</html>", status=404),
+    )
+    result = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert result["items"][0]["status"] == "missing"
+
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_html",
+        _fake_fetch(_index_html([(2026, 1)]), "<html>error</html>", status=503),
+    )
+    result = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert result["items"][0]["status"] == "failed"
+    assert result["items"][0]["http_status"] == 503
+
+
+def test_sync_transcripts_failed_when_parse_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _setup(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_html",
+        _fake_fetch(_index_html([(2026, 1)]), "<html>no turns</html>"),
+    )
+    result = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert result["items"][0]["status"] == "failed"
+    assert "解析不出" in result["items"][0]["error"]
+
+
+def test_sync_transcripts_only_recent_limit(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    labels = [(2026 - i // 4, 4 - i % 4) for i in range(20)]
+    _setup(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        transcripts, "_fetch_html", _fake_fetch(_index_html(labels), _transcript_html())
+    )
+    result = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=True)
+    assert result["new"] == transcripts.RECENT_QUARTERS
+    assert len(result["items"]) == 20
+
+
+def test_sync_transcripts_target_period(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    labels = [(2026, 2), (2026, 1), (2025, 4)]
+    _setup(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        transcripts, "_fetch_html", _fake_fetch(_index_html(labels), _transcript_html())
+    )
+    result = transcripts.sync_transcripts(
+        "AAPL", "AAPL", only_recent=True, target_period="FY2025-Q4"
+    )
+    assert result["new"] == 1
+    statuses = {it["fiscal_quarter"]: it.get("status") for it in result["items"]}
+    assert statuses["FY2025-Q4"] == "ok"
+    assert statuses["FY2026-Q2"] is None
+
+
+def test_sync_transcripts_keeps_cached_ok(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    labels = [(2026, 1)]
+    _setup(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        transcripts, "_fetch_html", _fake_fetch(_index_html(labels), _transcript_html())
+    )
+    first = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert first["new"] == 1
+
+    monkeypatch.setattr(
+        transcripts,
+        "load_transcripts",
+        lambda _code: {"items": first["items"], "meta": {}},
+    )
+    second = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert second["new"] == 0
+    assert second["items"][0]["status"] == "ok"
+
+    third = transcripts.sync_transcripts("AAPL", "AAPL", force_refresh=True)
+    assert third["new"] == 1
+
+
+def test_sync_transcripts_index_missing(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """站点没有该公司的电话会页面（404）：不抛异常，返回空索引。"""
+    _setup(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(transcripts, "_fetch_html", lambda _url: (404, "<html>not found</html>"))
+    result = transcripts.sync_transcripts("TSM", "TSM")
+    assert result["items"] == []
+    assert result["index_available"] is False
+    assert result["new"] == 0
+
+
+def test_query_transcripts_index_missing_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "TSM")
+    monkeypatch.setattr(
+        transcripts, "resolve_company", lambda code: ("TSM", [{"market": "US", "code": "TSM"}])
+    )
+    monkeypatch.setattr(
+        transcripts,
+        "sync_transcripts",
+        lambda _c, _t, **kw: {"items": [], "new": 0, "index_available": False},
+    )
+    result = transcripts.query_transcripts("TSM")
+    assert result["total_transcripts"] == 0
+    assert "没有该公司的电话会页面" in result["note"]
 
 
 def test_query_transcripts_not_applicable_for_hk(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         transcripts,
         "resolve_company",
-        lambda code: (
-            code,
-            [{"code": "00700", "market": "H", "name": "腾讯控股"}],
-        ),
+        lambda code: ("00700", [{"market": "H", "code": "00700"}]),
     )
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "00700")
     result = transcripts.query_transcripts("00700")
     assert result["applicable"] is False
+    assert result["results"] == []
 
 
-def test_query_transcripts_by_period(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_query_transcripts_by_period(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    import json
+
+    body_file = tmp_path / "FY2026-Q2.json"
+    body_file.write_text(
+        json.dumps({"meta": {"source": "stockanalysis"}, "body": [{"author": "CEO", "text": "hi"}]}),
+        encoding="utf-8",
+    )
     items = [
-        {
-            "fiscal_quarter": "FY2026-Q2",
-            "report_date": "2025-12-31",
-            "form": "10-Q",
-            "status": "ok",
-            "body_file": "BODY",
-        }
+        {"fiscal_quarter": "FY2026-Q2", "report_date": "2026-03-31", "status": "ok",
+         "body_file": str(body_file)},
     ]
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "AAPL")
     monkeypatch.setattr(
-        transcripts,
-        "resolve_company",
-        lambda code: (code, [{"code": "AAPL", "market": "US", "name": "Apple"}]),
+        transcripts, "resolve_company", lambda code: ("AAPL", [{"market": "US", "code": "AAPL"}])
     )
     monkeypatch.setattr(transcripts, "sync_transcripts", lambda _c, _t, **kw: {"items": items, "new": 0})
-    monkeypatch.setattr(
-        transcripts,
-        "Path",
-        lambda *a, **k: _FakePath(a[0] if a else "BODY"),
-    )
 
     result = transcripts.query_transcripts("AAPL", period="FY2026-Q2")
-
     assert result["matched"] == 1
-    assert result["fiscal_quarter"] == "FY2026-Q2"
-    assert "body" in result
+    assert result["body"][0]["author"] == "CEO"
 
 
-class _FakePath:
-    def __init__(self, *args: Any) -> None:
-        self._p = args[0] if args else ""
-
-    def read_text(self, encoding: str = "utf-8") -> str:
-        return (
-            '{"meta": {"source": "alphaspread"}, '
-            '"body": [{"author": "Operator", "text": "We delivered record revenue this quarter."}]}'
-        )
-
-
-def test_search_transcripts_finds_keyword(monkeypatch: pytest.MonkeyPatch) -> None:
-    items = [
-        {
-            "fiscal_quarter": "FY2026-Q2",
-            "report_date": "2025-12-31",
-            "status": "ok",
-            "body_file": "BODY",
-        }
-    ]
+def test_query_transcripts_period_missing_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "AAPL")
+    monkeypatch.setattr(
+        transcripts, "resolve_company", lambda code: ("AAPL", [{"market": "US", "code": "AAPL"}])
+    )
     monkeypatch.setattr(
         transcripts,
-        "resolve_company",
-        lambda code: (code, [{"code": "AAPL", "market": "US", "name": "Apple"}]),
+        "sync_transcripts",
+        lambda _c, _t, **kw: {"items": [{"fiscal_quarter": "FY2026-Q2", "status": "missing"}], "new": 0},
+    )
+    result = transcripts.query_transcripts("AAPL", period="FY2025-Q1")
+    assert result["matched"] == 0
+    assert "索引里没有" in result["note"]
+
+
+def test_search_transcripts_finds_keyword(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    import json
+
+    body_file = tmp_path / "FY2026-Q2.json"
+    body_file.write_text(
+        json.dumps(
+            {
+                "meta": {"source": "stockanalysis"},
+                "body": [
+                    {"author": "CEO", "text": "We delivered record revenue this quarter."},
+                    {"author": "CFO", "text": "Margins expanded."},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    items = [{"fiscal_quarter": "FY2026-Q2", "status": "ok", "body_file": str(body_file)}]
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "AAPL")
+    monkeypatch.setattr(
+        transcripts, "resolve_company", lambda code: ("AAPL", [{"market": "US", "code": "AAPL"}])
     )
     monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": items, "meta": {}})
-    monkeypatch.setattr(
-        transcripts,
-        "Path",
-        lambda *a, **k: _FakePath("x"),
-    )
+
     result = transcripts.search_transcripts("AAPL", "record revenue")
-
     assert result["matched"] == 1
-    assert result["results"][0]["fiscal_quarter"] == "FY2026-Q2"
-
-
-def test_sync_only_recent_limits_fetch(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """only_recent=True：财季数 > RECENT_QUARTERS 时只下载最近 12 个。"""
-    # 构造 20 个财季（5 年 × 4，2022-06-30 的 10-K 起）
-    reports = []
-    for year in range(2022, 2027):
-        reports.append(_report("10-K", f"{year}-06-30", f"K{year}"))
-        reports.append(_report("10-Q", f"{year}-09-30", f"Q{year}1"))
-        reports.append(_report("10-Q", f"{year}-12-31", f"Q{year}2"))
-        reports.append(_report("10-Q", f"{year+1}-03-31", f"Q{year}3"))
-    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
-    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
-    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports, "meta": {}})
-    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
-    monkeypatch.setattr(
-        transcripts,
-        "_fetch_alpha",
-        lambda url: (200, _alpha_html("Earnings Conference Call")),
-    )
-    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
-    monkeypatch.setattr(transcripts, "time", _FakeTime())
-
-    result = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=True)
-
-    assert result["new"] == transcripts.RECENT_QUARTERS
-    # 下载的是最近 12 个财季（report_date 最大的 12 个）
-    dates = sorted(it["report_date"] for it in result["items"])
-    assert len(dates) == transcripts.RECENT_QUARTERS
-    assert dates[-1] == "2027-03-31"  # 最新报告期在
-    assert "2022-06-30" not in dates  # 最早的被截断
-
-
-def test_sync_target_period_fetches_specific(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """target_period：只下载指定早期财季（按需补下载），不触发全量。"""
-    reports = [
-        _report("10-K", "2020-06-30", "K2020"),
-        _report("10-K", "2021-06-30", "K2021"),
-        _report("10-K", "2022-06-30", "K2022"),
-    ]
-    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
-    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
-    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports, "meta": {}})
-    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
-    monkeypatch.setattr(
-        transcripts,
-        "_fetch_alpha",
-        lambda url: (200, _alpha_html("Earnings Conference Call")),
-    )
-    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
-    monkeypatch.setattr(transcripts, "time", _FakeTime())
-
-    result = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=False,
-                                          target_period="FY2020-Q4")
-
-    assert result["new"] == 1
-    assert result["items"][0]["fiscal_quarter"] == "FY2020-Q4"
-    assert result["items"][0]["status"] == "ok"
-
-
-def test_query_transcripts_period_backfills_early(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """query_transcripts(period=早期季)：常规同步没下载时，按需补下载目标季。"""
-    recent_items = []  # 常规同步只返回空（未下载早期季）
-    backfilled = [
-        {
-            "fiscal_quarter": "FY2020-Q1",
-            "report_date": "2019-12-31",
-            "form": "10-Q",
-            "status": "ok",
-            "body_file": "BODY",
-        }
-    ]
-    calls = []
-
-    def fake_sync(_c, _t, **kw):
-        calls.append(kw)
-        if kw.get("target_period"):
-            return {"items": backfilled, "new": 1}
-        return {"items": recent_items, "new": 0}
-
-    monkeypatch.setattr(
-        transcripts,
-        "resolve_company",
-        lambda code: (code, [{"code": "AAPL", "market": "US", "name": "Apple"}]),
-    )
-    monkeypatch.setattr(transcripts, "sync_transcripts", fake_sync)
-    monkeypatch.setattr(
-        transcripts,
-        "Path",
-        lambda *a, **k: _FakePath("BODY"),
-    )
-
-    result = transcripts.query_transcripts("AAPL", period="FY2020-Q1")
-
-    assert result["matched"] == 1
-    assert result["fiscal_quarter"] == "FY2020-Q1"
-    # 第二次调用带 target_period（按需补下载）
-    assert calls[-1].get("target_period") == "FY2020-Q1"
-
-
-def test_company_slug() -> None:
-    """公司名 → AlphaStreet URL slug。"""
-    assert transcripts._company_slug("Lumentum Holdings Inc") == "lumentum-holdings-inc"
-    assert transcripts._company_slug("Apple Inc.") == "apple-inc"
-    assert transcripts._company_slug("  Coherent Corp (COHR) ") == "coherent-corp"
-    assert transcripts._company_slug("Alphabet Inc. (Class A)") == "alphabet-inc"
-
-
-def test_parse_alphastreet() -> None:
-    """AlphaStreet 正文：连续 <p> 段落，含 Q&A 前介绍，不区分 speaker。"""
-    html = """
-    <html><body>
-    <h1>Lumentum Holdings Inc (LITE) Q1 2026 Earnings Call Transcript</h1>
-    <p>Good day, everyone, and welcome to the Lumentum Holdings First Quarter Fiscal Year 2026 Earnings Call.</p>
-    <p>At this time I would like to turn the call over to Kathy Ta.</p>
-    <p>Thank you, and welcome to Lumentum's first quarter of fiscal year 2026.</p>
-    <p>Operator: We will now begin the question-and-answer session.</p>
-    <p>Hi, just making sure, can you hear me?</p>
-    <p>Yeah, we can hear you.</p>
-    <div>Disclaimer: The information provided is for informational purposes only.</div>
-    </body></html>
-    """
-    parts = transcripts._parse_alphastreet(html)
-    assert len(parts) == 6
-    assert all(p["author"] == "" for p in parts)  # 不区分 speaker
-    assert "Good day" in parts[0]["text"]  # 含 Q&A 前介绍
-    assert "question-and-answer" in parts[3]["text"]
-    assert "Disclaimer" not in "".join(p["text"] for p in parts)  # 不包含声明
-
-
-def test_download_body_falls_back_to_alphastreet(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Alpha Spread 无收录 → 尝试 AlphaStreet 备用源。"""
-    monkeypatch.setattr(transcripts, "_company_name", lambda code: "Lumentum Holdings Inc")
-    calls = []
-
-    def fake_fetch(url):
-        calls.append(url)
-        if "alphaspread.com" in url:
-            return 404, "<html>not found</html>"
-        return 200, """
-            <html><body>
-            <h1>Lumentum (LITE) Q4 2026 Earnings Call Transcript</h1>
-            <p>Good day, everyone, and welcome to the Lumentum Fourth Quarter Fiscal Year 2026 Earnings Call.</p>
-            <p>Revenue surged year-over-year.</p>
-            </body></html>
-        """
-
-    monkeypatch.setattr(transcripts, "_fetch_alpha", fake_fetch)
-    body, meta = transcripts._download_body("LITE", "LITE", "4", "2026")
-
-    assert body is not None
-    assert meta["source"] == "alphastreet"
-    assert "alphaspread.com" in calls[0]
-    assert "news.alphastreet.com" in calls[1]
-    assert len(calls) == 2
-
-
-def test_download_body_uses_alphaspread_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Alpha Spread 有收录 → 不用备用源。"""
-    calls = []
-
-    def fake_fetch(url):
-        calls.append(url)
-        return 200, _alpha_html("Fourth Quarter Fiscal Year 2026 Conference Call")
-
-    monkeypatch.setattr(transcripts, "_fetch_alpha", fake_fetch)
-    body, meta = transcripts._download_body("LITE", "LITE", "4", "2026")
-
-    assert meta["source"] == "alphaspread"
-    assert len(calls) == 1  # 只请求主源
-
-
-def test_sync_alphastreet_retried_next_time(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """备源结果（source=alphastreet）不算已保存：下次同步仍试主源，主源收录后覆盖。"""
-    reports = [
-        _report("10-K", "2025-06-30", "A1"),
-        _report("10-K", "2026-06-30", "A5"),
-    ]
-    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
-    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
-    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports, "meta": {}})
-    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
-    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
-    monkeypatch.setattr(transcripts, "time", _FakeTime())
-    monkeypatch.setattr(transcripts, "_company_name", lambda code: "Apple Inc")
-
-    # 第一次：主源 404，备源成功
-    def fake_fetch(url):
-        if "alphaspread.com" in url:
-            return 404, "<html>x</html>"
-        return 200, '<html><h1>Apple Q1 2026</h1><p>Good day everyone.</p></html>'
-
-    monkeypatch.setattr(transcripts, "_fetch_alpha", fake_fetch)
-    result = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=True)
-    street_items = [it for it in result["items"] if it.get("source") == "alphastreet"]
-    assert street_items, "备源应成功"
-
-    # 第二次：主源已收录（200 + comment），应覆盖备源
-    def fake_fetch_ok(url):
-        if "alphaspread.com" in url:
-            return 200, _alpha_html("Earnings Conference Call")
-        return 404, "<html>x</html>"
-
-    monkeypatch.setattr(transcripts, "_fetch_alpha", fake_fetch_ok)
-    result2 = transcripts.sync_transcripts("AAPL", "AAPL", only_recent=True)
-    spread_items = [it for it in result2["items"] if it.get("source") == "alphaspread"]
-    assert spread_items, "主源收录后应覆盖备源"
-    street_left = [it for it in result2["items"] if it.get("source") == "alphastreet"]
-    assert not street_left, "备源记录应被主源覆盖"
-
-
-def test_next_fiscal_quarter() -> None:
-    """财季标签后继：Q1→Q2→Q3→Q4→下一财年 Q1。"""
-    assert transcripts._next_fiscal_quarter("FY2026-Q1") == "FY2026-Q2"
-    assert transcripts._next_fiscal_quarter("FY2026-Q2") == "FY2026-Q3"
-    assert transcripts._next_fiscal_quarter("FY2026-Q3") == "FY2026-Q4"
-    assert transcripts._next_fiscal_quarter("FY2026-Q4") == "FY2027-Q1"
-
-
-def test_earnings_k8_items_filters_only_202(monkeypatch: pytest.MonkeyPatch) -> None:
-    """只筛出 items 含 2.02 的 8-K（5.02/12.02 等不算）。"""
-    items = [
-        {"form": "8-K", "items": "2.02,7.01,9.01", "display_time": "2026-08-12 00:00:00",
-         "accession": "E1", "report_date": "2026-08-12"},
-        {"form": "8-K", "items": "5.02", "display_time": "2026-04-28 00:00:00",
-         "accession": "E2", "report_date": "2026-04-27"},
-        {"form": "8-K", "items": "12.02", "display_time": "2026-03-02 00:00:00",
-         "accession": "E3", "report_date": "2026-03-02"},
-        {"form": "10-Q", "items": "", "display_time": "2026-05-06 00:00:00",
-         "accession": "E4", "report_date": "2026-03-31"},
-    ]
-    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": items, "meta": {}})
-    k8s = transcripts._earnings_k8_items("AAPL")
-    assert len(k8s) == 1
-    assert k8s[0]["filing_date"] == "2026-08-12"
-    assert k8s[0]["accession"] == "E1"
-
-
-def test_sync_transcripts_8k_triggers_next_quarter(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """最新财报 8-K(2.02) 发布日 > 最新已确认报告期 → 提前下载下一财季（不必等 10-K）。"""
-    reports = [
-        _report("10-K", "2025-06-30", "A1"),
-        _report("10-Q", "2025-09-30", "A2"),
-        _report("10-Q", "2025-12-31", "A3"),
-        _report("10-Q", "2026-03-31", "A4"),
-    ]
-    k8 = {"form": "8-K", "items": "2.02,7.01,9.01", "display_time": "2026-08-12 00:00:00",
-          "accession": "E1", "report_date": "2026-08-12"}
-    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
-    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
-    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports + [k8], "meta": {}})
-    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
-    monkeypatch.setattr(
-        transcripts,
-        "_fetch_alpha",
-        lambda url: (200, _alpha_html("Earnings Conference Call")),
-    )
-    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
-    monkeypatch.setattr(transcripts, "time", _FakeTime())
-
-    result = transcripts.sync_transcripts("AAPL", "AAPL")
-
-    # 4 个正式财季 + 1 个 8-K 触发的 FY2026-Q4
-    assert result["new"] == 5
-    quarters = {it["fiscal_quarter"]: it for it in result["items"]}
-    assert quarters["FY2026-Q4"]["trigger_source"] == "8-K"
-    assert quarters["FY2026-Q4"]["report_date"] == "2026-08-12"  # 发布日（10-K 提交后覆盖为财季末）
-    assert quarters["FY2026-Q3"]["report_date"] == "2026-03-31"  # 正式财季不受影响
-
-
-def test_sync_transcripts_8k_missing_not_saved(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """8-K 触发财季未被上游收录（404）→ 不落索引，其余正式财季 missing 照常落索引。"""
-    reports = [
-        _report("10-K", "2025-06-30", "A1"),
-        _report("10-Q", "2025-09-30", "A2"),
-        _report("10-Q", "2025-12-31", "A3"),
-        _report("10-Q", "2026-03-31", "A4"),
-    ]
-    k8 = {"form": "8-K", "items": "2.02,7.01,9.01", "display_time": "2026-08-12 00:00:00",
-          "accession": "E1", "report_date": "2026-08-12"}
-    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
-    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
-    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports + [k8], "meta": {}})
-    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
-    monkeypatch.setattr(transcripts, "_fetch_alpha", lambda url: (404, "<html>x</html>"))
-    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
-    monkeypatch.setattr(transcripts, "time", _FakeTime())
-
-    result = transcripts.sync_transcripts("AAPL", "AAPL")
-
-    assert result["new"] == 4  # 只有正式财季落索引（8-K 触发版不落）
-    assert all(it["status"] == "missing" for it in result["items"])
-    assert not any(it.get("trigger_source") for it in result["items"])
-    assert "FY2026-Q4" not in {it["fiscal_quarter"] for it in result["items"]}
-
-
-def test_sync_transcripts_8k_no_retrigger_after_ok(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """8-K 触发财季已下载成功 → 后续同步不重复触发。"""
-    reports = [
-        _report("10-K", "2025-06-30", "A1"),
-        _report("10-Q", "2025-09-30", "A2"),
-        _report("10-Q", "2025-12-31", "A3"),
-        _report("10-Q", "2026-03-31", "A4"),
-    ]
-    k8 = {"form": "8-K", "items": "2.02,7.01,9.01", "display_time": "2026-08-12 00:00:00",
-          "accession": "E1", "report_date": "2026-08-12"}
-    monkeypatch.setattr(transcripts, "_company_cik", lambda code: "0000789019")
-    monkeypatch.setattr(transcripts, "sync_edgar_archive", lambda code, cik: (None, None))
-    monkeypatch.setattr(transcripts, "load_cache", lambda _code: {"items": reports + [k8], "meta": {}})
-    monkeypatch.setattr(transcripts, "_fetch_alpha",
-                        lambda url: (200, _alpha_html("Earnings Conference Call")))
-    monkeypatch.setattr(transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL")
-    monkeypatch.setattr(transcripts, "time", _FakeTime())
-
-    # 第一次：8-K 触发下载成功
-    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": [], "meta": {}})
-    first = transcripts.sync_transcripts("AAPL", "AAPL")
-    assert first["new"] == 5
-
-    # 第二次：已保存的财季与已成功的触发版都不再下载
-    monkeypatch.setattr(transcripts, "load_transcripts", lambda _code: {"items": first["items"], "meta": {}})
-    second = transcripts.sync_transcripts("AAPL", "AAPL")
-    assert second["new"] == 0
-    assert len(second["items"]) == 5
-
-
-def test_cloudflare_headers_with_cookie_file(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """cookie 文件存在 → 请求头带 cf_clearance + 文件内配套 UA。"""
-    (tmp_path / "alphaspread_cookies.json").write_text(
-        '{"user_agent": "TestUA/1.0", "cookie_value": "clearance-token"}', encoding="utf-8"
-    )
-    monkeypatch.setattr(transcripts, "app_root", lambda: tmp_path)
-
-    headers = transcripts._cloudflare_headers()
-
-    assert headers == {"User-Agent": "TestUA/1.0", "Cookie": "cf_clearance=clearance-token"}
-
-
-def test_cloudflare_headers_fallback_without_file(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """cookie 文件缺失 → 回退裸 UA（旧行为，不抛异常）。"""
-    monkeypatch.setattr(transcripts, "app_root", lambda: tmp_path)
-
-    headers = transcripts._cloudflare_headers()
-
-    assert headers == {"User-Agent": transcripts.ALPHA_UA}
-
-
-def test_cloudflare_headers_fallback_on_broken_json(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """cookie 文件损坏/字段缺失 → 回退裸 UA。"""
-    (tmp_path / "alphaspread_cookies.json").write_text("{not-json", encoding="utf-8")
-    monkeypatch.setattr(transcripts, "app_root", lambda: tmp_path)
-
-    headers = transcripts._cloudflare_headers()
-
-    assert headers == {"User-Agent": transcripts.ALPHA_UA}
+    assert result["results"][0]["segments"][0]["author"] == "CEO"

@@ -58,11 +58,11 @@ query_transcripts(
 ```
 
 - 美股电话会议（earnings call transcript）通道，仅美股适用；其他市场返回 `applicable=false`。
-- 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`），首次同步最近 12 财季、之后每次调用增量同步新财季、`force_refresh` 强制刷新。
-- 传 `period`（如 `FY2025-Q1`）：返回该财季完整正文（逐发言轮次：`author` + `text`）。
-- 索引以 10-Q/10-K 报告期为锚、纯机械推算财季标签（`FY{year}-{Q1/Q2/Q3/Q4}`，锚定最近一份 10-K，不解析 XBRL）；最新财报 8-K(2.02) 发布后提前下载下一财季，不必等 10-Q/10-K 提交。
-- 正文来源 Alpha Spread（Cloudflare 反爬，请求须带工具根目录 `alphaspread_cookies.json` 的 cf_clearance + 配套 UA，`_cloudflare_headers` 实现，文件缺失回退裸 UA；cookie 绑定出口 IP+UA，失效后有头浏览器过挑战重取）；404 标记 `missing`，429/5xx/403 标记 `temporary_failed` 下次重试。
-- 上游季度标签偶尔与申报财季错位（实测 LULU 偏移一年），正文第一句会注明实际报告期，由 AI 结合正文判断，不做代码级容错。
+- 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`），每次调用同步一次索引页，首次下载最近 12 财季，`force_refresh` 重试失败季。
+- 传 `period`（如 `FY2026-Q3`）：返回该财季完整正文（逐发言轮次：`author` + `text`）；索引里有但没缓存过的季会按需单独补下载。
+- 正文来源 stockanalysis.com：`/stocks/{ticker}/transcripts/` 索引页列出全部财季电话会（标签即公司财季），正文页按发言轮次结构化解析；纯 `requests`，不依赖 cookie 或浏览器。
+- `report_date`/`form` 只从本地公告档案的 10-Q/10-K 反查，有则附上、没有留空（刚开完会尚未提交 10-Q 时为空，属正常）；是否有电话会完全由索引页决定，不再依赖 10-Q/10-K；站点没有该公司页面时（实测 TSM/BABA/NIO 为 404）返回空索引 + `note`。
+- 状态语义：`ok`=正文已缓存；`missing`=页面 404（该季上游未收录）；`failed`=网络/HTTP/解析异常（带 `http_status` 或 `error`），不冒充「未收录」。
 
 ### `search_transcripts`
 
@@ -119,7 +119,7 @@ cache/{股票代码}/
 ```
 
 提取缓存记录 PDF 文件大小和修改时间。源文件变化或索引版本升级时自动重建。
-电话会议：正文全文缓存（每财季一篇，~50K 字符）；首次同步最近 12 财季、每次调用增量、`force_refresh` 强制；报告期由公告列表（EDGAR submissions）纯机械推算，不解析 XBRL。
+电话会议：正文全文缓存（每财季一篇，~40-60K 字符）；首次同步最近 12 财季、每次调用同步索引页、`force_refresh` 重试失败季；`report_date` 由公告档案（EDGAR 10-Q/10-K）反查，不解析 XBRL。
 
 ## 依赖
 

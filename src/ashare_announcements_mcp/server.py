@@ -179,12 +179,12 @@ def query_transcripts(
 ) -> dict[str, Any]:
     """查询美股电话会议（earnings call transcript）索引与正文（仅美股适用）。
 
-    不传 period：返回全部财季索引（fiscal_quarter/report_date/status），30 天自动增量同步新财季，force_refresh 强制刷新。
-    传 period（如 FY2025-Q1）：返回该财季完整正文（逐发言轮次：作者+内容）。
-    索引以公司申报的 10-Q/10-K 报告期为锚，最新财报 8-K(2.02) 发布后提前尝试下载
-    下一财季（不必等 10-Q/10-K 提交）；报告列表与 HTML 复用公告档案，不重复下载。
-    注：上游数据源（Alpha Spread）的季度标签偶尔与公司申报财季错位（如部分公司偏移一年），
-    正文第一句会注明实际报告期（如 "First Quarter 2025"），请以正文为准。
+    正文来源 stockanalysis.com：索引页列出全部财季电话会，每次调用同步一次；
+    不传 period：返回全部财季索引（fiscal_quarter/report_date/form/status），
+    首次同步下载最近 12 财季，force_refresh 重试失败季；
+    传 period（如 FY2026-Q3）：返回该财季完整正文（逐发言轮次：作者+内容）。
+    report_date 从公司申报的 10-Q/10-K 反查，刚开完会尚未提交 10-Q 时为空，属正常。
+    状态：ok=已缓存；missing=该季上游未收录（404）；failed=网络/HTTP 异常（带原因）。
     """
     try:
         return {"ok": True, **query_transcripts_service(stock_code, period, force_refresh)}
