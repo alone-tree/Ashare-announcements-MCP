@@ -39,8 +39,10 @@ RECENT_QUARTERS = 12
 REQUEST_DELAY = 1.0  # 串行限速（秒）
 
 _INDEX_ENTRY = re.compile(
-    r'href="(?:https://stockanalysis\.com)?(/stocks/[^"]+/transcripts/\d+-q(\d)-(\d{4})/)"'
+    r'href="((?:https://stockanalysis\.com)?/(?:stocks|quote)/[^"]+/transcripts/\d+-q(\d)-(\d{4})/)"'
 )
+# 美股代码页的 transcripts 链接目标（ADR 常指向主上市代码，如 TSM → TPE-2330）
+_LINK_SYMBOL = re.compile(r'transcriptsLinkSymbol:"([A-Za-z0-9.\-]+)"')
 
 
 def _transcripts_path(code: str) -> Path:
@@ -229,13 +231,43 @@ def _report_dates(code: str) -> dict[str, dict[str, str]]:
 
 
 def _fetch_html(url: str) -> tuple[int, str]:
-    """GET 目标页面，返回 (status_code, text)；网络异常向上抛。"""
-    resp = requests.get(url, headers={"User-Agent": SA_UA}, timeout=40)
-    return resp.status_code, resp.text
+    """GET 目标页面，返回 (status_code, text)。
+
+    代理链路偶发断连（RemoteDisconnected/ProxyError），重试两次；仍失败则上抛，
+    由调用方标记 failed，不冒充「未收录」。
+    """
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers={"User-Agent": SA_UA}, timeout=40)
+            return resp.status_code, resp.text
+        except Exception as exc:  # noqa: BLE001 - 网络异常统一重试
+            last_error = exc
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"请求失败（已重试 3 次）：{type(last_error).__name__}: {last_error}")
 
 
 def _index_url(ticker: str) -> str:
     return SA_BASE.format(ticker=ticker.lower())
+
+
+def _cross_listing_index_url(ticker: str) -> str | None:
+    """美股代码页没有 transcripts 时的兜底：读个股页的 transcriptsLinkSymbol。
+
+    ADR/外国发行人的电话会常挂在主上市代码下（TSM → TPE-2330、BABA → HKG-9988，
+    ASML → AMS-ASML…）；个股页内嵌 transcriptsLinkSymbol，属于站点级规则，
+    不写公司特例表。符号形如 "TPE-2330" 走 /quote/{exch}/{code}/transcripts/；
+    纯代码（如 META）说明本来就没有其他挂载点，返回 None。
+    """
+    status, html = _fetch_html(f"https://stockanalysis.com/stocks/{ticker.lower()}/")
+    if status != 200:
+        return None
+    match = _LINK_SYMBOL.search(html)
+    if not match or "-" not in match.group(1):
+        return None
+    exchange, code = match.group(1).split("-", 1)
+    return f"https://stockanalysis.com/quote/{exchange.lower()}/{code}/transcripts/"
 
 
 def _parse_index(html: str) -> dict[tuple[int, int], str]:
@@ -314,9 +346,16 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
     if cik:
         sync_edgar_archive(code, cik)  # 仅为 report_date 提供最新 10-Q/10-K
 
-    status, html = _fetch_html(_index_url(ticker))
+    index_url = _index_url(ticker)
+    status, html = _fetch_html(index_url)
     if status == 404:
-        # 站点没有该公司的电话会页面（如部分 20-F 发行人）：保留既有缓存，不报错
+        # 美股代码页无电话会（ADR/外国发行人常见）→ 走主上市代码
+        cross_url = _cross_listing_index_url(ticker)
+        if cross_url:
+            status, html = _fetch_html(cross_url)
+            index_url = cross_url
+    if status == 404:
+        # 站点确实没有该公司的电话会页面：保留既有缓存，不报错
         cached_items = load_transcripts(code)["items"]
         return {"items": cached_items, "meta": {"source": "stockanalysis", "cache_complete": True},
                 "new": 0, "index_available": False}
@@ -380,10 +419,11 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
         changed += 1
         time.sleep(REQUEST_DELAY)
 
-    save_transcripts(code, items, {"source": "stockanalysis", "cache_complete": True})
+    save_transcripts(code, items, {"source": "stockanalysis", "cache_complete": True,
+                                   "index_url": index_url})
     return {
         "items": items,
-        "meta": {"source": "stockanalysis", "cache_complete": True},
+        "meta": {"source": "stockanalysis", "cache_complete": True, "index_url": index_url},
         "new": changed,
     }
 

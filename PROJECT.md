@@ -61,7 +61,8 @@ query_transcripts(
 - 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`），每次调用同步一次索引页，首次下载最近 12 财季，`force_refresh` 重试失败季。
 - 传 `period`（如 `FY2026-Q3`）：返回该财季完整正文（逐发言轮次：`author` + `text`）；索引里有但没缓存过的季会按需单独补下载。
 - 正文来源 stockanalysis.com：`/stocks/{ticker}/transcripts/` 索引页列出全部财季电话会（标签即公司财季），正文页按发言轮次结构化解析；纯 `requests`，不依赖 cookie 或浏览器。
-- `report_date`/`form` 只从本地公告档案的 10-Q/10-K 反查，有则附上、没有留空（刚开完会尚未提交 10-Q 时为空，属正常）；是否有电话会完全由索引页决定，不再依赖 10-Q/10-K；站点没有该公司页面时（实测 TSM/BABA/NIO 为 404）返回空索引 + `note`。
+- `report_date`/`form` 只从本地公告档案的 10-Q/10-K 反查，有则附上、没有留空（刚开完会尚未提交 10-Q 时为空，属正常）；是否有电话会完全由索引页决定，不再依赖 10-Q/10-K。
+- ADR/外国发行人走主上市代码兜底：美股代码页 404 时读个股页 `transcriptsLinkSymbol`（TSM → `TPE-2330`、BABA → `HKG-9988`），改走 `/quote/{exchange}/{code}/transcripts/`；两者都没有才返回空索引 + `note`。
 - 状态语义：`ok`=正文已缓存；`missing`=页面 404（该季上游未收录）；`failed`=网络/HTTP/解析异常（带 `http_status` 或 `error`），不冒充「未收录」。
 
 ### `search_transcripts`

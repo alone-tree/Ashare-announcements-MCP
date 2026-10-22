@@ -245,6 +245,65 @@ def test_sync_transcripts_keeps_cached_ok(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert third["new"] == 1
 
 
+def test_cross_listing_index_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR 美股页无电话会时，读个股页 transcriptsLinkSymbol 指向主上市代码。"""
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_html",
+        lambda _url: (200, '<script>transcriptsLinkSymbol:"TPE-2330"</script>'),
+    )
+    assert transcripts._cross_listing_index_url("TSM") == (
+        "https://stockanalysis.com/quote/tpe/2330/transcripts/"
+    )
+
+    monkeypatch.setattr(
+        transcripts, "_fetch_html", lambda _url: (200, 'transcriptsLinkSymbol:"META"')
+    )
+    assert transcripts._cross_listing_index_url("META") is None
+
+
+def test_sync_transcripts_uses_cross_listing(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """US 代码页 404 → 落到 /quote/{exch}/{code}/transcripts/ 并正常下载。"""
+    _setup(monkeypatch, tmp_path, [])
+    calls: list[str] = []
+
+    def fetch(url: str) -> tuple[int, str]:
+        calls.append(url)
+        if url.endswith("/stocks/aapl/transcripts/"):
+            return 404, "not found"
+        if url.endswith("/stocks/aapl/"):
+            return 200, 'transcriptsLinkSymbol:"TPE-2330"'
+        if url.endswith("/quote/tpe/2330/transcripts/"):
+            return 200, _index_html([(2026, 3)])
+        return 200, _transcript_html()
+
+    monkeypatch.setattr(transcripts, "_fetch_html", fetch)
+    result = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert result["items"][0]["status"] == "ok"
+    assert result["items"][0]["url"].endswith("-q3-2026/")
+    assert any("/quote/tpe/2330/" in c for c in calls)
+
+
+def test_fetch_html_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """代理偶发断连：重试后成功。"""
+    attempts = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+        text = "ok"
+
+    def fake_get(url, headers=None, timeout=None):
+        attempts["n"] += 1
+        if attempts["n"] < 2:
+            raise transcripts.requests.exceptions.ConnectionError("boom")
+        return _Resp()
+
+    monkeypatch.setattr(transcripts.requests, "get", fake_get)
+    monkeypatch.setattr(transcripts, "time", _NoSleep())
+    assert transcripts._fetch_html("https://stockanalysis.com/x") == (200, "ok")
+    assert attempts["n"] == 2
+
+
 def test_sync_transcripts_index_missing(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """站点没有该公司的电话会页面（404）：不抛异常，返回空索引。"""
     _setup(monkeypatch, tmp_path, [])

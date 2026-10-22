@@ -690,7 +690,9 @@ https://stockanalysis.com/stocks/{ticker}/transcripts/
 
 - 财季标签直接取索引页的 `q{q}-{year}`，不再由 10-Q/10-K 推算（`_derive_quarters` 只保留用于把标签映射到报告期）。
 - `report_date`/`form` 从本地公告档案的 10-Q/10-K 反查：有则附上，没有留空；刚开完会尚未提交 10-Q 时为空属正常（如 2026-10-21 的 META FY2026-Q3）。
-- 是否存在电话会完全由索引页决定，不再受「有没有 10-Q/10-K」影响；但站点是否收录该公司另说：实测 TSM、BABA、NIO（20-F/ADR）索引页 404，此时返回空索引 + note，不报错也不冒充有数据。
+- 是否存在电话会完全由索引页决定，不再受「有没有 10-Q/10-K」影响。
+- ADR/外国发行人的电话会常挂在主上市代码下：美股代码页 404 时读个股页 `transcriptsLinkSymbol`（如 TSM → `TPE-2330`、BABA → `HKG-9988`），改走 `/quote/{exchange}/{code}/transcripts/`——站点级规则，不写公司特例表。实测 TSM 62 季、BABA 48 季、NIO 32 季、ASML 41 季。
+- 只有个股页也没有 `transcriptsLinkSymbol`、或主上市代码页同样 404 时，才返回空索引 + note（不报错、不冒充有数据）。
 
 **状态与缓存**：
 
