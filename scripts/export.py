@@ -67,6 +67,8 @@ market-data 建议显式设置环境变量 `MARKET_DATA_ROOT` 为本目录绝对
 ```bat
 echo {"tool": "query_batch", "stock_codes": ["600519"]} | python ashare_announcements_mcp\\cli.py
 echo {"tool": "get_quote_batch", "codes": ["600519.SH"], "vars": ["close"]} | python market_data_mcp\\cli.py
+echo {"tool": "get_financial_data_batch", "codes": ["600519.SH"], "amount_basis": "single", "items": ["营业收入", "毛利率"]} | python market_data_mcp\\cli.py
+echo {"tool": "get_market_data_help", "arguments": {"topic": "tools"}} | python market_data_mcp\\cli.py
 echo {"tool": "get_quote_chart_batch", "codes": ["600519.SH"]} | python market_data_mcp\\cli.py
 ```
 
@@ -87,8 +89,8 @@ market-data 的 iFinD 通道（美股后复权/成交额/股本）需要 iFinDPy
 本目录的 `config.example.yaml` 是配置模板：复制为 `config.yaml` 后填入你拥有的凭据，
 放进去就能用（没有的数据源留空自动跳过）。支持：
 
-- `ifind.accounts`：同花顺 iFinD 账号列表（多账号按顺序尝试登录，第一个成功即用；
-  美股后复权/成交额/股本需要它）
+- `ifind.accounts`：同花顺 iFinD 账号列表，登录或取数失败时有限重试并换号；
+  股本、美股后复权/成交额、营收结构及A股公司信息需要。
 - `eodhd.api_key`：EODHD API key（可选）
 
 `config.yaml` 含真实凭据，不会随 export 覆盖（export 只更新模板）。
@@ -96,7 +98,9 @@ market-data 的 iFinD 通道（美股后复权/成交额/股本）需要 iFinDPy
 ## 缓存与导出位置
 
 - 公告缓存：`cache/{股票代码}/`
-- market-data 缓存：`cache/{代码}/`（quote_daily_raw / quote_daily_hfq / quote_daily_amount / shares）
+- 行情缓存：`cache/{代码}/{字段}.json`
+- 财报缓存：`cache/{代码}/financial_data/`，旧financial_statements缓存保留但不混入新通道
+- A股公司信息缓存：`cache/{代码}/company_data/`；港美保留既有能力
 - 超长行情自动导出：`cache/_auto_export/`
 - chart 绘图输出：`cache/_charts/`（每次调用重新绘图，PNG 文件名含代码/复权/周期/字段/日期区间）
 - 审计日志：`logs/requests.jsonl`（market-data 每次上游请求）
