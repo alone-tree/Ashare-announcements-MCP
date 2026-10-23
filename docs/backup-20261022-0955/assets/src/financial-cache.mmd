@@ -1,0 +1,10 @@
+flowchart TD
+    A["cache/{代码}/financial_statements/"] --> B["metadata.json<br/>公司级元信息 · 报告期清单"]
+    A --> C["balance.json"]
+    A --> D["income.json"]
+    A --> E["cash_flow.json"]
+    A --> F["meta.json<br/>审计单位 · 审计/内控意见 · 披露日"]
+    C --> R["reports[] 按报告期"]
+    R --> V["versions[] 版本链"]
+    V --> I["items[] 全部科目<br/>含 null，真实 0 保留"]
+    V --> J["change_summary<br/>新增/删除/变化科目"]
