@@ -225,7 +225,7 @@ def _ensure_section(
             "source": result["source"], "data": data, "notes": notes}
 
 
-def get_company_profile(
+def _legacy_get_company_profile(
     root: str,
     code: str,
     sections: list[str] | None = None,
@@ -285,3 +285,44 @@ def get_company_profile(
         response["failed_sections"] = failed
         response["error"] = f"section 获取失败：{','.join(failed)}"
     return response
+
+
+def get_company_profile(root: str, code: str, sections: list[str] | None = None,
+                        force_refresh: bool = False, periods: list[str] | None = None,
+                        years: list[int] | None = None, as_of_date: str | None = None) -> dict:
+    from datetime import date
+    from market_data_mcp import company_ifind_service
+    try:
+        mc = parse_code(code)
+        selected = list(VALID_SECTIONS) if sections is None else sections
+        if not isinstance(selected, list) or not selected:
+            raise ValueError(f"sections必须是{list(VALID_SECTIONS)}的非空子集")
+        if any(s not in VALID_SECTIONS for s in selected):
+            raise ValueError(f"未知 section，支持{list(VALID_SECTIONS)}")
+        if periods is not None:
+            if not isinstance(periods, list) or not periods:
+                raise ValueError("periods须为非空报告截止日数组")
+            for period in periods:
+                if date.fromisoformat(period).isoformat() != period or period > date.today().isoformat():
+                    raise ValueError("无效报告截止日")
+        if years is not None and (not isinstance(years, list) or not years or any(type(y) is not int or not 1 <= y <= 9999 for y in years)):
+            raise ValueError("years必须是非空年份整数数组")
+        if as_of_date is not None and (date.fromisoformat(as_of_date).isoformat() != as_of_date or as_of_date > date.today().isoformat()):
+            raise ValueError("as_of_date必须是有效且不晚于今天的YYYY-MM-DD")
+    except (ValueError, TypeError) as exc:
+        return {"ok": False, "error": str(exc)}
+    if mc.market not in ("A", "BJ"):
+        result = _legacy_get_company_profile(root, code, sections, force_refresh)
+        result.setdefault("notes", []).append("该市场iFinD公司信息未验证，保留现有通道")
+        return result
+    results = {}
+    for section in dict.fromkeys(selected):
+        try:
+            results[section] = company_ifind_service.get_section(root, mc, section, periods, years, as_of_date, force_refresh)
+        except Exception as exc:
+            results[section] = {"ok": False, "error": str(exc)}
+    successes = sum(bool(r.get("ok")) for r in results.values())
+    failed = [s for s, r in results.items() if not r.get("ok") or r.get("failed")]
+    return {"ok": successes > 0, "code": f"{mc.code}.{mc.suffix}", "market": mc.market,
+            "status": "partial_success" if successes and failed else "success" if successes else "failed",
+            "sections": results, "failed_sections": failed}

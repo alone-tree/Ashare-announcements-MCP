@@ -155,31 +155,19 @@ def _fetch(
 
     records = _rows_to_records(df)
     fresh = _filter_range(records, start, end)
-    if adjust == "hfq":
-        # hfq 缓存只存 close_hfq 一列（派生层按因子还原 OHL）
-        hfq_items = [{"date": r["date"], "value": r.get("close"), "source": SOURCE} for r in fresh]
-        existing = cache.read_cache(root, code, "close_hfq")
-        merged = cache.merge_items(existing["items"] if existing else None, hfq_items)
-        date_range = None
-        if merged:
-            date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
-        cache.write_cache(root, code, "close_hfq",
-                          meta={"code": code, "market": mc.market, "field": "close_hfq",
-                                "source": SOURCE, "date_range": date_range},
-                          items=merged)
-        fields = {"close_hfq": date_range}
-    else:
-        # raw：按字段宽写。outstanding_share → floating_shares（A 股流通股本口径）
-        field_map = {f: f for f in raw_fields}
-        if "floating_shares" in raw_fields:
-            field_map["floating_shares"] = "outstanding_share"
-        fields = _write_fields(root, code, mc.market, fresh, field_map)
+    field_map = {"close_hfq": "close"} if adjust == "hfq" else {f: f for f in raw_fields}
+    if "floating_shares" in field_map:
+        field_map["floating_shares"] = "outstanding_share"
+    data = {field: [{"date": r["date"], "value": r.get(column), "source": SOURCE} for r in fresh]
+            for field, column in field_map.items()}
+    fields = {field: {"start": min(r["date"] for r in records), "end": max(r["date"] for r in records)} if records else None
+              for field, records in data.items()}
 
     elapsed = time.time() - t0
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api=api_name,
                       fields=",".join(df.columns), adjust=adjust, start=start, end=end,
                       ok=True, elapsed=elapsed)
-    return {"ok": True, "source": SOURCE, "fields": fields, "error": None, "notes": None}
+    return {"ok": True, "source": SOURCE, "fields": fields, "data": data, "error": None, "notes": None}
 
 
 def fetch_raw(

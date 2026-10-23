@@ -3,8 +3,8 @@
 
 工具：
 - get_quote: 日/周/月线行情（raw/hfq/qfq + 量额/股本/市值，超长自动导出）
-- get_financial_statements: 三市场财务报表（累计/单期、版本、惰性拉取、超长自动导出；A/北交所含报表信息 meta 表）
-- get_data_catalog: 纯本地查询公司财报缓存支持的科目
+- get_financial_data: 财报、营收结构及本地计算指标
+- get_market_data_help: 纯本地能力及缓存帮助
 - get_company_profile: 公司概况/IPO/分红/盈利预测/股东
 - get_quote_chart: 行情绘图（K线/折线 PNG，事件标注/高低点；引擎 chart_service.py，
   原 market-data-chart MCP，2026-10-19 并入）
@@ -38,8 +38,8 @@ except Exception:  # 兼容 mcp 版本差异
     pass
 
 from market_data_mcp import chart_service, company_service
-from market_data_mcp.service import get_data_catalog as get_data_catalog_service
-from market_data_mcp.service import get_financial_statements as get_financial_statements_service
+from market_data_mcp.financial_service import get_financial_data as get_financial_data_service
+from market_data_mcp.market_help import get_market_data_help as get_market_data_help_service
 from market_data_mcp.service import get_quote as get_quote_service
 
 
@@ -59,7 +59,7 @@ def _wrap(fn):
     return wrapper
 
 
-_FINANCIAL_TITLES = {"income": "利润表", "balance": "资产负债表", "cash_flow": "现金流量表"}
+_FINANCIAL_TITLES = {"income": "利润表", "balance": "资产负债表", "cash_flow": "现金流量表", "meta": "报表信息"}
 _FINANCIAL_META_ROWS = [
     ("公告日", "NOTICE_DATE"),
     ("东财更新日", "UPDATE_DATE"),
@@ -86,7 +86,7 @@ def _fmt_financial_meta(value):
 
 
 def _render_financial_markdown(result: dict) -> dict:
-    """把 get_financial_statements 的 rows 渲染为「变量 × 报告期」markdown 表。
+    """把财报rows渲染为「变量 × 报告期」markdown表。
 
     JSON 信封保留 ok/status/failed_items/notes 等元信息，数据本体进入 markdown 字段；
     rows 不再返回。include_versions=true 渲染版本审计长表。导出场景（无 rows）原样透传。
@@ -128,17 +128,25 @@ def _render_financial_markdown(result: dict) -> dict:
             meta_by_date: dict[str, dict] = {}
             for row in srows:
                 report_date = row["report_date"]
-                items.setdefault(row.get("item_name"), {})[report_date] = _fmt_financial_amount(row.get("amount"))
+                value = row.get("amount")
+                cell = f"{value * 100:.2f}%" if row.get("unit") == "ratio" and isinstance(value, (int, float)) else _fmt_financial_amount(value)
+                items.setdefault(row.get("item_name"), {})[report_date] = cell
                 if report_date not in meta_by_date:
                     meta_by_date[report_date] = row.get("report_metadata") or {}
             for name, cells in items.items():
                 md.append("| {} | {} |".format(name, " | ".join(cells.get(d, "") for d in dates)))
-            for label, key in _FINANCIAL_META_ROWS:
+            for label, key in ([] if "periods" in result else _FINANCIAL_META_ROWS):
                 md.append("| {} | {} |".format(
                     label,
                     " | ".join(_fmt_financial_meta((meta_by_date.get(d) or {}).get(key)) for d in dates),
                 ))
         blocks.append("\n".join(md))
+    segments = result.pop("segments", [])
+    if segments:
+        lines = ["## 营收结构（累计口径）", "", "| 报告期 | 维度 | 名称 | 收入 |", "|---|---|---|---:|"]
+        for row in segments:
+            lines.append(f"| {row['report_date']} | {row['dimension']} | {row.get('name') or ''} | {_fmt_financial_amount(row.get('income'))} |")
+        blocks.append("\n".join(lines))
     result.pop("rows", None)
     if blocks:
         result["markdown"] = "\n\n".join(blocks)
@@ -179,7 +187,7 @@ def create_server() -> Any:
         )
 
     @mcp.tool()
-    def get_financial_statements(
+    def get_financial_data(
         code: str,
         amount_basis: str,
         statements: list[str] | None = None,
@@ -189,43 +197,15 @@ def create_server() -> Any:
         export_path: str | None = None,
         items: list[str] | None = None,
     ) -> dict[str, Any]:
-        """获取三大财务报表原始科目（A股/北交所/港股/美股）。
+        """获取财报常用科目、营收结构及派生指标；详细口径查get_market_data_help。
 
-        code: 带市场后缀代码（600519.SH / 920002.BJ / 00700.HK / AAPL.US）。
-        amount_basis: 必填；cumulative=累计报原值，single=用最新累计版本现算当期金额。
-            资产负债表始终为时点值。single 不返回 EPS、每股股息、加权平均股数等
-            非加总科目；这些科目只能从 cumulative 获取。额外加工由调用方自行处理，
-            本工具不提供支持。
-        statements: 可选 balance/income/cash_flow/meta 子集；不传返回三表+报表信息。
-            meta（报表信息：审计单位/审计意见类型/内控审计意见类型/定期报告实际披露日期）
-            仅 A股/北交所（iFinD）提供，港美股为空表。
-        periods: 要取哪些报告期，YYYY-MM-DD 数组，每个元素必须是季度末
-            （03-31/06-30/09-30/12-31，如 2025-12-31=FY25年报），且不晚于今天。
-            不传则以最新已披露报告期往前取 5 期。已缓存过的报告期不重拉，
-            只拉缺失期；financial_statements 的读取因此是增量的。amount_basis=single
-            时工具自动补拉同一财年的上一期（调用方不用自己补），返回只含请求的期。
-        include_versions: false=每个报告期仅最新版本；true=累计口径返回全部历史版本。
-            single 始终只使用最新累计版本，不生成历史单期版本。
-        force_refresh: true=忽略探针 1 天缓存并重拉请求范围内的已有期（用于重述/更正）。
-        export_path: 指定则导出 CSV；未指定且超过 200 行时自动导出并返回路径。
-        items: 可选中文名称或科目码列表，支持中文全名、常用简称（如 扣非净利润/
-            归母净利润/营收）与内部科目码精确匹配（如 ths_currency_fund_stock）。
-            科目码/全名精确 > 简称精确 > 按字符顺序关键词匹配；简称不改变返回的
-            item_name，命中时在 notes 说明替代关系。单一候选直接返回并提示匹配
-            方式，多候选计入 failed_items 并返回各候选最近金额；不存在的科目报
-            失败，工具不计算毛利、毛利率等衍生指标。
-            返回 rows 涉及的带简称科目会在 notes 附「科目名称等价」关系行
-            （如 现金及存放中央银行款项=货币资金），据此识别跨模板行名差异。
-        返回 JSON 信封（ok/status/failed_items/notes 等）+ markdown 字段：markdown 为
-        「变量 × 报告期」表格，每 statement 一张表，公告日/东财更新日/货币/审计意见
-        作为行，金额保留 2 位小数；列名=上游原始报告截止日，不做推断，但 A股本就
-        是传入的季度末日期。include_versions=true 时为版本审计长表（含 version_id 等列）。
-        有可靠中文名时不暴露英文代码，未映射时保留原名。不返回同比/环比比例，
-        不自行修正上游值。CLI 与 CSV 导出维持长表格式（机器消费）。
-        惰性拉取失败语义：单期失败不影响其余期，返回 ok=true+stale=true，notes 列出
-        失败期；最新报告期探针失败不阻塞，沿用已知最新期并在 notes 说明。
+        amount_basis必填：cumulative或single。periods省略为最近5个已披露报告期。
+        statements支持balance/income/cash_flow/segments/meta。items省略返回常用清单，
+        ["ALL_ITEMS"]返回全部原始科目；营收结构item为income by product/industry/region。
+        计算依赖自动补齐，single下营收结构仍为累计。force_refresh重查请求范围。
+        export_path指定CSV；超过200行自动导出。include_versions保留已观察原始版本。
         """
-        return _render_financial_markdown(_wrap(get_financial_statements_service)(
+        return _render_financial_markdown(_wrap(get_financial_data_service)(
             _data_root(),
             code,
             amount_basis=amount_basis,
@@ -238,20 +218,18 @@ def create_server() -> Any:
         ))
 
     @mcp.tool()
-    def get_data_catalog(
-        code: str,
-        statements: list[str] | None = None,
+    def get_market_data_help(
+        tool: str | None = None,
+        market: str | None = None,
+        code: str | None = None,
+        topic: str | None = None,
     ) -> dict[str, Any]:
-        """查询公司财务报表缓存中实际可请求的科目名称（纯本地、轻量、不联网）。
+        """查询工具能力、科目、口径、历史边界、刷新及导出；指定code可查本地缓存。
 
-        code: 带市场后缀代码。
-        statements: balance/income/cash_flow/meta 子集；不传返回全部表科目。
-        仅返回该公司所有缓存报告期和历史版本中至少有一个非空金额的科目，附最早、
-        最晚有效报告日。A股有可靠中文映射时只返回中文；未映射时保留原名。
-        如果尚无完整缓存，提示先调用 get_financial_statements。
+        topic可选tools/items/ranges/refresh/cache/export。纯本地只读，不登录或联网。
         """
-        return _wrap(get_data_catalog_service)(
-            _data_root(), code, statements=statements,
+        return _wrap(get_market_data_help_service)(
+            _data_root(), tool=tool, market=market, code=code, topic=topic,
         )
 
     @mcp.tool()
@@ -259,22 +237,18 @@ def create_server() -> Any:
         code: str,
         sections: list[str] | None = None,
         force_refresh: bool = False,
+        periods: list[str] | None = None,
+        years: list[int] | None = None,
+        as_of_date: str | None = None,
     ) -> dict[str, Any]:
-        """获取公司信息（A股/北交所/港股；美股无结构化数据，返回提示用公告 MCP 查 SEC）。
+        """获取profile/ipo/dividends/forecast/holders，详细市场边界查get_market_data_help。
 
-        code: 带市场后缀代码（600519.SH / 920002.BJ / 00700.HK）。
-        sections: 可选 profile/ipo/dividends/forecast/holders 子集；不传返回全部。
-            profile=公司概况、ipo=IPO资料、dividends=分红历史、forecast=盈利预测、
-            holders=股东（历史多期序列）。
-        force_refresh: true=忽略 30 天新鲜期，强制联网刷新（默认缓存 30 天内直接返回）。
-
-        返回 sections 字典：有数据的 section 为 {data, source, cached}；
-        该市场无结构化来源的 section 为 {available: false, reason}（不是错误）。
-        数据保留上游字段名原样；多源合并为主源优先、缺字段从补充源补全
-        （无失败回退，主源失败即报错可重试）。
+        holders的periods省略取最新一期；forecast必须传years，as_of_date省略取最新快照。
+        dividends按years取年度统计，省略取本年及之前共5年。force_refresh跳过30天缓存。
         """
         return _wrap(company_service.get_company_profile)(
             _data_root(), code, sections=sections, force_refresh=force_refresh,
+            periods=periods, years=years, as_of_date=as_of_date,
         )
 
     @mcp.tool()

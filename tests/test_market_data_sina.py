@@ -15,6 +15,16 @@ import pytest
 from market_data_mcp import cache
 from market_data_mcp.providers import sina
 from market_data_mcp.routing import parse_code
+from market_data_mcp.aggregator import commit_quote_batch
+
+
+@pytest.fixture(autouse=True)
+def _commit_batches(monkeypatch):
+    for name in ("fetch_raw", "fetch_hfq"):
+        original = getattr(sina, name)
+        def fetch(root, mc, *args, _original=original, **kwargs):
+            return commit_quote_batch(root, mc, _original(root, mc, *args, **kwargs))
+        monkeypatch.setattr(sina, name, fetch)
 
 
 def _df(dates, cols: dict):

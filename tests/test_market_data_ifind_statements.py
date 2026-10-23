@@ -211,7 +211,7 @@ def test_fetch_statements_retries_per_period_and_keeps_others(tmp_path, monkeypa
         period = params.split(";")[0].split(",")[0]
         if period == "20251231":
             calls["n"] += 1
-            return _FakeResult(errorcode=-340, data=None, errmsg="瞬时错误")
+            return _FakeResult(errorcode=-205, data=None, errmsg="request data error")
         return _frame_for(full, indicators, period, {"ths_currency_fund_stock": 1.0})
 
     _install_fake_ths(monkeypatch, responder)

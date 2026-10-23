@@ -59,11 +59,19 @@ def _ensure_fields(root: str, mc: MarketCode, fields: set[str],
                    start: str | None, end: str | None) -> dict[str, dict]:
     """逐字段 ensure（缓存复用：已覆盖字段不请求）。返回 {字段: {ok, items, source, notes}}。"""
     chains = _field_chains(mc)
+    batches = {}
+    requested_start, requested_end = start, end
+    def once(fetcher):
+        def fetch(root, mc, start=None, end=None):
+            if fetcher not in batches:
+                batches[fetcher] = fetcher(root, mc, start=requested_start, end=requested_end)
+            return batches[fetcher]
+        return fetch
     results: dict[str, dict] = {}
     for f in fields:
         if f not in chains:
             continue
-        results[f] = aggregator.ensure(root, mc, f, chains[f], start, end)
+        results[f] = aggregator.ensure(root, mc, f, [once(fn) for fn in chains[f]], start, end)
     return results
 
 

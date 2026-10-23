@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""get_financial_statements MCP/CLI 双入口测试。"""
+"""get_financial_data MCP/CLI 双入口测试。"""
 
 import asyncio
 
@@ -13,15 +13,16 @@ def test_financial_statements_mcp_forwards_contract(monkeypatch):
         calls.append((root, code, kwargs))
         return {"ok": True, "rows": []}
 
-    monkeypatch.setattr(server, "get_financial_statements_service", fake_service, raising=False)
+    monkeypatch.setattr(server, "get_financial_data_service", fake_service)
     monkeypatch.setattr(server, "_data_root", lambda: "ROOT")
     mcp = server.create_server()
     names = {tool.name for tool in asyncio.run(mcp.list_tools())}
 
-    assert "get_financial_statements" in names
+    assert "get_financial_data" in names
+    assert "get_financial_statements" not in names
     asyncio.run(
         mcp.call_tool(
-            "get_financial_statements",
+            "get_financial_data",
             {
                 "code": "600519.SH",
                 "amount_basis": "single",
@@ -54,17 +55,17 @@ def test_financial_statements_cli_batch_partial_success(monkeypatch):
             return {"ok": False, "error": "失败"}
         return {"ok": True, "amount_basis": kwargs["amount_basis"], "rows": []}
 
-    monkeypatch.setattr(cli.service, "get_financial_statements", fake_service)
+    monkeypatch.setattr(cli.financial_service, "get_financial_data", fake_service)
     monkeypatch.setattr(cli, "_data_root", lambda: "ROOT")
 
     response = cli.dispatch({
-        "tool": "get_financial_statements_batch",
+        "tool": "get_financial_data_batch",
         "codes": ["AAPL.US", "BAD.US"],
         "amount_basis": "cumulative",
         "statements": ["income", "cash_flow"],
     })
 
-    assert response["tool"] == "get_financial_statements_batch"
+    assert response["tool"] == "get_financial_data_batch"
     assert response["status"] == "partial_success"
     assert response["requested"] == 2 and response["succeeded"] == 1 and response["failed"] == 1
     assert response["results"][0]["code"] == "AAPL.US"
@@ -122,36 +123,35 @@ def test_financial_markdown_passthrough_export_and_version_audit():
 def test_data_catalog_mcp_is_registered_and_forwards_company_statements(monkeypatch):
     calls = []
 
-    def fake_service(root, code, **kwargs):
-        calls.append((root, code, kwargs))
+    def fake_service(root, **kwargs):
+        calls.append((root, kwargs))
         return {"ok": True, "items": []}
 
-    monkeypatch.setattr(server, "get_data_catalog_service", fake_service, raising=False)
+    monkeypatch.setattr(server, "get_market_data_help_service", fake_service)
     monkeypatch.setattr(server, "_data_root", lambda: "ROOT")
     mcp = server.create_server()
 
     result = asyncio.run(mcp.call_tool(
-        "get_data_catalog", {"code": "600519.SH", "statements": ["income"]}
+        "get_market_data_help", {"code": "600519.SH", "topic": "cache"}
     ))
 
     assert result is not None
-    assert calls == [("ROOT", "600519.SH", {"statements": ["income"]})]
+    assert calls == [("ROOT", {"tool": None, "market": None, "code": "600519.SH", "topic": "cache"})]
 
 
 def test_data_catalog_cli_batch_uses_same_service(monkeypatch):
     monkeypatch.setattr(
-        cli.service,
-        "get_data_catalog",
-        lambda root, code, **kwargs: {"ok": True, "items": [{"item_name": code}]},
+        cli.market_help,
+        "get_market_data_help",
+        lambda root, **kwargs: {"ok": True, "items": [{"item_name": kwargs["code"]}]},
         raising=False,
     )
     monkeypatch.setattr(cli, "_data_root", lambda: "ROOT")
 
     response = cli.dispatch({
-        "tool": "get_data_catalog_batch",
-        "codes": ["600519.SH"],
-        "statements": ["income"],
+        "tool": "get_market_data_help",
+        "arguments": {"code": "600519.SH", "topic": "items"},
     })
 
-    assert response["status"] == "success"
-    assert response["results"][0]["items"] == [{"item_name": "600519.SH"}]
+    assert response["ok"]
+    assert response["items"] == [{"item_name": "600519.SH"}]

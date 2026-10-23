@@ -14,6 +14,32 @@ from market_data_mcp import cache
 from market_data_mcp.routing import MarketCode
 
 
+def commit_quote_batch(root: str, mc: MarketCode, result: dict) -> dict:
+    """将成功取数批次按字段落盘；源模块只返回原值。"""
+    if not result.get("ok") or "data" not in result:
+        return result
+    code = f"{mc.code}.{mc.suffix}"
+    updated, errors = {}, []
+    for field, records in result["data"].items():
+        try:
+            old = cache.read_cache(root, code, field)
+            if not records:
+                dr = cache.refresh_cache(root, code, field) if old else None
+                if dr:
+                    updated[field] = dr
+                continue
+            # 该字段的唯一来源由调度定义，旧的其他来源不混入当前输出。
+            existing = [r for r in old["items"] if r.get("source") == result["source"]] if old else []
+            merged = cache.merge_items(existing, records)
+            dr = {"start": merged[0]["date"], "end": merged[-1]["date"]}
+            cache.write_cache(root, code, field, meta={"code": code, "market": mc.market,
+                "field": field, "source": result["source"], "date_range": dr}, items=merged)
+            updated[field] = dr
+        except (OSError, ValueError) as exc:
+            errors.append(f"{field}写入失败：{exc}")
+    return {**result, "fields": updated, "notes": (result.get("notes") or []) + errors}
+
+
 def ensure(
     root: str,
     mc: MarketCode,
@@ -47,6 +73,7 @@ def ensure(
     last_error = None
     for fetcher in chain:
         r = fetcher(root, mc, start=fetch_start, end=end)
+        r = commit_quote_batch(root, mc, r)
         if r.get("ok") and field in (r.get("fields") or {}):
             # fetcher 只在写缓存成功后返回 fields 声明——重新读缓存确认即可
             cur = cache.read_cache(root, code, field)

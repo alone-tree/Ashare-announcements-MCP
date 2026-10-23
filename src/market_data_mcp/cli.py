@@ -2,7 +2,7 @@
 """供确定性批处理脚本调用的 market-data JSON CLI。
 
 从 stdin 读取一个 JSON 请求，stdout 只输出一个 JSON 响应。
-tool 支持：get_quote_batch / get_financial_statements_batch / get_data_catalog_batch /
+tool 支持：get_quote_batch / get_financial_data_batch / get_market_data_help /
 get_company_profile_batch / get_quote_chart_batch。
 顶层请求字段是 `tool`（与公告 MCP CLI 一致），响应字段也是 `tool`。
 数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录）。
@@ -19,7 +19,7 @@ from typing import Any, Callable
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from market_data_mcp import chart_service, company_service, service
+from market_data_mcp import chart_service, company_service, financial_service, market_help, service
 
 
 def _data_root() -> str:
@@ -64,7 +64,7 @@ def get_quote_batch(request: dict[str, Any]) -> dict[str, Any]:
     return _batch_response("get_quote_batch", items, "results")
 
 
-def get_financial_statements_batch(request: dict[str, Any]) -> dict[str, Any]:
+def get_financial_data_batch(request: dict[str, Any]) -> dict[str, Any]:
     codes = request.get("codes")
     if not isinstance(codes, list) or not codes:
         raise ValueError("codes 必须是非空数组")
@@ -87,7 +87,7 @@ def get_financial_statements_batch(request: dict[str, Any]) -> dict[str, Any]:
     for value in codes:
         code = str(value)
         try:
-            result = service.get_financial_statements(
+            result = financial_service.get_financial_data(
                 _data_root(),
                 code,
                 **{key: value for key, value in common.items() if value is not None},
@@ -95,24 +95,14 @@ def get_financial_statements_batch(request: dict[str, Any]) -> dict[str, Any]:
             items.append({"code": code, **result})
         except Exception as exc:  # noqa: BLE001 —— 单家公司失败不阻断批次
             items.append({"code": code, "ok": False, "error": str(exc)})
-    return _batch_response("get_financial_statements_batch", items, "results")
+    return _batch_response("get_financial_data_batch", items, "results")
 
 
-def get_data_catalog_batch(request: dict[str, Any]) -> dict[str, Any]:
-    codes = request.get("codes")
-    if not isinstance(codes, list) or not codes:
-        raise ValueError("codes 必须是非空数组")
-    items = []
-    for value in codes:
-        code = str(value)
-        try:
-            result = service.get_data_catalog(
-                _data_root(), code, statements=request.get("statements")
-            )
-            items.append({"code": code, **result})
-        except Exception as exc:  # noqa: BLE001
-            items.append({"code": code, "ok": False, "error": str(exc)})
-    return _batch_response("get_data_catalog_batch", items, "results")
+def get_market_data_help(request: dict[str, Any]) -> dict[str, Any]:
+    arguments = request.get("arguments") or {}
+    if not isinstance(arguments, dict) or set(arguments) - {"tool", "market", "code", "topic"}:
+        raise ValueError("帮助工具arguments仅接受tool/market/code/topic")
+    return {**market_help.get_market_data_help(_data_root(), **arguments), "tool": "get_market_data_help"}
 
 
 def get_company_profile_batch(request: dict[str, Any]) -> dict[str, Any]:
@@ -127,6 +117,8 @@ def get_company_profile_batch(request: dict[str, Any]) -> dict[str, Any]:
                 _data_root(), code,
                 sections=request.get("sections"),
                 force_refresh=bool(request.get("force_refresh")),
+                periods=request.get("periods"), years=request.get("years"),
+                as_of_date=request.get("as_of_date"),
             )
             items.append({"code": code, **result})
         except Exception as exc:  # noqa: BLE001 —— 单家公司失败不阻断批次
@@ -157,8 +149,8 @@ def get_quote_chart_batch(request: dict[str, Any]) -> dict[str, Any]:
 
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "get_quote_batch": get_quote_batch,
-    "get_financial_statements_batch": get_financial_statements_batch,
-    "get_data_catalog_batch": get_data_catalog_batch,
+    "get_financial_data_batch": get_financial_data_batch,
+    "get_market_data_help": get_market_data_help,
     "get_company_profile_batch": get_company_profile_batch,
     "get_quote_chart_batch": get_quote_chart_batch,
 }
@@ -169,6 +161,13 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
     handler = ACTIONS.get(tool)
     if handler is None:
         raise ValueError(f"未知 tool：{tool or '<empty>'}")
+    parameters = {
+        "get_financial_data_batch": {"tool", "codes", "amount_basis", "statements", "periods", "items", "include_versions", "force_refresh", "export_path"},
+        "get_market_data_help": {"tool", "arguments"},
+        "get_company_profile_batch": {"tool", "codes", "sections", "periods", "years", "as_of_date", "force_refresh"},
+    }
+    if tool in parameters and set(request) - parameters[tool]:
+        raise ValueError(f"未知参数：{sorted(set(request) - parameters[tool])}")
     return handler(request)
 
 

@@ -71,7 +71,7 @@ def test_primary_failure_no_fallback(tmp_path):
     monkeypatch = __import__("pytest").MonkeyPatch()
     monkeypatch.setattr(company_service, "_SECTION_PLAN", plan)
     try:
-        r = company_service.get_company_profile(str(tmp_path), "300308.SZ", sections=["profile"])
+        r = company_service._legacy_get_company_profile(str(tmp_path), "300308.SZ", sections=["profile"])
         assert r["ok"] is False
         assert "主源" in r["sections"]["profile"]["error"]
     finally:
@@ -88,7 +88,7 @@ def test_supplement_merges_missing_fields(tmp_path):
     monkeypatch = __import__("pytest").MonkeyPatch()
     monkeypatch.setattr(company_service, "_SECTION_PLAN", plan)
     try:
-        r = company_service.get_company_profile(str(tmp_path), "300308.SZ", sections=["ipo"])
+        r = company_service._legacy_get_company_profile(str(tmp_path), "300308.SZ", sections=["ipo"])
         data = r["sections"]["ipo"]["data"]
         assert data["发行价格"] == 20.0
         assert data["发行方式"] == "网下询价"

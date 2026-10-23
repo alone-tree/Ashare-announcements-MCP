@@ -15,6 +15,17 @@ import pytest
 from market_data_mcp import cache
 from market_data_mcp.providers import ifind
 from market_data_mcp.routing import parse_code
+from market_data_mcp.aggregator import commit_quote_batch
+
+
+@pytest.fixture(autouse=True)
+def _commit_batches(monkeypatch):
+    # 本文件验证取数+缓存流水线；另有测试单独检查取数不写缓存。
+    for name in ("fetch_us_hfq", "fetch_us_amount", "fetch_shares"):
+        original = getattr(ifind, name)
+        def fetch(root, mc, *args, _original=original, **kwargs):
+            return commit_quote_batch(root, mc, _original(root, mc, *args, **kwargs))
+        monkeypatch.setattr(ifind, name, fetch)
 
 
 def _r(data):

@@ -30,6 +30,8 @@ from __future__ import annotations
 import math
 import os
 import time
+import threading
+from types import SimpleNamespace
 from datetime import date, timedelta
 
 import iFinDPy as ths
@@ -45,6 +47,7 @@ for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"
 SOURCE = "ifind"
 
 _LOGIN_STATE = {"done": False}
+_SESSION_LOCK = threading.RLock()
 _SUFFIX_CACHE: dict[str, str] = {}
 
 # 纽交所交易日历代码（美股 NYSE/NASDAQ/AMEX 统一日历，2026-08-09 实测）
@@ -79,17 +82,73 @@ def _load_accounts(root: str) -> list[tuple[str, str]]:
 
 
 def _ensure_login(root: str) -> None:
-    if _LOGIN_STATE["done"]:
-        return
-    accounts = _load_accounts(root)
-    errors = []
-    for acc, pwd in accounts:
-        code = ths.THS_iFinDLogin(acc, pwd)
-        if code == 0:
-            _LOGIN_STATE["done"] = True
+    with _SESSION_LOCK:
+        if _LOGIN_STATE["done"] and _LOGIN_STATE.get("root") == root:
             return
-        errors.append(f"{acc}（errorcode={code}）")
-    raise RuntimeError(f"iFinD 全部账号登录失败：{'；'.join(errors)}")
+        accounts = _load_accounts(root)
+        errors = []
+        for index, (acc, pwd) in enumerate(accounts):
+            code = ths.THS_iFinDLogin(acc, pwd)
+            if code == 0:
+                _LOGIN_STATE.update(done=True, root=root, index=index)
+                return
+            errors.append(f"账号{index + 1}（errorcode={code}）")
+        raise RuntimeError(f"iFinD 全部账号登录失败：{'；'.join(errors)}")
+
+
+def request_ifind(root: str, api: str, *args, required_columns=()):
+    """串行执行一个原始SDK批次；业务空值不换号，错误有限重试后换号。"""
+    with _SESSION_LOCK:
+        accounts = _load_accounts(root)
+        current = _LOGIN_STATE.get("index", 0)
+        order = list(range(len(accounts)))
+        if _LOGIN_STATE.get("done") and _LOGIN_STATE.get("root") == root and current in order:
+            order.remove(current)
+            order.insert(0, current)
+        errors = []
+        for index in order:
+            acc, pwd = accounts[index]
+            repaired = False
+            retries = 0
+            if not (_LOGIN_STATE.get("done") and _LOGIN_STATE.get("root") == root
+                    and _LOGIN_STATE.get("index") == index):
+                if _LOGIN_STATE.get("done"):
+                    ths.THS_iFinDLogout()
+                _LOGIN_STATE["done"] = False
+                login = ths.THS_iFinDLogin(acc, pwd)
+                if login != 0:
+                    errors.append(f"账号{index + 1}: 登录错误码{login}")
+                    continue
+                _LOGIN_STATE.update(done=True, root=root, index=index)
+            while True:
+                try:
+                    result = getattr(ths, api)(*args)
+                    code = getattr(result, "errorcode", None)
+                    message = str(getattr(result, "errmsg", ""))
+                    frame = getattr(result, "data", None)
+                    valid = not (required_columns and frame is not None and len(frame) > 0
+                                 and not set(required_columns).issubset(frame.columns))
+                    if code == 0 and valid:
+                        return result
+                    if code == 0:
+                        message = "响应缺少约定字段"
+                except Exception as exc:
+                    code, message = "exception", str(exc)
+                for account, password in accounts:
+                    message = message.replace(account, "[账号]").replace(password, "[凭据]")
+                if "you have not done login operation" in message.lower() and not repaired:
+                    repaired = True
+                    _LOGIN_STATE["done"] = False
+                    if ths.THS_iFinDLogin(acc, pwd) == 0:
+                        _LOGIN_STATE.update(done=True, root=root, index=index)
+                        continue
+                elif (code == -205 or "request data error" in message.lower()) and retries < 3:
+                    time.sleep((0.5, 2.0, 5.0)[retries])
+                    retries += 1
+                    continue
+                errors.append(f"账号{index + 1}: {code} {message}")
+                break
+        return SimpleNamespace(errorcode=-1, errmsg="；".join(errors), data=None)
 
 
 def _clean_value(v):
@@ -107,16 +166,16 @@ def _detect_suffix(root: str, base: str) -> str:
     end_d = date.today()
     start_d = end_d - timedelta(days=10)
     for s in (".O", ".N"):
-        r = ths.THS_HQ(base + s, "close", "Interval:W", start_d.isoformat(), end_d.isoformat())
+        r = request_ifind(root, "THS_HQ", base + s, "close", "Interval:W", start_d.isoformat(), end_d.isoformat())
         if r.errorcode == 0 and r.data is not None and len(r.data) > 0:
             _SUFFIX_CACHE[base] = s
             return s
     raise RuntimeError(f"美股 {base} 的 iFinD 后缀探测失败（.O/.N 均无数据）")
 
 
-def _trade_days(start: str, end: str) -> list[str]:
+def _trade_days(start: str, end: str, root: str | None = None) -> list[str]:
     """纽交所交易日列表（THS_Date_Query 212010，返回逗号分隔日期串）。"""
-    r = ths.THS_Date_Query(_NYSE_CALENDAR, "mode:1,dateType:0,period:D,dateFormat:0", start, end)
+    r = request_ifind(root or _LOGIN_STATE.get("root") or os.getcwd(), "THS_Date_Query", _NYSE_CALENDAR, "mode:1,dateType:0,period:D,dateFormat:0", start, end)
     if r.errorcode != 0 or not r.data:
         raise RuntimeError(f"iFinD 交易日历请求失败：{r.errmsg}")
     return [d for d in str(r.data).split(",") if d]
@@ -129,20 +188,10 @@ def _five_years_ago(today: date) -> date:
         return date(today.year - 5, 12, 31)
 
 
-def _write_field(root: str, code: str, market: str, field: str, fresh: list[dict]) -> dict | None:
-    """写单个字段缓存（同源合并）。fresh 为 [{date, value}]。返回 date_range。"""
-    items = [{"date": r["date"], "value": r["value"], "source": SOURCE} for r in fresh]
-    existing = cache.read_cache(root, code, field)
-    existing_items = existing["items"] if existing else None
-    merged = cache.merge_items(existing_items, items)
-    date_range = None
-    if merged:
-        date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
-    cache.write_cache(root, code, field,
-                      meta={"code": code, "market": market, "field": field,
-                            "source": SOURCE, "date_range": date_range},
-                      items=merged)
-    return date_range
+def _field_batch(fresh: list[dict]) -> list[dict]:
+    """仅规范化一个字段批次，写缓存由行情调度层执行。"""
+    return sorted([{"date": r["date"], "value": r["value"], "source": SOURCE} for r in fresh],
+                  key=lambda row: row["date"])
 
 
 def _fetch_us_daily(
@@ -183,7 +232,7 @@ def _fetch_us_daily(
     # ② THS_DS 近 5 年序列（仅当请求段与 5 年窗口有交集）
     if end_d >= ds_start.isoformat():
         ds_beg = max(start or ds_start.isoformat(), ds_start.isoformat())
-        r = ths.THS_DS(full, indicator, param, "", ds_beg, end_d)
+        r = request_ifind(root, "THS_DS", full, indicator, param, "", ds_beg, end_d)
         if r.errorcode != 0:
             elapsed = time.time() - t0
             audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS",
@@ -207,7 +256,7 @@ def _fetch_us_daily(
             days = [d for d in days if d not in covered]
         fail = 0
         for d in reversed(days):  # 先近后远：中断只丢最老数据
-            r = ths.THS_BD(full, indicator, f"{d},{param}")
+            r = request_ifind(root, "THS_BD", full, indicator, f"{d},{param}")
             if r.errorcode != 0 or r.data is None or len(r.data) == 0:
                 fail += 1
                 if fail <= 3:
@@ -225,20 +274,22 @@ def _fetch_us_daily(
     if not fresh:
         # 请求成功但无新行：已有缓存只刷新 updated_at，启动固定 10 分钟重试窗口；
         # 无缓存时不创建空文件。
-        date_range = cache.refresh_cache(root, code, field)
+        existing = cache.read_cache(root, code, field)
+        date_range = existing["meta"].get("date_range") if existing else None
         elapsed = time.time() - t0
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                           fields=indicator, adjust=adjust, start=start, end=end,
                           ok=True, elapsed=elapsed)
         fields = {field: date_range} if date_range is not None else {}
-        return {"ok": True, "source": SOURCE, "fields": fields,
+        return {"ok": True, "source": SOURCE, "fields": fields, "data": {field: []},
                 "error": None, "notes": notes or None}
 
-    date_range = _write_field(root, code, mc.market, field, fresh)
+    batch = _field_batch(fresh)
+    date_range = {"start": batch[0]["date"], "end": batch[-1]["date"]}
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields=f"{indicator}({param})", adjust=adjust, start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
-    return {"ok": True, "source": SOURCE, "fields": {field: date_range},
+    return {"ok": True, "source": SOURCE, "fields": {field: date_range}, "data": {field: batch},
             "error": None, "notes": notes or None}
 
 
@@ -326,7 +377,7 @@ def fetch_shares(
     # ① THS_DS 近 5 年逐日
     if end_d >= ds_start.isoformat():
         ds_beg = max(start or ds_start.isoformat(), ds_start.isoformat())
-        r = ths.THS_DS(full, "total_shares;floating_shares", ";", "", ds_beg, end_d)
+        r = request_ifind(root, "THS_DS", full, "total_shares;floating_shares", ";", "", ds_beg, end_d)
         if r.errorcode != 0:
             elapsed = time.time() - t0
             audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS",
@@ -349,7 +400,7 @@ def fetch_shares(
             months = [d for d in months if d not in covered]
         fail = 0
         for d in reversed(months):  # 先近后远：中断只丢最老数据
-            r = ths.THS_BD(full, "total_shares;floating_shares", f"{d};{d}")
+            r = request_ifind(root, "THS_BD", full, "total_shares;floating_shares", f"{d};{d}")
             if r.errorcode != 0 or r.data is None or len(r.data) == 0:
                 fail += 1
                 if fail <= 3:
@@ -372,30 +423,29 @@ def fetch_shares(
         fields = {}
         share_fields = ("total_shares", "floating_shares") if mc.market in ("HK", "US") else ("total_shares",)
         for field in share_fields:
-            date_range = cache.refresh_cache(root, code, field)
+            existing = cache.read_cache(root, code, field)
+            date_range = existing["meta"].get("date_range") if existing else None
             if date_range is not None:
                 fields[field] = date_range
         elapsed = time.time() - t0
         audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                           fields="total_shares;floating_shares", start=start, end=end,
                           ok=True, elapsed=elapsed)
-        return {"ok": True, "source": SOURCE, "fields": fields,
+        return {"ok": True, "source": SOURCE, "fields": fields, "data": {field: [] for field in share_fields},
                 "error": None, "notes": notes or None}
 
-    fields = {
-        "total_shares": _write_field(root, code, mc.market, "total_shares",
-                                     [{"date": r["date"], "value": r["total_shares"]} for r in fresh]),
+    data = {
+        "total_shares": _field_batch([{"date": r["date"], "value": r["total_shares"]} for r in fresh]),
     }
     # floating_shares 字段归属：A/北交所 = sina（outstanding_share，全历史逐日，用户拍板口径）；
     # 港美股 = iFinD（新浪港股/美股无股本列）。避免同字段同日期双写（2026-08-09 用户指出）。
     if mc.market in ("HK", "US"):
-        fields["floating_shares"] = _write_field(
-            root, code, mc.market, "floating_shares",
-            [{"date": r["date"], "value": r["floating_shares"]} for r in fresh])
+        data["floating_shares"] = _field_batch([{"date": r["date"], "value": r["floating_shares"]} for r in fresh])
+    fields = {field: {"start": records[0]["date"], "end": records[-1]["date"]} for field, records in data.items()}
     audit.log_request(root, source=SOURCE, market=mc.market, code=code, api="THS_DS/THS_BD",
                       fields="total_shares;floating_shares", start=start, end=end,
                       ok=True, elapsed=time.time() - t0)
-    return {"ok": True, "source": SOURCE, "fields": fields, "error": None, "notes": notes or None}
+    return {"ok": True, "source": SOURCE, "fields": fields, "data": data, "error": None, "notes": notes or None}
 
 
 # --- A/北交所三表（THS_BD 报表科目，架构设计 §3.8） ---
@@ -439,10 +489,8 @@ def probe_latest_report(root: str, mc: MarketCode) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "report_date": None, "error": f"iFinD 登录失败：{exc}"}
     last_error = None
-    for attempt in range(4):
-        if attempt:
-            time.sleep((0.5, 2.0, 5.0)[attempt - 1])
-        result = ths.THS_BD(full_code, _LATEST_RP_CODE, date.today().isoformat())
+    for attempt in range(1):  # 有限重试、会话修复与换号统一由request_ifind承担
+        result = request_ifind(root, "THS_BD", full_code, _LATEST_RP_CODE, date.today().isoformat())
         if result.errorcode == 0 and result.data is not None and len(result.data) > 0:
             frame = result.data
             raw = frame.iloc[0, -1]
@@ -478,10 +526,8 @@ def _thbd_statement_period(root: str, full_code: str, period: str,
     params = ";".join([f"{api_period},100"] * len(all_codes))
     last_error = None
     started = time.time()
-    for attempt in range(4):
-        if attempt:
-            time.sleep((0.5, 2.0, 5.0)[attempt - 1])
-        result = ths.THS_BD(full_code, ";".join(all_codes), params)
+    for attempt in range(1):  # 不在业务层叠加SDK重试
+        result = request_ifind(root, "THS_BD", full_code, ";".join(all_codes), params)
         if result.errorcode == 0 and result.data is not None and len(result.data) > 0:
             frame = result.data
             row = frame.iloc[0]

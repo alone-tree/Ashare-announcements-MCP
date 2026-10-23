@@ -175,7 +175,7 @@ def normalize_long(
     return reports
 
 
-def _fetch_a(root: str, mc: MarketCode) -> dict[str, list[dict[str, Any]]]:
+def _fetch_a(root: str, mc: MarketCode, selected=None) -> dict[str, list[dict[str, Any]]]:
     symbol = f"{mc.suffix}{mc.code}"
     functions = {
         "balance": ak.stock_balance_sheet_by_report_em,
@@ -184,6 +184,8 @@ def _fetch_a(root: str, mc: MarketCode) -> dict[str, list[dict[str, Any]]]:
     }
     statements: dict[str, list[dict[str, Any]]] = {}
     for statement, function in functions.items():
+        if selected is not None and statement not in selected:
+            continue
         started = time.time()
         try:
             frame = function(symbol=symbol)
@@ -253,7 +255,7 @@ def _request_json(
     return data
 
 
-def _fetch_hk(root: str, mc: MarketCode) -> dict[str, list[dict[str, Any]]]:
+def _fetch_hk(root: str, mc: MarketCode, selected=None) -> dict[str, list[dict[str, Any]]]:
     summary_params = {
         "reportName": "RPT_CUSTOM_HKSK_APPFN_CASHFLOW_SUMMARY",
         "columns": (
@@ -294,6 +296,8 @@ def _fetch_hk(root: str, mc: MarketCode) -> dict[str, list[dict[str, Any]]]:
     }
     statements: dict[str, list[dict[str, Any]]] = {}
     for statement, (report_name, columns) in specs.items():
+        if selected is not None and statement not in selected:
+            continue
         params = {
             "reportName": report_name,
             "columns": columns,
@@ -434,7 +438,8 @@ def _fetch_sec_filings(
     return {"cik": cik, "filings": filings, "sec_history_complete": history_complete}
 
 
-def _fetch_us(root: str, mc: MarketCode) -> dict[str, list[dict[str, Any]]]:
+def _fetch_us(root: str, mc: MarketCode, selected=None) -> dict[str, list[dict[str, Any]]]:
+    selected_statements = selected
     profile_params = {
         "reportName": "RPT_USF10_INFO_ORGPROFILE",
         "columns": (
@@ -461,6 +466,8 @@ def _fetch_us(root: str, mc: MarketCode) -> dict[str, list[dict[str, Any]]]:
     }
     statements: dict[str, list[dict[str, Any]]] = {}
     for statement, report_name in specs.items():
+        if selected_statements is not None and statement not in selected_statements:
+            continue
         summary_params = {
             "reportName": report_name,
             "columns": (
@@ -516,6 +523,14 @@ def _fetch_us(root: str, mc: MarketCode) -> dict[str, list[dict[str, Any]]]:
             raise ValueError(f"美股 {statement} 返回结构不完整") from exc
         statements[statement] = normalize_long(frame, selected, statement=statement)
     return statements
+
+
+def fetch_batch(root: str, mc: MarketCode, statement: str) -> list[dict[str, Any]]:
+    """单张报表的完整历史批次，取数、规范化，不写业务缓存。"""
+    if statement not in STATEMENTS:
+        raise ValueError(f"未知报表：{statement}")
+    fetcher = _fetch_a if mc.market in ("A", "BJ") else _fetch_hk if mc.market == "HK" else _fetch_us
+    return fetcher(root, mc, selected=[statement])[statement]
 
 
 def fetch(
