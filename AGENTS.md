@@ -10,8 +10,8 @@
 | | 公告 MCP | market-data MCP |
 |---|---|---|
 | 定位 | 公告/提交文档（非结构化）的发现、定位、阅读 | 行情/财报/指标/概况（结构化）数据获取 + 行情绘图（K线/折线，事件标注/高低点） |
-| 数据源 | A/B/H 股=东方财富；美股=SEC EDGAR；LOCAL-=本地材料 | 行情=新浪单源；财报 A 股/北交所=iFinD、港美=东财 datacenter；股本/美股后复权=iFinD |
-| 状态 | **已实现、完善**（不要动坏） | **行情 + 绘图 + 财报三表已实现**（A/北交所三表唯一源=iFinD，330项含报表信息 meta 4项）；财务比率未实现 |
+| 数据源 | A/B/H 股=东方财富；美股=SEC EDGAR；LOCAL-=本地材料 | 来源与模块分工见架构设计及财报子文档 |
+| 状态 | **已实现、完善**（不要动坏） | 行情、绘图、财报、营收结构、基础比率及公司信息已接入；市场边界与后置项见正式文档 |
 | 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（行为）+ `字段与数据源支持情况.md`（客观能力）+ `docs/决策记录.md`（变动历史） |
 
 > 行情绘图原为独立 market-data-chart MCP，2026-10-19 并入 market-data（get_quote_chart 工具 + get_quote_chart_batch CLI，引擎 `src/market_data_mcp/chart_service.py`）；视觉/参数历史决策见 `docs/chart-MCP绘图工具设计.md`（已归档）。
@@ -40,9 +40,9 @@ CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）�
 | 工具 | 要点 |
 |---|---|
 | `get_quote` | 行情；code 带后缀、vars 字段列表、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、start_date 特殊值 "all"、超长自动导出、export_path 指定 CSV。**缓存为字段级 json，每字段唯一数据源**，派生（qfq/市值/换手率/周月/hfq OHL 还原）全现算。参数、9个字段与覆盖判定见架构 §1.5/§1.6 |
-| `get_financial_statements` | 三表 + 报表信息 meta；科目名原样不翻译、不做跨市场映射；**A/北交所唯一源=iFinD `THS_BD`，港美=东财（无 meta 表）**；`amount_basis` 必填（cumulative/single）；报告期用 `periods` 指定（季度末日期，如 `2025-12-31`），为空时取最新报告期往前5期；已披露的历史期不重拉，探最新报告期后只拉缺失期；同报告期多版本；每期独立原子提交。科目数、非加总科目、审计意见口径、items 匹配见 `docs/行为-财报工具.md` |
-| `get_data_catalog` | 纯本地只读：汇总该公司已缓存报告期中出现过非空金额的科目 + 最早/最晚有效报告日；不联网不写缓存（惰性拉取语义下只反映已拉取的报告期） |
-| `get_company_profile` | 概况/分红/盈利预测，sections 可选 |
+| `get_financial_data` | 财报、报表信息、营收结构及计算指标；完整参数、默认清单、缓存与版本规则仅见`docs/行为-财报工具.md`；CLI为`get_financial_data_batch` |
+| `get_market_data_help` | 市场数据工具的能力、口径、边界及公司本地缓存帮助；详见架构§4 |
+| `get_company_profile` | 概况/IPO/年度分红/预测/历史十大股东；时间参数与市场范围见架构§5 |
 | `get_quote_chart` | 行情绘图（2026-10-19 由 market-data-chart MCP 并入）：K线（蜡烛+成交量副图+MA5/10/20/60 按当前周期算）/折线（field=OHLC 单字段）；events 事件标注、keypoints 高低点（仅折线，回撤阈值 0.30）、log_scale 含 0/负自动退回、红涨绿跌；PNG 落 `cache/_charts/` 只返回路径；数据复用 get_quote（不复制取数）；CLI `get_quote_chart_batch` 同契约 |
 
 market-data 核心原则：**字段为中心、来源可插拔**；**强制市场后缀代码**（`.SZ/.SH/.HK/.US/.BJ`，脚本按后缀路由、禁止按位数猜市场）；**行情单源无回退**（raw=新浪；hfq=A/港新浪+美股 iFinD，失败即失败不混源）；下载到缓存+返回元信息、缓存优先增量更新。
@@ -127,7 +127,7 @@ $env:PYTHONPATH = 'src'
 | `字段与数据源支持情况.md` | **上游客观能力** | 各源支持的市场/字段/参数/返回格式/单位/限制、实测记录；附件 `ifind财务报表科目.md` = iFinD 三表科目中文名与变量名对照表 | 任何决策 |
 | `docs/决策记录.md` | **变动历史** | 倒序日记（最新在最上面）：某日改了什么、之前什么样、为什么改、影响哪份文档 | 规则正文（只在原地维护） |
 
-**临时文档**：`docs/market-data调整方案稿-YYYY-MM-DD.md`——未完成步骤、待手册资料、待定事项。当前为[市场数据MCP调整方案（2026-10-23）](<docs/market-data调整方案稿-2026-10-23.md>)；仅涉及市场数据MCP，不调整公告MCP。每完成一步把结论并入架构设计、在决策记录加一条；全部完成即删除该方案稿。
+**临时文档**：`docs/market-data调整方案稿-YYYY-MM-DD.md`保存未完成步骤、待资料及待定事项。当前[剩余事项](<docs/market-data调整方案稿-2026-10-23.md>)仅保留尚未闭环部分；已实现行为已并入正式文档，不重复维护。全部完成即删除。
 
 公告侧文档：`docs/AH公告与互动问答改造方案.md`（公告侧唯一权威）、`PROJECT.md`（公告 CLI/MCP 契约）、`docs/公告阅读产品设计.md`（阅读策略与验收标准）。
 

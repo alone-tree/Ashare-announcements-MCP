@@ -104,6 +104,7 @@ A_SHARE_ITEM_NAMES: dict[str, list[str]] = {
     "MONETARYFUNDS": ["货币资金"],
     "TRADE_FINASSET_NOTFVTPL": ["交易性金融资产"],
     "NOTE_RECE": ["应收票据"],
+    "NOTE_ACCOUNTS_RECE": ["应收票据及应收账款", "应收票据及账款"],
     "ACCOUNTS_RECE": ["应收账款"],
     "FINANCE_RECE": ["应收款项融资"],
     "PREPAYMENT": ["预付款项"],
@@ -116,6 +117,7 @@ A_SHARE_ITEM_NAMES: dict[str, list[str]] = {
     "GOODWILL": ["商誉"],
     "SHORT_LOAN": ["短期借款"],
     "NOTE_PAYABLE": ["应付票据"],
+    "NOTE_ACCOUNTS_PAYABLE": ["应付票据及应付账款", "应付票据及账款"],
     "ACCOUNTS_PAYABLE": ["应付账款"],
     "CONTRACT_LIAB": ["合同负债"],
     "CAPITAL_RESERVE": ["资本公积"],
@@ -191,6 +193,7 @@ A_SHARE_ITEM_NAMES: dict[str, list[str]] = {
     "CASH_DEPOSIT_PBC": ["现金及存放中央银行款项", "货币资金"],
     # ---- 现金流量表（主表 + 补充资料）----
     "NETCASH_OPERATE": ["经营活动产生的现金流量净额", "经营现金流净额"],
+    "TOTAL_OPERATE_INFLOW": ["经营活动现金流入小计", "经营活动现金流入"],
     "NETCASH_INVEST": ["投资活动产生的现金流量净额", "投资现金流净额"],
     "NETCASH_FINANCE": ["筹资活动产生的现金流量净额", "筹资现金流净额"],
     "SALES_SERVICES": ["销售商品、提供劳务收到的现金"],

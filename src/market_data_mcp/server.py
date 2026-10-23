@@ -101,7 +101,7 @@ def _render_financial_markdown(result: dict) -> dict:
         srows = [row for row in rows if row.get("statement") == statement]
         if not srows:
             continue
-        value_basis = "point_in_time" if statement == "balance" else result.get("amount_basis")
+        value_basis = "point_in_time" if statement == "balance" else "metadata" if statement == "meta" else result.get("amount_basis")
         title = _FINANCIAL_TITLES.get(statement, statement)
         if include_versions:
             md = [

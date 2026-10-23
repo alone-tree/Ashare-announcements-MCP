@@ -6,7 +6,7 @@
 >
 > **子文档**：[`docs/行为-财报工具.md`](行为-财报工具.md)（财报工具的完整行为细则）。图表按 `AGENTS.md` §8 的约定直接内联在正文中。
 >
-> **2026-10-23调整目标**见[市场数据MCP调整方案](<market-data调整方案稿-2026-10-23.md>)。本文件暂保留调整前基线，新分层、来源及命名按实施进度并入，不将方案写成已实现。
+> 本轮已实现行为在本文件及财报子文档维护；待资料与后置事项见[调整方案剩余事项](<market-data调整方案稿-2026-10-23.md>)。
 >
 > 状态标注：✅ 已定稿　⚠️ 有限　❌ 不做　❓ 待决
 > 对应仓库：Ashare-announcements-MCP（与公告 MCP 同仓库，独立包 `market_data_mcp`）。
@@ -20,7 +20,7 @@
 |          | 公告 MCP（已有）          | market-data MCP（本设计）                                 |
 | -------- | ------------------------- | --------------------------------------------------------- |
 | 数据类型 | 公告/提交文档（非结构化） | 行情/财报/指标/概况（结构化）                             |
-| 数据源   | 东财公告接口 + SEC EDGAR  | 行情新浪单源；财报 A股/北交所=iFinD、港美=东财（见 §3）；股本 iFinD（见 1.4） |
+| 数据源   | 东财公告接口 + SEC EDGAR  | 行情来源见§1.4；财报行为仅见§3指向的子文档；公司信息见§5 |
 | 消费方式 | 查询/阅读/搜索            | 默认直接返回数据；超长自动导出；指定路径导出              |
 
 个人投资工具。不做汇总文档工具（汇总由用户自己的脚本做）、不做实时行情、不做分钟级数据、不做跨市场科目映射。
@@ -31,11 +31,11 @@
 | --- | --- | --- |
 | `get_quote` | code, vars, adjust, start_date, end_date, period, export_path | **字段级 json**（9 个字段，见 §1.5） |
 | `get_quote_chart` | code, adjust, start_date, end_date, period, log_scale, field, events, keypoints, drawdown_threshold | 不写缓存；取数复用 `get_quote`，PNG 落 `cache/_charts/` |
-| `get_financial_statements` | code, amount_basis, statements, items, periods, include_versions, force_refresh, export_path | **五文件同批**：metadata / balance / income / cash_flow / meta |
-| `get_data_catalog` | code, statements | 只读上述财报缓存，不增加文件 |
-| `get_company_profile` | code, sections | 按 section 分文件（profile/ipo/dividends/forecast/holders，见 §5.1） |
+| `get_financial_data` | 完整参数及默认清单见财报子文档 | 独立报表与补充模块，见§3 |
+| `get_market_data_help` | tool, market, code, topic | 本地只读能力及缓存查询，见§4 |
+| `get_company_profile` | code, sections, periods, years, as_of_date, force_refresh | section及时间范围独立缓存，见§5 |
 
-`get_financial_ratios` 尚未实现，工具面不提供。
+不单设财务比率工具；计算指标归属财报工具。旧工具名不注册为兼容别名。
 
 缓存只存行情 raw+hfq 两份（前复权现算不落盘）+ 股本 shares（市值现算不落盘，见 2.4）。
 
@@ -56,8 +56,8 @@
 | 数据源 | 角色（参与什么） | 不参与什么 | 代理策略 |
 | ------ | ---------------- | ---------- | -------- |
 | 新浪（AKShare） | **raw 高开低收单源（A/港/美/北交所）**；**A/港股 hfq close 单源** | 美股 hfq（无此能力）、美股 amount（无此能力） | 清代理直连 |
-| iFinD | **股本**（全市场）+ **美股 hfq close**（近 5 年 THS_DS `107,OC` + 更早 THS_BD `107,OC` 单点补全）+ **美股 amount**（近 5 年 THS_DS `amt,OC` + 更早 THS_BD 单点逐日补全，2026-08-09 用户提供官方公式） | 行情 raw/量额（A/港） | 国内服务，清代理直连 |
-| 东财（AKShare） | 财报/指标/概况（datacenter） | 行情 raw/hfq、美股 amount（2026-08-09 废弃） | 清代理直连 |
+| iFinD | 股本、美股后复权收盘与成交额；公司信息见§5；营收结构见财报子文档 | 行情raw/量额（A/港） | 国内服务，清代理直连 |
+| 东财（AKShare） | 财报见子文档；尚未切换的港股公司信息见§5 | 行情raw/hfq、美股amount | 清代理直连 |
 | EODHD | ~~价格链~~（已退出行情链，保留为知识） | — | 外网走代理 17891 |
 | 腾讯（AKShare） | ~~OHLC 价格回退~~（已退出行情链，保留为知识） | 量额（单位不稳定） | 清代理直连 |
 | yfinance | ~~仅港美股股本回退~~（不接入，保留为知识） | 行情 | **必须走代理 17891**（直连被 Yahoo 限流） |
@@ -72,8 +72,8 @@
 | hfq 价格 | **新浪（仅存 close，无回退）** | **新浪（仅存 close，无回退）** | **iFinD THS_DS `107,OC`=分红再投（近 5 年 + 更早单点 THS_BD 补全，全程分红再投）** |
 | 股本 | iFinD（§7）；**流通股本=新浪 outstanding_share 维持不切**（2026-10-22 用户拍板：新浪全历史逐日够用，不消耗同花顺额度） | iFinD（§7） | iFinD（§7） |
 | 市值 | 计算法：股本 × 不复权收盘（见 2.4），不做直接获取 | 同左 | 同左 |
-| 财报三表 + meta | **iFinD（A股/北交所，见 §3）** | 东财 datacenter | 东财 datacenter |
-| 财务指标/概况 | 东财 datacenter | 东财 | 东财（缺失类别 → SEC 公告） |
+| 财报与计算指标 | 统一见财报子文档 | 同左 | 同左 |
+| 公司信息 | 统一见§5 | 同左 | 同左 |
 
 **图1 字段与数据源归属：每个字段只在链上的一个源取数**
 
@@ -81,9 +81,10 @@
 flowchart LR
     Q["行情字段"] -->|"raw OHLCV · A/港 amount · A/港 hfq"| S["新浪"]
     Q -->|"美股 amount/hfq · 股本"| I["iFinD"]
-    F["财报字段"] -->|"A股/北交所三表"| I
-    F -->|"港美三表"| E["东财 datacenter"]
-    M["公司信息"] -->|"profile/ipo/dividends/forecast"| N["巨潮 · 同花顺 · 经济通 · 东财<br/>按 section 分主源"]
+    F["财报原值"] --> E["东财 datacenter"]
+    F -->|"营收结构"| I
+    M["公司信息"] -->|"A/北交所"| I
+    M -->|"港美保留已有能力"| N["既有市场通道"]
 ```
 
 **字段链原则**：链上任一源拿到即填入缓存，全链失败才标注该字段缺失；某字段不稳定只调该字段的链，不动其他字段。选源时先看字段再谈数据源——同一个工具里不同字段可以来自不同源（例如行情 raw 来自新浪、美股成交额来自 iFinD），但不允许同一字段出现两个源的值。
@@ -94,7 +95,7 @@ flowchart LR
 - **行情缓存为字段级独立 json（2026-08-09 用户拍板）**：高开低收原值 open/high/low/close、后复权 close_hfq（仅 close）、成交额 amount、成交量 volume、总股本 total_shares、流通股本 floating_shares——9 个文件；均为静态历史永不过期。**前复权随分红变动，现算不落盘**。
 - **市值现算不落盘**（close.json × 股本字段，逐日前置填充相乘）；股本低频变化，total_shares/floating_shares 月频/日频并存，同源不冲突。
 - **行情首次全量、之后增量**：缓存实际范围已覆盖请求范围时直接复用；终点未覆盖但距最近一次成功请求不足固定 10 分钟时短期复用，满 10 分钟再次请求上游。程序不判断盘中盘后、交易所开收盘时间、周末或节假日；上游尚未更新时缓存终点只停在实际拿到的最后日期，不把上游延迟放大到下一自然日。10 分钟为程序硬编码，不增加工具参数。
-- **财报缓存与新鲜期**：惰性拉取（2026-10-21 已实现）。新鲜期表示「有没有新披露的报告期」而非「距上次刷新多久」：已拉到的报告期永不自动重拉；报告期由 `periods` 指定（季度末），为空时以探针最新期往前取5期；缺失期先用 `ths_regular_report_latest_rp_stock` 探最新报告期（1点/代码，结果缓存1天，`force_refresh` 跳过缓存；探针失败不阻塞，以缓存已有最新期顶替），只拉不晚于最新期的缺失期。细则见 [`docs/行为-财报工具.md`](行为-财报工具.md) §2/§3，此处不重复。
+- 财报缓存、刷新与失败语义仅在[财报子文档](行为-财报工具.md)维护。
 - 周/月线由日线现算，不落盘（聚合规则：open=周期首日、high=周期最高、low=周期最低、close=周期末日、volume/amount=周期累计；weekly 用 W-FRI、monthly 用 ME）。
 
 ### 1.6 输入输出规范
@@ -139,23 +140,22 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A["MCP 入口 server.py<br/>5 工具 · 严格参数模式"] --> B["CLI 入口 cli.py<br/>stdin JSON → stdout JSON"]
-    A --> C["调度层 service.py<br/>参数校验 · 市场路由 · 筛选 · 派生"]
-    B --> C
-    C --> D["取数层 providers/<br/>新浪 · iFinD · 东财 · SEC"]
-    C --> E["缓存层 cache / financial_cache<br/>JSON 文件 + 版本链"]
-    D --> E
-    C --> F["审计 logs/requests.jsonl<br/>每次上游请求一条"]
-    E --> G["输出<br/>markdown 矩阵 · 长表 · CSV · PNG"]
+    A["MCP入口 server.py"] --> C["数据域调度<br/>校验、依赖、检查、更新、汇总"]
+    B["CLI入口 cli.py"] --> C
+    C --> D["取数与规范化 providers<br/>返回原始业务批次"]
+    D --> C
+    C --> E["缓存读写<br/>cache / data_store / financial_cache版本合并"]
+    E --> C
+    C --> G["本地计算与输出<br/>Markdown / CSV / PNG"]
 ```
 
-图中入口=`server.py`/`cli.py`、调度层=`service.py`、取数层=`providers/`、缓存层=`cache.py` 与 `financial_cache.py`。行情另有一个字段聚合器 `aggregator.py`（对应下面三层结构里的中层），财报不走它。每次真正打到上游的请求都往 `logs/requests.jsonl` 追加一条审计记录，只用于评估源可靠性，不参与业务判断。
+行情由`service.py`与`aggregator.py`调度，财报由`financial_service.py`调度，公司信息由`company_service.py`与`company_ifind_service.py`调度。取数不直接写业务缓存；只读、计算和help不联网。每次上游请求的审计日志不参与业务判断。
 
 **三层结构，像拼积木一样组合**：
 
 ```
 请求模块（叶子）：入参=标准代码+日期范围+档位参数
-                 动作=请求源 + 把该档返回的全部列写入缓存（meta 带 source）→ 返回元信息
+                 动作=请求源、规范化为业务批次，返回原值及来源，不写业务缓存
 字段聚合器（中层）：入参=字段名+代码+日期范围
                  动作=读缓存 → 覆盖够直接返回 → 该字段缺 → 按该字段独立源链调请求模块补拉 → 写缓存 → 返回
 工具（顶层）：组装多个字段聚合器（get_quote = 除权OHLC + 后复权OHLC + volume + amount + 市值…）
@@ -163,10 +163,10 @@ flowchart TD
 
 - **请求模块粒度 = 源 × 市场 × 复权档**：如 `新浪×A/B股×raw`、`新浪×港股×raw`、`iFinD×美股×hfq`。**不是按单字段切**——各源一次请求物理上返回整组（新浪A股=OHLC+量额+outstanding_share+换手率；新浪港股=OHLC+量额；新浪美股=OHLC+量；iFinD THS_DS=指标序列），按字段切会导致同一请求被多个模块重复执行。
 - **代码格式转换放统一适配层（2026-08-08 用户拍板）**：入口只认标准代码（300476.SZ / 00700.HK / AAPL.US），路由层做"后缀→市场→各源格式转换表"（新浪 sz300476/00700、iFinD 300476.SZ/0700.HK/AAPL.O）；请求模块只接收已转换好的源格式字符串，内部不再做任何格式处理。新增数据源 = 写请求模块 + 转换表加一行。
-- **拉到什么写什么（2026-08-09 用户拍板，取代"宽写窄读"）**：请求模块一次上游请求返回整组数据，**按字段拆分写入各自独立 json**（新浪A股一次写 7 字段含 floating_shares、美股 5 字段无 amount、股本 2 字段）；字段层按字段名从缓存消费，避免重复请求。
+- 行情源模块一次返回整组字段，由`aggregator.commit_quote_batch`按字段提交；同次工具调用复用同组批次，不重复请求。同组成功字段独立落盘。
 - **字段链按字段独立定义（2026-08-09 用户拍板：每字段唯一源，先不做来源回退）**：不同源数据可能不完全一致，混放需额外处理，且回退=重复请求浪费——**每个字段 × 市场只有一个最合适的数据源**（美股 amount=ifind、美股 OHLC=新浪、股本=ifind 等，见 1.4/2.3），单一来源不够再讨论增加。字段聚合器按字段调对应请求模块。
-- **缺字段补拉语义（决策 A，2026-08-08 用户拍板）**：字段缺数据时，字段链总是从第一源开始重试，**接受对刚失败源的重复请求**（东财限流是间歇性的，重试可能撞上恢复窗口）；**不记录失败状态**（维持"失败=缓存未更新，提示重试"的简单策略）。
-- **模块接口契约（决策 A，2026-08-08 用户拍板；2026-08-09 字段级后更新）**：全部**结构化返回，不抛异常**——请求模块内部 try/except，统一返回 `{ok, source, fields, error, notes}`（fields 为本次更新的字段名 → date_range 映射）；字段聚合器据 ok 与 fields 确认字段已更新（唯一源，无链式回退）。失败原因可读（如"东方财富请求超时"），便于 notes 记录与测试。
+- 缺字段只向指定源补拉；同次请求不因同组其他字段再次调用失败源。失败不冒充成功检查，不推进刷新时间。
+- 模块契约按数据域定义。行情源返回`ok/source/data/fields/error/notes`，data为尚未写入的字段批次，调度提交后重新读取确认；财报与公司信息源返回规范化原值，异常由各自调度层按独立批次隔离，不能把失败批次写成空值。
 - **运行日志（审计，2026-08-08 用户拍板）**：**每次对上游的请求都记一条日志**——时间、请求什么源的什么数据（市场/代码/接口/字段/档位）、运行是否成功、报错信息、耗时。目的：评估数据源可靠性。日志是 append-only 审计，**不参与任何决策逻辑**。落点：`logs/requests.jsonl`（JSON Lines，一行一条；建议字段：ts/source/market/code/api/fields/adjust/start/end/ok/elapsed/error）。
 - **缓存覆盖判定（2026-08-25 简化定稿）**：实际数据满足请求范围即复用；仅终点不足时按固定10分钟窗口决定复用还是重拉。完整规则见 §1.5。旧探测状态机 `verified_until/verified_at/last_probe` 与 `routing.is_market_closed` 已废弃。
 - **派生字段无请求模块**：市值 = 字段聚合器读缓存（股本 + raw close）现算，不落盘。
@@ -266,66 +266,46 @@ flowchart TD
 - `start_date` 特殊值 `"all"`（§1.6）为 chart 的全量需求而增加，语义与其他工具一致。
 - 视觉与参数口径的历史决策见 `docs/chart-MCP绘图工具设计.md`（已归档）。
 
-## 3. 财报获取工具（get_financial_statements）
+## 3. 财报工具 `get_financial_data`
 
-**完整行为细则见子文档：[`docs/行为-财报工具.md`](行为-财报工具.md)**（缓存五文件结构、惰性拉取流程、版本与修订、single 差分、items 匹配、返回形态、边界）。本节只列要点，不重复细则。
+参数、默认清单、数据源、计算公式、缓存、版本与导出仅在[财报行为细则](行为-财报工具.md)维护。
 
-- **数据源**：A股/北交所=iFinD `THS_BD`（合并报表，口径100）；港股/美股=东财 datacenter（无 meta 表）。
-- **科目基准**：注册表330项（构成与逐项清单见 [`ifind财务报表科目.md`](../ifind财务报表科目.md)），利润表口径不含报表信息行。
-- **只做一般企业模板与合并报表**；金融行业专用科目空值按不适用处理。
-- **主干流程**：缓存判定 → 无缓存先建档（空框架、不联网）→ 探最新报告期（拿锚点）→ 确定所需期（`periods` 指定，或锚点往前5期）→ 只拉已披露的缺失期 → 每期版本合并 + 独立原子提交 → 按 `amount_basis` 输出。逐步细节见子文档。
-- **配套工具** `get_data_catalog`：纯本地只读，反映已拉取的报告期。
+## 4. 帮助工具 `get_market_data_help`
 
-## 4. 衍生数据获取工具 `get_financial_ratios`
+参数为`tool`、`market`、`code`、`topic`，均可省略。topic支持tools/items/ranges/refresh/cache/export。能力取自运行定义与计算依赖，缓存情况从本地元信息读取；查询不联网、不登录、不创建缓存目录，不读取或展示凭据。
 
-### 4.1 定位（决策）
+指定code时返回已缓存科目、有效日期范围、已检查空值统计及成功检查时间；未缓存不等于上游不支持。行情、财报、公司信息均可查询。历史限制未知时明确标注，不把目标覆盖当作已验证覆盖。
 
-❌ **当前未实现**，工具面不提供。命名依据：行业标准把原始三表叫 Statements、衍生比率叫 Ratios，不叫 indicators（易误解为技术指标 MACD/RSI）。
-
-本节保留调整前命名记录；新的工具归属与本地计算目标见[调整方案§2.4](<market-data调整方案稿-2026-10-23.md#24-对外工具及内部命名>)及§4，实施后再更新本节。客观可得性见 `字段与数据源支持情况.md` §4（港股仅最新 TTM ⚠️）。
+CLI帮助请求使用`{"tool":"get_market_data_help","arguments":{"tool":"get_financial_data","topic":"items"}}`；arguments内参数与MCP相同，避免外层分发tool与查询参数tool冲突。
 
 ## 5. 公司信息获取工具 `get_company_profile`
 
-### 5.1 定位（决策，2026-08-09 讨论定稿）
+### 5.1 来源与内容
 
-公司概况/IPO/分红/盈利预测/股东（首版五类），**按 section 分缓存文件**（profile.json / ipo.json / dividends.json / forecast.json / holders.json），`sections` 可选（空=全部）。**主营构成归属财报工具**（get_financial_statements 扩展：利润表科目的业务线细分，同报告期同金额体系可交叉验证），当前不实现、之后完善。回购是独立全市场接口（stock_repurchase_em 全市场 5455 条按代码过滤），不是分红子项，首版不纳入。
+A股及北交所的profile/ipo/dividends/forecast/holders使用已验证的iFinD指标，指标原式及证据见支持情况§7。历史十大股东按排名1至10逐批查询。年度分红保留现金分红、含回购合计，两者差额现算为回购，不输出逐笔明细。
 
-### 5.2 多源合并策略（决策 A，2026-08-09 用户拍板）
+港股暂保留既有通道。profile合并东财公司与证券资料，dividends用东财，forecast用经济通；ipo、holders返回不可用提示。美股仍返回SEC公告提示。未验证的市场指标不套用A股写法，不自动换源。营收结构归财报工具。
 
-**主源优先，缺的信息从其他渠道补充**——与行情"每字段唯一数据源"同原则：每个字段只有一个来源值，主源没有该字段时才从补充源取；同一字段绝不出现两个来源的值。
+### 5.2 参数与时间范围
 
-**回退 vs 补全（2026-08-09 用户澄清）**：**无失败回退**——所有 section 主源失败即结构化报错（可重试），不做第二来源顶替（A 股尤其如此，降低复杂度）；**补充源只做字段补全**——主源成功但缺某字段时，从补充源取该字段，不参与失败回退。
+`code`必填；`sections`省略取全部，显式空列表报错；分类名为profile/ipo/dividends/forecast/holders。`force_refresh`默认false。
 
-| section | 市场 | 主源 | 补充源（仅字段补全，不参与失败回退） |
-|---|---|---|---|
-| profile | A股 | 巨潮 stock_profile_cninfo（26 字段）——**单一来源** | — |
-| | 港股 | 东财 stock_hk_company_profile_em（17 字段）**+ stock_hk_security_profile_em（14 字段）合并字段并集**（ISIN/每手股数/沪深港通标识在证券接口，两接口字段互补无重叠） | — |
-| | 美股 | ❌ 无结构化 → 返回"用公告 MCP 查 SEC"提示 | — |
-| ipo | A股 | 巨潮 stock_ipo_summary_cninfo（宽表 15 字段） | 新浪 stock_ipo_info（key-value 17 项） |
-| | 港股/美股 | ❌ → 公告提示 | — |
-| dividends | A股 | 东财 stock_fhps_detail_em（18期×19字段最全，含股息率/EPS/总股本） | 同花顺 stock_fhps_detail_ths（独有股利支付率/税前分红率/不分配记录）；巨潮（年度/中期类型）；新浪（精简）——仅取主源缺失字段 |
-| | 港股 | 东财 stock_hk_dividend_payout_em（27期） | — |
-| | 美股 | ❌ → 公告提示 | — |
-| forecast | A股 | 东财 stock_profit_forecast_em（一致预期+评级分布，全市场拉取后按代码筛） | 同花顺 stock_profit_forecast_ths（min/max/行业均值） |
-| | 港股 | 经济通 stock_hk_profit_forecast_et（分券商明细） | — |
-| | 美股 | ❌ | — |
-| holders | A股 | 新浪 stock_main_stock_holder（历史序列，多期叠加） | 东财 stock_gdfx_free_top_10_em（实测 KeyError 'sdltgd'，格式待验证） |
-| | 港股/美股 | ❌ → 公告提示 | — |
+| section | 时间参数 |
+|---|---|
+| profile、ipo | 当前概况与IPO资料 |
+| holders | periods为明确报告截止日列表，省略取最新一期 |
+| forecast | years为必填年份整数列表；as_of_date可指定YYYY-MM-DD，省略按请求日取最新可用快照 |
+| dividends | years为年度列表，省略取本年及之前共5年 |
 
-### 5.3 参数
+预测返回查询数据日期；上游未给实际更新日时明确未披露，不能将查询日期称为实际上游更新日。缺少years只令forecast失败，其余独立section继续。
 
-`code`（必填）、`sections[]`（profile/ipo/dividends/forecast/holders，空=全部）、`force_refresh`（默认 false，忽略 30 天新鲜期强制联网刷新）。
+### 5.3 缓存、刷新及返回
 
-### 5.4 缓存与刷新
+A/北交所新缓存位于`cache/{code}/company_data/{section}.json`，schema_version=2，按报告期、年度及预测数据日期形成scopes。每个独立时间范围成功检查后缓存30天；成功空值也复用，未检查的新范围立即请求；force_refresh重查请求范围。
 
-- 每个 section 一个 JSON 缓存文件，**快照性质**（meta 含 updated_at/source/market），无行情式日期段覆盖概念。
-- **30 天新鲜期**：缓存 30 天内直接返回，超过 30 天自动联网刷新；`force_refresh=true` 忽略新鲜期强制刷新。不引入分层 TTL。
-- 返回：`{ok, code, sections: {...}, notes}`——每个 section 返回其对象/列表；美股 section 返回 `{"available": false, "reason": "美股无结构化公司信息，请用公告 MCP 查询 SEC 提交"}`（不是错误）。
-- 港股 profile 返回两接口字段并集（公司 17 + 证券 14，去重）。
+旧A股股东缓存不可信，保留原文件但新通道不读取。港美保留原section缓存。失败不推进成功检查时间，已提交的其他section或时间范围不回滚。刷新失败可读旧值并标注stale；完全无可用结果返回失败，部分结果可用返回partial_success。
 
-### 5.5 数据可得性
-
-客观可得性见 `字段与数据源支持情况.md` §5。
+所有iFinD请求遵守§8；无可用结构化通道时返回available=false及原因。
 
 ## 6. 明确不做（边界）
 
@@ -368,3 +348,35 @@ flowchart TD
 ### 7.3 iFinD 股本接口能力
 
 接口/参数/限制的客观记录见 `字段与数据源支持情况.md` §7；已实测验证：AAPL 2010 至今 THS_BD 月频 139/139 点成功且与 THS_DS 无缝衔接；0700.HK 2004 早期抽样成功；600519 2015 全量 2818 交易日交叉验证一致。
+
+## 8. iFinD共用请求层
+
+所有实际SDK数据请求经`providers.ifind.request_ifind`。当前进程内用会话锁覆盖登录、请求及换号；不承诺跨进程共用会话。不额外发健康检查查询，不改写已确认的原始接口参数。
+
+```mermaid
+flowchart TD
+    A["一个SDK请求批次"] --> B["锁定会话<br/>优先当前成功账号，否则配置顺序"]
+    B --> C["复用会话或登录<br/>切换前退出旧会话"]
+    C --> D{"登录成功?"}
+    D -->|是| E["执行原始请求"]
+    E --> F{"接口成功且结构有效?"}
+    F -->|是，含正常空值| G["返回原响应<br/>保留成功账号"]
+    F -->|否| H{"错误分类"}
+    H -->|会话丢失且尚未修复| I["同账号重登一次<br/>重放原请求"]
+    I --> E
+    H -->|已知瞬时错误且未耗尽| J["0.5、2、5秒退避<br/>最多额外三次"]
+    J --> E
+    D -->|否| K["记录账号代号及脱敏错误"]
+    H -->|其他错误或耗尽| K
+    K --> L{"还有未尝试账号?"}
+    L -->|有| C
+    L -->|无| M["返回批次失败<br/>不写成业务空值"]
+    G --> N["释放会话锁"]
+    M --> N
+```
+
+每账号最多首发一次、三次瞬时重试及一次会话修复重放，各账号只尝试一轮，不循环切回。只有已验证的-205/request data error和会话失效提示进入对应重试分支；未知错误不猜错误码，记录失败并换配置中的下一账号。
+
+正常null、空串或无记录不为寻找非空值而换号；响应缺少约定字段属于结构失败。登录成功但取数失败同样换号。后续独立批次优先复用刚成功账号，不回滚或重跑此前已提交的业务批次。
+
+配置或SDK全局环境缺失直接报环境问题，不虚称所有账号数据查询失败。凭据仅从本地配置读取，错误只用账号代号并脱敏；SDK输出转stderr，不污染MCP/CLI的stdout。

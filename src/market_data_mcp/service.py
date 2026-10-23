@@ -746,6 +746,7 @@ def _export_financial_csv(path: str, rows: list[dict]) -> None:
         "statement",
         "item_name",
         "amount",
+        "unit",
         "source",
         "value_basis",
         "version_id",
@@ -757,6 +758,9 @@ def _export_financial_csv(path: str, rows: list[dict]) -> None:
         "change_summary",
         "derived_from_version_ids",
         "report_metadata",
+        "current_amount",
+        "previous_amount",
+        "note",
     ]
     serialised = []
     for row in rows:

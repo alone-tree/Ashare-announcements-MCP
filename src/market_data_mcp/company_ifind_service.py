@@ -42,9 +42,10 @@ def get_section(root, mc, section, periods, years, as_of_date, force):
                     periods=[scope] if section == "holders" else None,
                     years=[scope] if section in ("forecast", "dividends") else None,
                     as_of_date=as_of_date or date.today().isoformat())
-                cached = {"query": query, "data": value, "checked_at": datetime.now(timezone.utc).isoformat()}
-                payload["scopes"][key] = cached
-                data_store.write(root, code, "company_data", section, payload)
+                candidate = {"query": query, "data": value, "checked_at": datetime.now(timezone.utc).isoformat()}
+                updated = {**payload, "scopes": {**payload["scopes"], key: candidate}}
+                data_store.write(root, code, "company_data", section, updated)
+                payload, cached = updated, candidate
                 reused = False
         except Exception as exc:
             failures.append({"scope": scope, "reason": str(exc)})

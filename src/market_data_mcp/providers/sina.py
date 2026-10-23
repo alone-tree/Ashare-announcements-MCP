@@ -1,21 +1,8 @@
 # -*- coding: utf-8 -*-
-"""新浪行情请求模块（源 × 市场 × 档位 = sina × 各市场 × raw/hfq）。
+"""新浪整组行情取数与规范化，返回data字段批次，不直接写业务缓存。
 
-**拉到什么写什么（2026-08-09 用户拍板）**：一次上游请求返回整组数据，
-按字段拆分写入各自独立的 json（open/high/low/close/volume/amount/floating_shares），
-items 统一 `[{date, value, source}]`，同字段异 source 并存。
-- A/B 股/北交所：`ak.stock_zh_a_daily(symbol=sh600519/sz000001/bj920002, start_date, end_date, adjust="")`
-  返回列：date/open/high/low/close/volume/amount/outstanding_share/turnover
-  → 写 open/high/low/close/volume/amount/floating_shares（outstanding_share 归流通股本，source=sina）
-- 港股：`ak.stock_hk_daily(symbol=00700, adjust="")`，无 start/end → 拉全量本地过滤
-  返回列：date/open/high/low/close/volume/amount → 写 6 字段
-- 美股：`ak.stock_us_daily(symbol=AAPL, adjust="")`，无 start/end → 拉全量本地过滤
-  返回列：date/open/high/low/close/volume → 写 5 字段（无 amount）
-- hfq（A/B/北交所/港股）：只写 close_hfq（仅存 close；美股无此能力走 iFinD）
-
-模块契约（架构 §1.8）：**结构化返回，不抛异常**——
-`{ok, source, fields, error, notes}`，fields 为 {字段名: date_range}（本次更新的字段）。
-每次上游请求写审计日志 logs/requests.jsonl。
+A/B/北交所用stock_zh_a_daily，港美用对应daily；raw返回真实字段组，
+hfq仅保留close_hfq。港美全量拉取后本地按日期筛选。契约见架构§1.8。
 """
 
 from __future__ import annotations
@@ -28,7 +15,7 @@ from datetime import date as _date
 import akshare as ak
 import pandas as pd
 
-from market_data_mcp import audit, cache
+from market_data_mcp import audit
 from market_data_mcp.routing import MarketCode
 
 # 新浪为国内源：清代理直连（Hermes 注入的代理对数据接口致 ProxyError/SSLError）
@@ -99,30 +86,6 @@ def _filter_range(records: list[dict], start: str | None, end: str | None) -> li
     return out
 
 
-def _write_fields(root: str, code: str, market: str, fresh: list[dict],
-                  field_map: dict[str, str]) -> dict[str, dict | None]:
-    """把拉到的行拆分写入各字段 json，返回 {字段: date_range}。field_map: 目标字段 → 源列名。"""
-    updated: dict[str, dict | None] = {}
-    for field, src_col in field_map.items():
-        items = [{"date": r["date"], "value": r.get(src_col), "source": SOURCE}
-                 for r in fresh]
-        items = [x for x in items if x["value"] is not None or True]  # 保留 None 行（占位）
-        existing = cache.read_cache(root, code, field)
-        existing_items = existing["items"] if existing else None
-        merged = cache.merge_items(existing_items, items)
-        date_range = None
-        if merged:
-            date_range = {"start": merged[0]["date"], "end": merged[-1]["date"]}
-        cache.write_cache(
-            root, code, field,
-            meta={"code": code, "market": market, "field": field,
-                  "source": SOURCE, "date_range": date_range},
-            items=merged,
-        )
-        updated[field] = date_range
-    return updated
-
-
 def _fetch(
     root: str,
     mc: MarketCode,
@@ -130,7 +93,7 @@ def _fetch(
     end: str | None,
     adjust: str,
 ) -> dict:
-    """新浪行情请求（raw/hfq 共用）。raw 按字段宽写；hfq 只写 close_hfq。"""
+    """新浪行情请求（raw/hfq共用），返回尚未提交的字段批次。"""
     api_name, need_filter, raw_fields = _APIS[mc.market]
     if adjust == "hfq" and mc.market == "US":
         return {"ok": False, "source": SOURCE, "fields": {},
@@ -176,7 +139,7 @@ def fetch_raw(
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """请求新浪 raw：宽拉整组，按字段拆分写入 open/high/low/close/volume/amount/floating_shares。"""
+    """请求新浪raw整组字段，不写缓存。"""
     return _fetch(root, mc, start, end, adjust="")
 
 

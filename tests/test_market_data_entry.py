@@ -69,6 +69,9 @@ class TestServer:
         } <= set(financial_schema["properties"])
         assert "start_date" not in financial_schema["properties"]
         assert "report_types" not in financial_schema["properties"]
+        from market_data_mcp.market_help import TOOLS
+        for tool in tools:
+            assert set(TOOLS[tool.name]["parameters"]) == set(tool.parameters["properties"])
 
     def test_strict_args_rejected(self):
         import asyncio

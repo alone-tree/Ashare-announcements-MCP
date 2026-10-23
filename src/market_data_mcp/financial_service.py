@@ -73,6 +73,15 @@ def _match(rows, query, market):
     return matches
 
 
+def _item_statement(name):
+    matches = [statement for statement in ("balance", "income", "cash_flow") if name in DEFAULT_ITEMS[statement]]
+    if len(matches) == 1:
+        return matches[0]
+    if name in ("营业收入", "归母净利润"):
+        return "income"
+    return None
+
+
 def plan_financial_item(name):
     if name in RATIOS:
         return {"name": name, "kind": "ratio", "dependencies": list(RATIOS[name])}
@@ -82,13 +91,11 @@ def plan_financial_item(name):
             if not base or base in RATIOS or service._is_non_additive_item({"item_name": base}):
                 raise ValueError("增长率仅支持可加总金额科目")
             return {"name": name, "kind": kind, "dependencies": [base]}
-    return {"name": name, "kind": "raw", "dependencies": [name]}
+    return {"name": name, "kind": "raw", "dependencies": [name], "statement": _item_statement(name)}
 
 
 def merge_financial_requirements(plans, selected, all_items, market):
-    if all_items:
-        return set(selected) & {"balance", "income", "cash_flow"}
-    required = set()
+    required = set(selected) & {"balance", "income", "cash_flow"} if all_items else set()
     for plan in plans:
         for name in plan["dependencies"]:
             if name in SEGMENTS:
@@ -109,7 +116,17 @@ def merge_financial_requirements(plans, selected, all_items, market):
 
 def _identity(row):
     identity = service._period_identity(row)
-    return identity if identity and identity[1] is not None else None
+    if not identity or identity[1] is None:
+        return None
+    metadata = row.get("report_metadata") or {}
+    if metadata.get("START_DATE") and not str(metadata.get("REPORT") or ""):
+        return ("start:" + str(metadata["START_DATE"])[:10], identity[1])
+    return identity
+
+
+def _cycle_year(cycle):
+    text = cycle.split(":", 1)[-1]
+    return int(text[:4]) if text[:4].isdigit() else None
 
 
 def _single(row, all_rows):
@@ -143,8 +160,21 @@ def _numeric(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def _number_for_calculation(value):
+    if _numeric(value):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = float(value)
+            return parsed if math.isfinite(parsed) else None
+        except ValueError:
+            pass
+    return None
+
+
 def _one(rows, name, market, period, basis):
-    found = _match([r for r in rows if r["report_date"] == period], name, market)
+    statement = _item_statement(name)
+    found = _match([r for r in rows if r["report_date"] == period and (not statement or r["statement"] == statement)], name, market)
     if not found:
         raise ValueError("科目未返回或该期未披露")
     row = found[0]
@@ -162,15 +192,10 @@ def _compare_period(row, rows, kind):
         candidates = [r for r in candidates if _identity(r) == (cycle, ordinal - 1)]
     else:
         target_ordinal = ordinal if kind == "yoy" else 4
-        # 年度身份必须来自上游；按已观察的相邻财年选取同季度，缺年度时不跨年跳算。
+        # 年度与季度身份取自上游；缺少相邻财年时不跳到更早年度。
         candidates = [r for r in candidates if _identity(r) and _identity(r)[1] == target_ordinal
-                      and _identity(r)[0] != cycle]
-        candidates.sort(key=lambda r: r["report_date"], reverse=True)
-        if candidates:
-            from datetime import date
-            days = (date.fromisoformat(row["report_date"]) - date.fromisoformat(candidates[0]["report_date"])).days
-            if not (300 <= days <= 430 if kind == "yoy" else 45 <= days <= 140):
-                raise ValueError("未找到连续的上年同期或上一季度")
+                      and _cycle_year(cycle) is not None
+                      and _cycle_year(_identity(r)[0]) == _cycle_year(cycle) - 1]
     if not candidates:
         raise ValueError("缺少比较期")
     return max(candidates, key=lambda r: r["report_date"])
@@ -183,7 +208,8 @@ def evaluate_financial_items(plans, periods, rows, market, basis, include_versio
         for period in periods:
             try:
                 if plan["kind"] == "raw":
-                    found = _match([r for r in rows if r["report_date"] == period], name, market)
+                    found = _match([r for r in rows if r["report_date"] == period
+                                    and (not plan.get("statement") or r["statement"] == plan["statement"])], name, market)
                     if not found:
                         raise ValueError("科目未返回或该期未披露")
                     for row in found:
@@ -268,9 +294,13 @@ def _segment_results(root, mc, periods, names, force, minimal, notes):
                     if not anchor or period > anchor:
                         raise ValueError("尚未确认该报告期已披露")
                     records = company_ifind.segments(root, mc, period, dimension)
-                    cached = {"rows": records, "checked_at": _now()}
-                    payload["periods"][period] = cached
-                    data_store.write(root, code, DOMAIN, module, payload)
+                    candidate = {"rows": records, "checked_at": _now()}
+                    updated = {**payload, "periods": {**payload["periods"], period: candidate}}
+                    data_store.write(root, code, DOMAIN, module, updated)
+                    payload, cached = updated, candidate
+            except Exception as exc:
+                failed.append({"item": name, "report_date": period, "reason": str(exc)})
+            if cached:
                 records = cached["rows"][:1] if minimal else cached["rows"]
                 for record in records:
                     item = {"report_date": period, "dimension": name, "value_basis": "cumulative", "source": "ifind", **record}
@@ -278,8 +308,6 @@ def _segment_results(root, mc, periods, names, force, minimal, notes):
                         item.pop("gross_profit", None)
                         item.pop("rank", None)
                     output.append(item)
-            except Exception as exc:
-                failed.append({"item": name, "report_date": period, "reason": str(exc)})
     return output, failed
 
 
@@ -297,12 +325,14 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     code = f"{mc.code}.{mc.suffix}"
     selected = list(dict.fromkeys(statements or STATEMENTS))
     all_items = items is not None and "ALL_ITEMS" in items
-    if all_items and len(items) != 1:
-        raise ValueError("ALL_ITEMS须单独使用")
     names = [n for s in selected for n in DEFAULT_ITEMS[s]] if items is None else list(dict.fromkeys(items))
     segment_names = [n for n in SEGMENTS if "segments" in selected] if all_items else [n for n in names if n in SEGMENTS]
     meta_names = list(META_KEYS) if all_items and "meta" in selected else [n for n in names if n in META_KEYS]
-    raw_names = [] if all_items else [n for n in names if n not in SEGMENTS and n not in META_KEYS]
+    if statements is not None and "segments" not in selected:
+        segment_names = []
+    if statements is not None and "meta" not in selected:
+        meta_names = []
+    raw_names = [n for n in names if n != "ALL_ITEMS" and n not in SEGMENTS and n not in META_KEYS]
     plans, failed = [], []
     for name in raw_names:
         try:
@@ -310,6 +340,8 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
         except ValueError as exc:
             failed.append({"item": name, "reason": str(exc)})
     required = merge_financial_requirements(plans, selected, all_items, mc.market)
+    if segment_names and items is not None:
+        required.add("income")  # 营收占比依赖同报告期累计营业总收入。
     if meta_names:
         required.add("income")
     if not required and periods is None:
@@ -350,6 +382,14 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
         output, item_failures = evaluate_financial_items(plans, requested, latest_rows if basis == "single" else rows,
                                                        mc.market, basis, include_versions)
         failed.extend(item_failures)
+    if all_items and plans:
+        extra, item_failures = evaluate_financial_items(plans, requested, latest_rows, mc.market, basis)
+        output.extend(extra)
+        failed.extend(item_failures)
+    if statements is not None:
+        outside = [r for r in output if r["statement"] not in selected]
+        output = [r for r in output if r["statement"] in selected]
+        failed.extend({"item": r.get("item_name"), "report_date": r["report_date"], "reason": "不在所选statements输出范围"} for r in outside)
     # 读取真实报告元信息；缺项保留null，不把审计意见与内控意见混为一项。
     for period in requested:
         period_rows = [r for r in latest_rows if r["report_date"] == period]
@@ -362,7 +402,7 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     segments, segment_failures = _segment_results(root, mc, requested, segment_names, force, items is None, notes)
     if items is not None:
         for segment in segments:
-            income, gross = segment.get("income"), segment.get("gross_profit")
+            income, gross = _number_for_calculation(segment.get("income")), _number_for_calculation(segment.get("gross_profit"))
             segment["gross_margin"] = gross / income if _numeric(gross) and _numeric(income) and income != 0 else None
             try:
                 total = _one(latest_rows, "营业总收入", mc.market, segment["report_date"], "cumulative")
@@ -373,29 +413,48 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     failed.extend(segment_failures)
     if segments and basis == "single":
         notes.append("营收结构跳过单季差分，返回累计原值")
+    if any(plan["kind"] == "qoq" for plan in plans):
+        notes.append("环比增长率始终按单季度金额计算")
     if include_versions:
         notes.append("派生指标仅使用当前累计版本；历史版本仅用于原始报表审计")
+    for row in output:
+        row.setdefault("unit", "text" if row["statement"] == "meta" else "原币基础单位")
     output = service._localize_financial_rows(output, mc.market)
     successful = any(r.get("amount") is not None for r in output) or any(r.get("name") not in (None, "") for r in segments)
     failures = failed + refresh_errors
     result = {"ok": successful, "code": code, "market": mc.market,
               "statements": list(dict.fromkeys([r["statement"] for r in output] + (["segments"] if segments else []))),
               "amount_basis": basis, "periods": requested, "include_versions": include_versions,
+              "date_range": {"start": min(requested), "end": max(requested)},
               "status": "partial_success" if successful and failures else "success" if successful else "failed",
               "stale": bool(refresh_errors), "failed_items": failures, "notes": notes,
+              "source": "eastmoney,ifind" if segments else "eastmoney",
+              "units": {"amount": "原币基础单位，币种见report_metadata", "ratio": "比值；0.25表示25%"},
+              "report_metadata": {p: next((r.get("report_metadata", {}) for r in latest_rows if r["report_date"] == p), {}) for p in requested},
+              "calculation_dependencies": [{"item": r["item_name"], "report_date": r["report_date"], "version_ids": r["derived_from_version_ids"]}
+                                           for r in output if r.get("derived_from_version_ids")],
               "rows": output, "segments": segments}
     if sec:
         result["filings"] = sec["data"]
     if export_path or len(output) + len(segments) > 200:
         target = Path(export_path) if export_path else Path(root) / "cache" / "_auto_export" / f"{code}_financial_{basis}.csv"
-        service._export_financial_csv(str(target), output)
-        result.update(path=str(target.resolve()), paths=[str(target.resolve())], total_items=len(output),
-                      auto_exported=not bool(export_path))
-        result.pop("rows")
+        result.update(paths=[], total_items=len(output), auto_exported=not bool(export_path))
+        try:
+            service._export_financial_csv(str(target), output)
+            result["path"] = str(target.resolve())
+            result["paths"].append(str(target.resolve()))
+            result.pop("rows")
+        except (OSError, ValueError) as exc:
+            result["failed_items"].append({"export": str(target), "reason": str(exc)})
+            result["status"] = "partial_success" if successful else "failed"
         if segments:
             segment_path = target.with_name(target.stem + "_segments.csv")
             fields = list(dict.fromkeys(k for row in segments for k in row))
-            service._export_csv(str(segment_path), segments, fields)
-            result["paths"].append(str(segment_path.resolve()))
-            result.pop("segments")
+            try:
+                service._export_csv(str(segment_path), segments, fields)
+                result["paths"].append(str(segment_path.resolve()))
+                result.pop("segments")
+            except (OSError, ValueError) as exc:
+                result["failed_items"].append({"export": str(segment_path), "reason": str(exc)})
+                result["status"] = "partial_success" if successful else "failed"
     return result

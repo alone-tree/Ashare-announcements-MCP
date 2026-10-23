@@ -217,7 +217,7 @@ def _fetch_a(root: str, mc: MarketCode, selected=None) -> dict[str, list[dict[st
     return statements
 
 
-def _request_json(
+def _request_page(
     root: str,
     mc: MarketCode,
     api: str,
@@ -253,6 +253,26 @@ def _request_json(
         elapsed=time.time() - started,
     )
     return data
+
+
+def _request_json(root, mc, api, params, headers=None):
+    """按接口实际返回的pages读取完整批次，不把第一页误当全历史。"""
+    first = _request_page(root, mc, api, params, headers)
+    result = first.get("result")
+    if not isinstance(result, dict):
+        return first
+    pages = int(result.get("pages") or 1)
+    records = result.get("data")
+    if pages <= 1 or not isinstance(records, list):
+        return first
+    records = list(records)
+    for page in range(2, pages + 1):
+        payload = _request_page(root, mc, f"{api}_page_{page}", {**params, "pageNumber": str(page)}, headers)
+        fresh = (payload.get("result") or {}).get("data")
+        if not isinstance(fresh, list):
+            raise ValueError(f"{api}第{page}页结构不完整，整批不登记成功")
+        records.extend(fresh)
+    return {**first, "result": {**result, "data": records}}
 
 
 def _fetch_hk(root: str, mc: MarketCode, selected=None) -> dict[str, list[dict[str, Any]]]:

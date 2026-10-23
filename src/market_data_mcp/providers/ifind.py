@@ -31,10 +31,13 @@ import math
 import os
 import time
 import threading
+import contextlib
+import sys
 from types import SimpleNamespace
 from datetime import date, timedelta
 
-import iFinDPy as ths
+with contextlib.redirect_stdout(sys.stderr):
+    import iFinDPy as ths
 import yaml
 
 from market_data_mcp import audit, cache, financial_subjects
@@ -77,7 +80,7 @@ def _load_accounts(root: str) -> list[tuple[str, str]]:
             if pairs:
                 return pairs
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"config.yaml 解析失败（{path}）：{exc}") from exc
+            raise RuntimeError(f"config.yaml 解析失败（{path}，{type(exc).__name__}）") from None
     raise RuntimeError("config.yaml 中未找到 ifind.accounts（用户版根目录/当前目录）")
 
 
@@ -88,12 +91,18 @@ def _ensure_login(root: str) -> None:
         accounts = _load_accounts(root)
         errors = []
         for index, (acc, pwd) in enumerate(accounts):
-            code = ths.THS_iFinDLogin(acc, pwd)
+            code = _sdk_call("THS_iFinDLogin", acc, pwd)
             if code == 0:
                 _LOGIN_STATE.update(done=True, root=root, index=index)
                 return
             errors.append(f"账号{index + 1}（errorcode={code}）")
         raise RuntimeError(f"iFinD 全部账号登录失败：{'；'.join(errors)}")
+
+
+def _sdk_call(api, *args):
+    # SDK的提示不得混入MCP stdio或CLI的JSON stdout。
+    with contextlib.redirect_stdout(sys.stderr):
+        return getattr(ths, api)(*args)
 
 
 def request_ifind(root: str, api: str, *args, required_columns=()):
@@ -113,22 +122,26 @@ def request_ifind(root: str, api: str, *args, required_columns=()):
             if not (_LOGIN_STATE.get("done") and _LOGIN_STATE.get("root") == root
                     and _LOGIN_STATE.get("index") == index):
                 if _LOGIN_STATE.get("done"):
-                    ths.THS_iFinDLogout()
+                    _sdk_call("THS_iFinDLogout")
                 _LOGIN_STATE["done"] = False
-                login = ths.THS_iFinDLogin(acc, pwd)
+                login = _sdk_call("THS_iFinDLogin", acc, pwd)
                 if login != 0:
                     errors.append(f"账号{index + 1}: 登录错误码{login}")
                     continue
                 _LOGIN_STATE.update(done=True, root=root, index=index)
             while True:
+                started = time.time()
                 try:
-                    result = getattr(ths, api)(*args)
+                    result = _sdk_call(api, *args)
                     code = getattr(result, "errorcode", None)
                     message = str(getattr(result, "errmsg", ""))
                     frame = getattr(result, "data", None)
                     valid = not (required_columns and frame is not None and len(frame) > 0
                                  and not set(required_columns).issubset(frame.columns))
                     if code == 0 and valid:
+                        audit.log_request(root, source=SOURCE, market="", code=str(args[0]) if args else "",
+                            api=f"sdk:{api}", fields=str(args[1]) if len(args) > 1 else None,
+                            ok=True, elapsed=time.time() - started)
                         return result
                     if code == 0:
                         message = "响应缺少约定字段"
@@ -136,10 +149,13 @@ def request_ifind(root: str, api: str, *args, required_columns=()):
                     code, message = "exception", str(exc)
                 for account, password in accounts:
                     message = message.replace(account, "[账号]").replace(password, "[凭据]")
+                audit.log_request(root, source=SOURCE, market="", code=str(args[0]) if args else "",
+                    api=f"sdk:{api}", fields=str(args[1]) if len(args) > 1 else None,
+                    ok=False, elapsed=time.time() - started, error=f"账号{index + 1}: {code} {message}")
                 if "you have not done login operation" in message.lower() and not repaired:
                     repaired = True
                     _LOGIN_STATE["done"] = False
-                    if ths.THS_iFinDLogin(acc, pwd) == 0:
+                    if _sdk_call("THS_iFinDLogin", acc, pwd) == 0:
                         _LOGIN_STATE.update(done=True, root=root, index=index)
                         continue
                 elif (code == -205 or "request data error" in message.lower()) and retries < 3:

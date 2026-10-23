@@ -13,6 +13,7 @@ def session(monkeypatch):
     monkeypatch.setattr(ifind, "_load_accounts", lambda root: [("account_a", "secret_a"), ("account_b", "secret_b")])
     monkeypatch.setattr(ifind.ths, "THS_iFinDLogout", lambda: 0)
     monkeypatch.setattr(ifind.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(ifind.audit, "log_request", lambda *args, **kwargs: None)
     active = []
     monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda account, password: active.append(account) or 0)
     yield active

@@ -121,3 +121,69 @@ def test_segments_checked_empty_not_retried_and_single_note(tmp_path, monkeypatc
 def test_noncalendar_report_date_accepted(tmp_path):
     from market_data_mcp.financial_contract import validate_financial_request
     assert validate_financial_request("AAPL.US", "single", ["2025-09-27"], None, None).market == "US"
+
+
+def test_all_items_allows_explicit_ratio(tmp_path, source):
+    result = fs.get_financial_data(str(tmp_path), "600519.SH", "single", statements=["income"],
+        periods=["2025-09-30"], items=["ALL_ITEMS", "毛利率"])
+    assert result["ok"]
+    assert len(result["rows"]) == 3
+    assert next(r for r in result["rows"] if r["item_name"] == "毛利率")["unit"] == "ratio"
+
+
+def test_partial_write_failure_does_not_rollback_other_table(tmp_path, monkeypatch, source):
+    original = data_store.write
+    def write(root, code, domain, module, payload):
+        if module == "balance":
+            raise OSError("模拟写失败")
+        return original(root, code, domain, module, payload)
+    monkeypatch.setattr(data_store, "write", write)
+    result = fs.get_financial_data(str(tmp_path), "600519.SH", "cumulative", periods=["2025-09-30"],
+        statements=["balance", "income"], items=["ALL_ITEMS"])
+    assert result["ok"] and result["status"] == "partial_success"
+    assert data_store.read(str(tmp_path), "600519.SH", fs.DOMAIN, "income") is not None
+    assert data_store.read(str(tmp_path), "600519.SH", fs.DOMAIN, "balance") is None
+
+
+def test_negative_growth_base_exposes_comparison_values(tmp_path, source):
+    calls, records = source
+    records[1]["items"][0]["amount"] = -10
+    result = fs.get_financial_data(str(tmp_path), "600519.SH", "cumulative", periods=["2025-09-30"],
+        items=["营业收入", "营业收入同比增长率"])
+    assert result["ok"] and result["status"] == "partial_success"
+    failure = next(f for f in result["failed_items"] if f["item"] == "营业收入同比增长率")
+    assert failure["previous_amount"] == -10 and failure["current_amount"] == 390
+
+
+def test_new_metrics_always_use_current_version(tmp_path, source):
+    calls, records = source
+    args = dict(periods=["2025-09-30"], items=["毛利率"], include_versions=True)
+    fs.get_financial_data(str(tmp_path), "600519.SH", "cumulative", **args)
+    records[-1]["items"][0]["amount"] = 400
+    result = fs.get_financial_data(str(tmp_path), "600519.SH", "cumulative", force_refresh=True, **args)
+    assert len(result["rows"]) == 1
+    assert result["rows"][0]["amount"] == pytest.approx((400-190)/400)
+
+
+def test_eastmoney_reads_all_announced_pages(monkeypatch):
+    provider = fs.financial_statements
+    calls = []
+    def page(root, mc, api, params, headers):
+        n = int(params.get("pageNumber") or 1)
+        calls.append(n)
+        return {"result": {"pages": 3, "data": [{"page": n}]}}
+    monkeypatch.setattr(provider, "_request_page", page)
+    result = provider._request_json("root", None, "reports", {})
+    assert calls == [1, 2, 3]
+    assert result["result"]["data"] == [{"page": 1}, {"page": 2}, {"page": 3}]
+
+
+def test_profit_in_cashflow_does_not_ambiguate_income_profit(tmp_path, monkeypatch):
+    def fetch(root, mc, statement):
+        values = {"NETPROFIT": 30} if statement == "income" else {"NETPROFIT": 30, "NETCASH_OPERATE": 50}
+        return [report("2025-09-30", values)]
+    monkeypatch.setattr(fs.financial_statements, "fetch_batch", fetch)
+    result = fs.get_financial_data(str(tmp_path), "600519.SH", "cumulative", periods=["2025-09-30"],
+        items=["合并净利润", "经营活动现金流量净额"])
+    assert result["status"] == "success" and len(result["rows"]) == 2
+    assert next(r for r in result["rows"] if r["statement"] == "income")["amount"] == 30

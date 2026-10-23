@@ -1,8 +1,7 @@
 """运行能力与本地缓存帮助；不导入数据提供器，不联网、不登录。"""
 from pathlib import Path
-import json
 
-from market_data_mcp import data_store
+from market_data_mcp import data_store, financial_items
 from market_data_mcp.financial_contract import DEFAULT_ITEMS, RATIOS, SEGMENTS, STATEMENTS
 from market_data_mcp.routing import parse_code
 
@@ -45,8 +44,10 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
     if topic in (None, "tools"):
         result["tools"] = {tool: TOOLS[tool]} if tool else TOOLS
     if topic in (None, "items"):
+        from market_data_mcp.service import VALID_VARS
         result.update(default_items=DEFAULT_ITEMS, derived_items=RATIOS, statements=STATEMENTS,
                       segment_items=SEGMENTS, growth=["科目名同比增长率", "科目名环比增长率"],
+                      quote_fields=VALID_VARS,
                       ratio_unit="比值（0.25表示25%）", unsupported=["ROE", "ROA", "周转率", "TTM", "日频估值"])
     if topic in (None, "ranges"):
         result["ranges"] = {"financial": "按源实际报告截止日；不承诺固定起始年",
@@ -72,11 +73,33 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
             for file in sorted(folder.glob("*.json")):
                 payload = data_store.read(root, code, domain, file.stem)
                 if payload:
+                    coverage = {}
+                    for report in payload.get("reports", []):
+                        current = next((v for v in report.get("versions", []) if v.get("version_id") == report.get("current_version_id")), {})
+                        for item in current.get("items", []):
+                            key = str(item.get("item_code"))
+                            entry = coverage.setdefault(key, {"item_name": financial_items.display_name(mc.market, key, item.get("item_name")), "first_valid_report_date": None,
+                                                              "last_valid_report_date": None, "empty_count": 0})
+                            if item.get("amount") is None:
+                                entry["empty_count"] += 1
+                            else:
+                                entry["first_valid_report_date"] = min(entry["first_valid_report_date"] or report["report_date"], report["report_date"])
+                                entry["last_valid_report_date"] = max(entry["last_valid_report_date"] or report["report_date"], report["report_date"])
                     cached.append({"domain": domain, "module": file.stem, "meta": payload.get("meta"),
                                    "checks": payload.get("checks", {}), "item_catalog": payload.get("item_catalog", []),
+                                   "coverage": list(coverage.values()),
+                                   "scope_checks": [{"query": entry.get("query"), "checked_at": entry.get("checked_at")}
+                                                    for entry in payload.get("scopes", {}).values()],
+                                   "period_checks": {period: entry.get("checked_at") for period, entry in payload.get("periods", {}).items() if isinstance(entry, dict)},
                                    "periods": payload.get("periods", {} ) if file.stem == "report_probe" else
                                        sorted(payload.get("periods", {})) if "periods" in payload else
                                        [r["report_date"] for r in payload.get("reports", [])]})
+        for field in ("open", "high", "low", "close", "volume", "amount", "close_hfq", "total_shares", "floating_shares"):
+            from market_data_mcp import cache as quote_cache
+            value = quote_cache.read_cache(root, code, field)
+            if value:
+                cached.append({"domain": "quote", "module": field, "meta": value["meta"],
+                               "nonempty_count": sum(r.get("value") is not None for r in value["items"])})
         result["cache"] = cached
         result["cache_note"] = "仅表示本地已检查范围，未缓存不等于上游不支持"
     return result

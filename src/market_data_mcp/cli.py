@@ -87,10 +87,14 @@ def get_financial_data_batch(request: dict[str, Any]) -> dict[str, Any]:
     for value in codes:
         code = str(value)
         try:
+            parameters = {key: value for key, value in common.items() if value is not None}
+            if len(codes) > 1 and parameters.get("export_path"):
+                target = Path(parameters["export_path"])
+                parameters["export_path"] = str(target.with_name(f"{target.stem}_{code}{target.suffix}"))
             result = financial_service.get_financial_data(
                 _data_root(),
                 code,
-                **{key: value for key, value in common.items() if value is not None},
+                **parameters,
             )
             items.append({"code": code, **result})
         except Exception as exc:  # noqa: BLE001 —— 单家公司失败不阻断批次
@@ -162,6 +166,8 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
     if handler is None:
         raise ValueError(f"未知 tool：{tool or '<empty>'}")
     parameters = {
+        "get_quote_batch": {"tool", "codes", "vars", "adjust", "start_date", "end_date", "period", "export_path"},
+        "get_quote_chart_batch": {"tool", "codes", "adjust", "start_date", "end_date", "period", "log_scale", "field", "events", "keypoints", "drawdown_threshold"},
         "get_financial_data_batch": {"tool", "codes", "amount_basis", "statements", "periods", "items", "include_versions", "force_refresh", "export_path"},
         "get_market_data_help": {"tool", "arguments"},
         "get_company_profile_batch": {"tool", "codes", "sections", "periods", "years", "as_of_date", "force_refresh"},
