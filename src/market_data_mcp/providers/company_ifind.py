@@ -18,7 +18,11 @@ PROFILE = {
 }
 IPO = {"发行股数": "ths_ipo_quantity_stock", "发行价格": "ths_ipo_price_stock",
        "募集资金总额": "ths_ipo_rc_stock", "募集资金净额": "ths_ipo_actual_rc_stock",
-       "发行后总股本": "ths_total_shares_after_ipo_ld_stock", "发行后市盈率": "ths_ipo_pe_dlt_stock"}
+       "发行后总股本": "ths_total_shares_after_ipo_ld_stock", "发行后市盈率": "ths_ipo_pe_dlt_stock",
+       "保荐机构（主承销商）": "ths_ipo_main_underwrite_stock", "保荐代表人": "ths_ipo_sponsor_representative_stock",
+       "发行人律师": "ths_law_firm_stock", "经办律师": "ths_lawyer_stock",
+       "会计事务所": "ths_accounting_firm_stock", "经办会计师": "ths_accountant_stock",
+       "资产评估机构": "ths_asset_evaluate_org_stock", "经办评估师": "ths_charged_evaluator_stock"}
 HOLDERS = {"名称": "ths_holder_name_stock", "性质": "ths_holder_nature_stock",
            "持股数": "ths_holder_held_num_stock", "限售股数": "ths_holder_held_ls_num_stock",
            "质押股数": "ths_ma_holder_pledge_stock", "冻结股数": "ths_holder_freeze_stock",
@@ -67,6 +71,12 @@ def segments(root, mc, period, dimension):
     return rows
 
 
+def _annual_year(latest: str) -> int:
+    """最新已披露年报年份（模板 N8 口径：最新报告期非 12-31 则取其上一年）。"""
+    year = int(latest[:4])
+    return year if latest[5:] == "12-31" else year - 1
+
+
 def section(root, mc, name, *, periods=None, years=None, as_of_date=None):
     if name == "profile":
         output = basic(root, mc, PROFILE)
@@ -74,6 +84,15 @@ def section(root, mc, name, *, periods=None, years=None, as_of_date=None):
         dated = {"申万行业": "ths_the_ths_industry_stock", "证监会行业": "ths_the_new_csrc_industry_stock",
                  "主营业务": "ths_main_businuess_stock"}
         output.update(basic(root, mc, dated, {"申万行业": f"103,{today}", "证监会行业": f"102,{today}", "主营业务": today}))
+        # 员工人数=最新已披露年报期末；违规次数=(上市日期,查询日)，上市日期取同批 PROFILE 原值（8 位）
+        year = _annual_year(latest_report(root, mc))
+        output.update(basic(root, mc, {"员工人数": "ths_ygzs_new_stock"}, f"{year}1231"))
+        ipo_date = output.get("上市日期")
+        if ipo_date:
+            output.update(basic(root, mc, {"上市以来违规次数": "ths_int_illegality_num_stock"},
+                                f"{ipo_date},{today}"))
+        else:
+            output["上市以来违规次数"] = None
         return output
     if name == "ipo":
         return basic(root, mc, IPO)

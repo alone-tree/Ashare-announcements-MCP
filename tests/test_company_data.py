@@ -1,7 +1,15 @@
 import pytest
 
 from market_data_mcp import company_ifind_service as cs, company_service, data_store
+from market_data_mcp.providers import company_ifind as ci
 from market_data_mcp.routing import parse_code
+
+
+def test_annual_year_follows_template_n8_rule():
+    # 模板 N8 口径：最新报告期是年报则取该年，否则取其上一年
+    assert ci._annual_year("2025-12-31") == 2025
+    assert ci._annual_year("2026-06-30") == 2025
+    assert ci._annual_year("2026-09-30") == 2025
 
 
 def test_forecast_years_required_without_network(tmp_path, monkeypatch):
