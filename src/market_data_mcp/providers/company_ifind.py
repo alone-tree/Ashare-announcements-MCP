@@ -60,7 +60,34 @@ def latest_report(root, mc):
     return result["report_date"]
 
 
+# 集中度指标（2026-10-26 实测：8位报告期,排名；name 与 ratio 两码同批 -209，必须逐码调用；
+# 上游返回百分数，/100 存比值；未披露期与超界排名返回 None 不报错）
+CONCENTRATION = {
+    "customer": {"name": "ths_main_customer_name_stock", "ratio": "ths_main_customer_ratio_stock",
+                 "top5": "ths_main_customer_sales_amt_ratio_stock"},
+    "supplier": {"name": "ths_main_supplier_name_stock", "ratio": "ths_main_supplier_ratio_stock",
+                 "top5": "ths_main_supplier_pur_amt_ratio_stock"},
+}
+
+
+def _ratio_value(value):
+    """上游百分数转比值；非数值（None 等）原样。"""
+    return value / 100 if isinstance(value, (int, float)) else value
+
+
 def segments(root, mc, period, dimension):
+    api_period = period.replace("-", "")
+    if dimension in CONCENTRATION:
+        spec = CONCENTRATION[dimension]
+        rows = []
+        for rank in range(1, 6):
+            row = {"rank": rank}
+            for key in ("name", "ratio"):
+                row[key] = _ratio_value(basic(root, mc, {key: spec[key]}, f"{api_period},{rank}")[key])
+            rows.append(row)
+        top5 = basic(root, mc, {"ratio": spec["top5"]}, api_period)["ratio"]
+        rows.append({"rank": "top5", "ratio": _ratio_value(top5)})
+        return rows
     fields = {"name": f"ths_moc_project_name_{dimension}_stock",
               "income": f"ths_moc_project_income_{dimension}_stock",
               "gross_profit": f"ths_moc_project_profit_{dimension}_stock"}

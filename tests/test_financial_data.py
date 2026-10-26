@@ -118,6 +118,43 @@ def test_segments_checked_empty_not_retried_and_single_note(tmp_path, monkeypatc
     assert a["notes"] and len(calls) == 1
 
 
+def test_concentration_dimensions_flow_through_segments(tmp_path, monkeypatch, source):
+    # 集中度两维度走 segments 通道：rank明细+top5合计行，ratio 比值保留
+    calls = []
+    def seg(root, mc, period, dimension):
+        calls.append(dimension)
+        if dimension == "customer":
+            return [{"rank": 1, "name": "客户A", "ratio": 0.2406}, {"rank": "top5", "ratio": 0.7598}]
+        return [{"rank": 1, "name": "供应商A", "ratio": 0.3576}, {"rank": "top5", "ratio": 0.515}]
+    monkeypatch.setattr(fs.company_ifind, "latest_report", lambda *args: "2025-12-31")
+    monkeypatch.setattr(fs.company_ifind, "segments", seg)
+    result = fs.get_financial_data(str(tmp_path), "300308.SZ", "single",
+        periods=["2025-12-31"], items=["income by customer", "purchase by supplier"])
+    assert result["ok"]
+    assert {r["dimension"] for r in result["segments"]} == {"income by customer", "purchase by supplier"}
+    top5 = next(r for r in result["segments"] if r["rank"] == "top5")
+    assert top5["ratio"] == 0.7598
+    assert calls == ["customer", "supplier"]
+
+
+def test_company_ifind_concentration_rows_and_ratios(monkeypatch):
+    # 行构建：rank1-5明细+top5合计；上游百分数 /100；name 与 ratio 逐码调用（同批 -209）
+    from market_data_mcp.providers import company_ifind as ci
+    from market_data_mcp.routing import parse_code
+    calls = []
+    def fake_basic(root, mc, fields, parameters):
+        calls.append((tuple(fields), parameters))
+        if list(fields) == ["ratio"] and "," not in parameters:
+            return {"ratio": 75.98}
+        return {k: (f"客户{parameters[-1]}" if k == "name" else 24.06) for k in fields}
+    monkeypatch.setattr(ci, "basic", fake_basic)
+    rows = ci.segments(".", parse_code("300308.SZ"), "2025-12-31", "customer")
+    assert [r["rank"] for r in rows] == [1, 2, 3, 4, 5, "top5"]
+    assert rows[0] == {"rank": 1, "name": "客户1", "ratio": pytest.approx(0.2406)}
+    assert rows[-1] == {"rank": "top5", "ratio": pytest.approx(0.7598)}
+    assert len(calls) == 11  # rank1-5 各两码 + top5 合计一次
+
+
 def test_noncalendar_report_date_accepted(tmp_path):
     from market_data_mcp.financial_contract import validate_financial_request
     assert validate_financial_request("AAPL.US", "single", ["2025-09-27"], None, None).market == "US"

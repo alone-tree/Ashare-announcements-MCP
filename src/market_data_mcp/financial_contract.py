@@ -8,10 +8,12 @@ DEFAULT_ITEMS = {
     "income": ["营业总收入", "毛利率", "营业总成本", "营业成本", "营业利润", "合并净利润", "扣非净利润"],
     "cash_flow": ["经营活动现金流入", "经营活动现金流量净额", "投资活动现金流量净额",
                   "筹资活动现金流量净额", "现金及现金等价物净增加额", "期末现金及现金等价物余额"],
-    "segments": ["income by product", "income by industry", "income by region"],
+    "segments": ["income by product", "income by industry", "income by region",
+                 "income by customer", "purchase by supplier"],
     "meta": ["报告截止日", "公告日", "币种", "审计意见", "内控审计意见"],
 }
-SEGMENTS = {"income by product": "product", "income by industry": "industry", "income by region": "district"}
+SEGMENTS = {"income by product": "product", "income by industry": "industry", "income by region": "district",
+            "income by customer": "customer", "purchase by supplier": "supplier"}
 RATIOS = {
     "毛利": ("营业收入", "营业成本"),
     "毛利率": ("营业收入", "营业成本"),

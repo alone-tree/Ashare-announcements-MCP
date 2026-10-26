@@ -143,9 +143,11 @@ def _render_financial_markdown(result: dict) -> dict:
         blocks.append("\n".join(md))
     segments = result.pop("segments", [])
     if segments:
-        lines = ["## 营收结构（累计口径）", "", "| 报告期 | 维度 | 名称 | 收入 |", "|---|---|---|---:|"]
+        lines = ["## 营收结构（累计口径）", "", "| 报告期 | 维度 | 名称 | 收入 | 占比 |", "|---|---|---|---:|---:|"]
         for row in segments:
-            lines.append(f"| {row['report_date']} | {row['dimension']} | {row.get('name') or ''} | {_fmt_financial_amount(row.get('income'))} |")
+            ratio = row.get("ratio")
+            ratio_text = f"{ratio:.2%}" if isinstance(ratio, (int, float)) else ""
+            lines.append(f"| {row['report_date']} | {row['dimension']} | {row.get('name') or ''} | {_fmt_financial_amount(row.get('income'))} | {ratio_text} |")
         blocks.append("\n".join(lines))
     result.pop("rows", None)
     if blocks:
