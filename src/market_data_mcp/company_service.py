@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """公司信息 section 聚合器与工具入口（get_company_profile）。
 
-架构 docs/market-data架构设计.md §5（2026-08-09 定稿）：
-- 五类 sections：profile/ipo/dividends/forecast/holders；按 section 分缓存文件
-- 多源合并策略 A：主源优先、缺的信息从补充源补（每字段单一来源）；
+架构 docs/market-data架构设计.md §5：
+- **当前双路径（2026-10-22 起）**：A/BJ → company_ifind_service（iFinD 指标，profile 25 字段含
+  员工人数与上市以来违规次数、ipo 14 字段含中介机构 8 项）；HK/US → 本模块 _legacy 路径
+- legacy 路径（_SECTION_PLAN）：五类 sections，profile/ipo/dividends/forecast/holders；
+  多源合并策略 A：主源优先、缺的信息从补充源补（每字段单一来源）；
   **无失败回退**（主源失败即结构化报错，可重试）；补充源仅字段补全，不参与失败回退
 - 刷新：30 天新鲜期 + force_refresh（与财报一致）
 - 美股 section：返回 available=false + "用公告 MCP 查 SEC" 提示（不是错误）
@@ -231,8 +233,9 @@ def _legacy_get_company_profile(
     sections: list[str] | None = None,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """获取公司信息（概况/IPO/分红/盈利预测/股东）。
+    """HK/US legacy 路径：多源合并获取公司信息（概况/IPO/分红/盈利预测/股东）。
 
+    A/BJ 不走此函数（走 company_ifind_service iFinD 路径）。
     返回 {ok, market, code, sections: {...}, notes}；每个 section：
     - 有数据：{data, source, cached, notes?}
     - 该市场无结构化来源（美股/港股 IPO 等）：{available: false, reason}

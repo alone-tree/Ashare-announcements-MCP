@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """公司信息请求模块（源 × 市场 × section）。
 
+**2026-10-22 起 A/BJ 走 iFinD 路径（company_ifind.py），本模块现服务 HK/US legacy 路径**
+（company_service._SECTION_PLAN 中 A/BJ 条目保留但不再被 get_company_profile 触达）。
+
 架构 docs/market-data架构设计.md §5（2026-08-09 定稿）：
 - **无失败回退**：主源失败即结构化报错（可重试），不做第二来源顶替
 - **补充源只做字段补全**：主源成功但缺某字段时，从补充源取该字段，不参与失败回退
@@ -10,9 +13,10 @@
 `{ok, source, section, data, error, notes}`，data 为规范化数据（dict 或 list[dict]）。
 
 数据源（探测依据 字段与数据源支持情况.md §5，2026-08-09 全量重探测）：
-- 概况：A/BJ=巨潮 stock_profile_cninfo（26 字段）；港股=东财 company_profile（17 字段）
+- 概况：巨潮 stock_profile_cninfo（26 字段，原 A/BJ 主源）；港股=东财 company_profile（17 字段）
   + security_profile（14 字段）两接口合并并集；美股无结构化 → 公告
-- IPO：A/BJ=巨潮 stock_ipo_summary_cninfo（15 字段）+ 新浪 stock_ipo_info（17 项 key-value）
+- IPO：巨潮 stock_ipo_summary_cninfo（15 字段，原 A/BJ 主源，含主承销商）
+  + 新浪 stock_ipo_info（17 项 key-value，含主承销商/上市推荐人）
 - 分红：A/BJ=东财 stock_fhps_detail_em（18期19字段最全）+ 同花顺（股利支付率/税前分红率/不分配记录）
   + 巨潮（年度/中期类型）；港股=东财 stock_hk_dividend_payout_em
 - 盈利预测：A/BJ=东财 stock_profit_forecast_em（一致预期）+ 同花顺（min/max/行业均值）；
