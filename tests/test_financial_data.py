@@ -44,6 +44,29 @@ def test_single_dependencies_not_exposed_and_shared_fetch(tmp_path, source):
     assert calls == ["income"]
 
 
+def test_single_envelope_drops_undocumented_fields(tmp_path, source):
+    calls, records = source
+    result = fs.get_financial_data(str(tmp_path), "600519.SH", "single", periods=["2025-09-30"],
+                                   items=["营业收入"])
+    assert result["notes"][0] == "single为单季值：Q1使用累计报表原值，Q2/Q3/Q4=本期累计−上期累计"
+    assert result["units"]["amount"] == "原币金额，币种见报告期元信息"
+    assert "date_range" not in result
+    assert "report_metadata" not in result
+    assert "calculation_dependencies" not in result
+    assert "versions" not in result
+
+
+def test_include_versions_returns_compact_map(tmp_path, source):
+    calls, records = source
+    result = fs.get_financial_data(str(tmp_path), "600519.SH", "single", periods=["2025-09-30"],
+                                   items=["营业收入"], include_versions=True)
+    ids = result["versions"]["income"]["2025-09-30"]
+    assert len(ids) == 2
+    assert len(result["rows"][0]["derived_from_version_ids"]) == 2
+    assert result["notes"][0].startswith("single为单季值")
+    assert any("include_versions" in note for note in result["notes"])
+
+
 def test_default_five_and_growth_auto_dependencies(tmp_path, source):
     result = fs.get_financial_data(str(tmp_path), "600519.SH", "single", items=["营业收入同比增长率", "营业收入环比增长率"])
     assert len(result["periods"]) == 5

@@ -90,6 +90,7 @@ def _render_financial_markdown(result: dict) -> dict:
 
     JSON 信封保留 ok/status/failed_items/notes 等元信息，数据本体进入 markdown 字段；
     rows 不再返回。include_versions=true 渲染版本审计长表。导出场景（无 rows）原样透传。
+    报告期元信息独立成块；statements 含 meta 时不再重复。
     列名=上游原始报告截止日，不做任何推断（美/港股财年截止日灵活）。
     """
     rows = result.get("rows")
@@ -125,21 +126,13 @@ def _render_financial_markdown(result: dict) -> dict:
                 "|---" + "|---:" * len(dates) + "|",
             ]
             items: dict[str, dict[str, str]] = {}
-            meta_by_date: dict[str, dict] = {}
             for row in srows:
                 report_date = row["report_date"]
                 value = row.get("amount")
                 cell = f"{value * 100:.2f}%" if row.get("unit") == "ratio" and isinstance(value, (int, float)) else _fmt_financial_amount(value)
                 items.setdefault(row.get("item_name"), {})[report_date] = cell
-                if report_date not in meta_by_date:
-                    meta_by_date[report_date] = row.get("report_metadata") or {}
             for name, cells in items.items():
                 md.append("| {} | {} |".format(name, " | ".join(cells.get(d, "") for d in dates)))
-            for label, key in ([] if "periods" in result else _FINANCIAL_META_ROWS):
-                md.append("| {} | {} |".format(
-                    label,
-                    " | ".join(_fmt_financial_meta((meta_by_date.get(d) or {}).get(key)) for d in dates),
-                ))
         blocks.append("\n".join(md))
     segments = result.pop("segments", [])
     if segments:
@@ -149,6 +142,26 @@ def _render_financial_markdown(result: dict) -> dict:
             ratio_text = f"{ratio:.2%}" if isinstance(ratio, (int, float)) else ""
             lines.append(f"| {row['report_date']} | {row['dimension']} | {row.get('name') or ''} | {_fmt_financial_amount(row.get('income'))} | {ratio_text} |")
         blocks.append("\n".join(lines))
+    if "meta" not in (result.get("statements") or []):
+        meta_by_date: dict[str, dict] = {}
+        for row in rows:
+            report_date = row.get("report_date")
+            if report_date and report_date not in meta_by_date:
+                meta_by_date[report_date] = row.get("report_metadata") or {}
+        dates = sorted(meta_by_date)
+        if dates and any(meta_by_date[d].get(key) for d in dates for _, key in _FINANCIAL_META_ROWS):
+            md = [
+                "## 报告期元信息",
+                "",
+                "| 项目 | " + " | ".join(dates) + " |",
+                "|---" + "|---" * len(dates) + "|",
+            ]
+            for label, key in _FINANCIAL_META_ROWS:
+                md.append("| {} | {} |".format(
+                    label,
+                    " | ".join(_fmt_financial_meta(meta_by_date[d].get(key)) for d in dates),
+                ))
+            blocks.append("\n".join(md))
     result.pop("rows", None)
     if blocks:
         result["markdown"] = "\n\n".join(blocks)

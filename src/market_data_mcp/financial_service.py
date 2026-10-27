@@ -411,28 +411,38 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
             except ValueError:
                 segment["income_share"] = None
     failed.extend(segment_failures)
+    if basis == "single":
+        notes.insert(0, "single为单季值：Q1使用累计报表原值，Q2/Q3/Q4=本期累计−上期累计")
     if segments and basis == "single":
         notes.append("营收结构跳过单季差分，返回累计原值")
     if any(plan["kind"] == "qoq" for plan in plans):
         notes.append("环比增长率始终按单季度金额计算")
     if include_versions:
-        notes.append("派生指标仅使用当前累计版本；历史版本仅用于原始报表审计")
+        notes.append("派生指标仅使用当前累计版本；历史版本仅用于原始报表审计" if basis == "cumulative"
+                     else "single口径不生成历史单季版本，include_versions仅显示当前累计版本")
     for row in output:
         row.setdefault("unit", "text" if row["statement"] == "meta" else "原币基础单位")
     output = service._localize_financial_rows(output, mc.market)
+    version_map = {}
+    if include_versions:
+        for row in output:
+            ids = row.get("derived_from_version_ids")
+            if not ids:
+                continue
+            bucket = version_map.setdefault(row["statement"], {}).setdefault(row["report_date"], [])
+            for version_id in ids:
+                if version_id not in bucket:
+                    bucket.append(version_id)
     successful = any(r.get("amount") is not None for r in output) or any(r.get("name") not in (None, "") for r in segments)
     failures = failed + refresh_errors
     result = {"ok": successful, "code": code, "market": mc.market,
               "statements": list(dict.fromkeys([r["statement"] for r in output] + (["segments"] if segments else []))),
               "amount_basis": basis, "periods": requested, "include_versions": include_versions,
-              "date_range": {"start": min(requested), "end": max(requested)},
+              **({"versions": version_map} if version_map else {}),
               "status": "partial_success" if successful and failures else "success" if successful else "failed",
               "stale": bool(refresh_errors), "failed_items": failures, "notes": notes,
               "source": "eastmoney,ifind" if segments else "eastmoney",
-              "units": {"amount": "原币基础单位，币种见report_metadata", "ratio": "比值；0.25表示25%"},
-              "report_metadata": {p: next((r.get("report_metadata", {}) for r in latest_rows if r["report_date"] == p), {}) for p in requested},
-              "calculation_dependencies": [{"item": r["item_name"], "report_date": r["report_date"], "version_ids": r["derived_from_version_ids"]}
-                                           for r in output if r.get("derived_from_version_ids")],
+              "units": {"amount": "原币金额，币种见报告期元信息", "ratio": "比值，0.25=25%"},
               "rows": output, "segments": segments}
     if sec:
         result["filings"] = sec["data"]

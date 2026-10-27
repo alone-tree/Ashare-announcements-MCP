@@ -96,9 +96,28 @@ def test_financial_markdown_renders_variable_by_period_matrix():
     assert "| 科目 | 2026-03-31 | 2026-06-30 |" in md
     assert "|---|---:|---:|" in md
     assert "| 营业收入 | 213359674.81 | 1105675.05 |" in md
+    assert "## 报告期元信息" in md
+    assert "| 项目 | 2026-03-31 | 2026-06-30 |" in md
     assert "| 公告日 | 2026-04-29 | 2026-08-28 |" in md
     assert "| 货币 | CNY | CNY |" in md
     assert "rows" not in rendered
+
+
+def test_financial_markdown_skips_meta_block_when_meta_requested():
+    result = {
+        "ok": True, "statements": ["income", "meta"], "amount_basis": "cumulative",
+        "rows": [
+            {"report_date": "2025-12-31", "statement": "income", "item_name": "营业收入",
+             "amount": 100.0, "unit": "原币基础单位", "report_metadata": {"CURRENCY": "CNY"}},
+            {"report_date": "2025-12-31", "statement": "meta", "item_name": "公告日",
+             "amount": "2026-03-20", "unit": "text", "report_metadata": {"CURRENCY": "CNY"}},
+        ],
+    }
+
+    md = server._render_financial_markdown(result)["markdown"]
+
+    assert "## 报表信息" in md
+    assert "## 报告期元信息" not in md
 
 
 def test_financial_markdown_passthrough_export_and_version_audit():
