@@ -81,6 +81,14 @@ search_transcripts(
 
 A 股互动问答查询（原 `query_interactions` 改名，凸显 A 股范围；核心功能不变）。首次全量建档，之后增量更新；仅 A 股适用，传 H 股代码可定位关联 A 股问答，纯港股/B 股/本地公司/美股返回 `applicable=false`。
 
+## 美股公告提交与标题
+
+美股走SEC EDGAR，东财与EDGAR使用统一对外参数，字母代码自动路由EDGAR。ticker→CIK使用company_tickers.json，本地缓存24小时；建档入口仍为`establish_company(codes=["AAPL"], action="establish")`。
+
+HTML按page-break切虚拟页，没有分页时按结构切块，复用PDF阅读引擎；读取与检索参数语义与PDF一致。具体阅读实现与验收见[公告阅读产品设计](docs/公告阅读产品设计.md)。
+
+发行类表单424B*、FWP默认保留，不在列表中自动过滤。title只组合原始信息与翻译：8-K的items按含义翻译，表单类型使用FORM_MEANINGS映射；EDGAR未提供的季度或财年不推算，有原始信息原样附上，没有则不补。
+
 ## 数据流
 
 ```text
@@ -152,6 +160,6 @@ Hermes 配置（config.yaml a-stock-announcements）直接注册导出目录的 
 - 长公告不整篇返回，只返回检索片段或完整页段。
 - OCR 和复杂表格转换均按需执行并缓存。
 - `reference/` 只保留原始参考代码，不在其中开发。
-- 建档证券判定：以 `SecurityTypeName`（中文语义标签）为主 + `TypeUS` 黑名单排除（港股排除 1/6，美股排除 5/6）；未知 TypeUS 默认接受，避免东财改编码误伤真实公司。字段速查表见 `AGENTS.md`。
+- 建档证券识别与接入边界见[公告主文档§8.1.1](docs/AH公告与互动问答改造方案.md#811-证券分类与数字代码搜索边界)，不在本文件重复维护字段判定表。
 
 完整的阅读策略、样本与验收标准见 `docs/公告阅读产品设计.md`。

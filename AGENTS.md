@@ -1,7 +1,8 @@
 # 项目协作说明（AGENTS.md）
 
-> **本文件是项目的协作规则、文档地图与关键约定总纲。** 操作本项目之前，先阅读本文件和 `PROJECT.md`。
-> 细枝末节（接口返回结构、逐字段契约）与决策记录在对应文档，**但关键约定、工具清单、铁律必须在本文件可见**。同一内容只在一个文档记录，新增内容先确认归属。
+操作本项目之前，先阅读本文件和[PROJECT.md](PROJECT.md)。本文件维护项目背景、工具总览、必要直接约束和文档导航。
+
+通用维护流程见[项目文档规范Skill](<D:/HermesSync/global-skills/agent/project-documentation-standards/SKILL.md>)；下文补充本项目的归属及约束。逐参数契约、上游实测和历史经过在对应主文档维护，本文件只指路。
 
 ## 一、项目是什么
 
@@ -11,10 +12,10 @@
 |---|---|---|
 | 定位 | 公告/提交文档（非结构化）的发现、定位、阅读 | 行情/财报/指标/概况（结构化）数据获取 + 行情绘图（K线/折线，事件标注/高低点） |
 | 数据源 | A/B/H 股=东方财富；美股=SEC EDGAR；LOCAL-=本地材料 | 来源与模块分工见架构设计及财报子文档 |
-| 状态 | **已实现、完善**（不要动坏） | 行情、绘图、财报、营收结构、基础比率及公司信息已接入；市场边界与后置项见正式文档 |
+| 能力 | 公告、A股互动问答、美股电话会议；具体市场边界见公告侧主文档 | 行情、绘图、财报、营收结构、基础比率及公司信息；具体市场边界见行为规范 |
 | 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（行为）+ `字段与数据源支持情况.md`（客观能力）+ `docs/决策记录.md`（变动历史） |
 
-> 行情绘图原为独立 market-data-chart MCP，2026-10-19 并入 market-data（get_quote_chart 工具 + get_quote_chart_batch CLI，引擎 `src/market_data_mcp/chart_service.py`）；视觉/参数历史决策见 `docs/chart-MCP绘图工具设计.md`（已归档）。
+绘图属于market-data，入口为`get_quote_chart`与`get_quote_chart_batch`；行为入口见架构§2.6，现有专题明细见下方文档导航。
 
 克制、数据准确真实、维护简单；不为假设中的需求增加抽象或字段。个人工具，不追求大而全。
 
@@ -22,69 +23,46 @@
 
 ## 二、工具总览与开发要点
 
-### 公告 MCP（5 个 MCP 工具 + CLI 批处理入口）
+### 公告 MCP（7个MCP工具 + CLI入口）
 
 | 工具 | 要点 |
 |---|---|
-| `establish_company(keyword, action="check")` | 关键词查询，只读不建缓存，忠实返回东财前 20 条候选，不过滤/不归组/不补查；返回总命中数与实际返回数，超限提示用更精确关键词 |
-| `establish_company(codes=[...], action="establish")` | 明确代码列表建档；接受一个代码或 A+H 两个；不自动搜索/补全另一市场代码；一次获取全部 A/H 公告 + A 股互动问答；保存名称与 A/H 映射；**不用 `-R`/`-WR` 人民币柜台代码** |
-| `query_announcements` | 首次全量建档、之后增量补全；每页 50 条；日期/关键词/翻页只作用于本地缓存 |
-| `read_announcement` | 不传 `start_page`=检测模式（≤20 页全文 / >20 页画像+前 5 页预览）；传 `start_page`=精读（默认 `return_pages=20`，不设上限，可一次读完全文）；扫描页 OCR |
-| `search_announcement` | 逐页索引检索，返回命中页和片段；扫描页按需 OCR 并写回缓存 |
-| `query_interactions` | 互动问答（仅 A 股），全量/增量 |
+| `establish_company` | 关键词check只读；明确代码列表establish建档。公司识别和映射见公告主文档§3—4 |
+| `query_announcements` | 公告档案同步与本地筛选；见PROJECT及公告主文档§5 |
+| `read_announcement` | 自动检测或按页精读；契约见PROJECT，阅读策略见阅读产品文档 |
+| `search_announcement` | 逐页检索、命中片段及按需OCR；契约见PROJECT |
+| `query_a_share_interactions` | A股互动问答；见PROJECT及公告主文档§6 |
+| `query_transcripts` | 美股电话会议索引及正文；见PROJECT |
+| `search_transcripts` | 已缓存电话会议正文检索；见PROJECT |
 
-CLI（`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON）：`query_batch`/`read_batch`/`search_batch`/`query_interactions_batch`，与 MCP 工具一一对应、能力一致。**CLI 顶层请求字段是 `tool`**（不是 `action`），响应字段也是 `tool`；建档子动作参数用 `action`（check/establish）。
+CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。入口为`establish_company`、`query_batch`、`read_batch`、`search_batch`、`query_a_share_interactions_batch`、`query_transcripts_batch`、`search_transcripts_batch`，与MCP共用业务实现。顶层分发字段固定为`tool`，建档子动作固定为`action`。
 
 ### market-data MCP（5 个工具）
 
 | 工具 | 要点 |
 |---|---|
-| `get_quote` | 行情；code 带后缀、vars 字段列表、adjust=raw/hfq/qfq、period=daily/weekly/monthly（周/月由日线现算）、start_date 特殊值 "all"、超长自动导出、export_path 指定 CSV。**缓存为字段级 json，每字段唯一数据源**，派生（qfq/市值/换手率/周月/hfq OHL 还原）全现算。参数、9个字段与覆盖判定见架构 §1.5/§1.6 |
+| `get_quote` | 行情获取与导出；来源、字段级缓存、复权及覆盖判定见架构§1—2 |
 | `get_financial_data` | 财报、报表信息、营收结构及计算指标；完整参数、默认清单、缓存与版本规则仅见`docs/行为-财报工具.md`；CLI为`get_financial_data_batch` |
 | `get_market_data_help` | 市场数据工具的能力、口径、边界及公司本地缓存帮助；详见架构§4 |
 | `get_company_profile` | 概况/IPO/年度分红/预测/历史十大股东；时间参数与市场范围见架构§5 |
-| `get_quote_chart` | 行情绘图（2026-10-19 由 market-data-chart MCP 并入）：K线（蜡烛+成交量副图+MA5/10/20/60 按当前周期算）/折线（field=OHLC 单字段）；events 事件标注、keypoints 高低点（仅折线，回撤阈值 0.30）、log_scale 含 0/负自动退回、红涨绿跌；PNG 落 `cache/_charts/` 只返回路径；数据复用 get_quote（不复制取数）；CLI `get_quote_chart_batch` 同契约 |
+| `get_quote_chart` | K线/折线绘图；复用get_quote，CLI为get_quote_chart_batch；见架构§2.6 |
 
-market-data 核心原则：**字段为中心、来源可插拔**；**强制市场后缀代码**（`.SZ/.SH/.HK/.US/.BJ`，脚本按后缀路由、禁止按位数猜市场）；**行情单源无回退**（raw=新浪；hfq=A/港新浪+美股 iFinD，失败即失败不混源）；下载到缓存+返回元信息、缓存优先增量更新。
+market-data关键约束为字段独立来源、强制市场后缀路由、行情单源无回退。不得按代码位数猜市场或混接来源；具体来源与口径只在架构维护。
 
-## 三、已确认的产品要求与约定（公告侧，完整版见方案文档）
+## 三、公告侧关键约束
 
-### 三类公司与主键
+- check忠实返回候选，不替AI归组或补查；establish只使用调用方明确提供的代码，不自动补全另一市场，不使用`-R`/`-WR`人民币柜台代码。
+- A+H共用公司档案，A/H同一事项不同art_code或标题不得去重删除；互动问答单独维护。主键及缓存规则只在公告主文档§4—6维护。
+- 港股公告按当前证券InnerCode过滤；证券接入遵循SecurityTypeName白名单与TypeUS黑名单，未知TypeUS不因未知而拒绝。上游字段与实测表只在公告主文档§8.1维护。
+- PDF只在实际阅读时下载并校验魔数，不在建档时批量下载；下载与阅读边界见公告主文档§7及阅读产品文档。
 
-- 纯 A 股：A 股公告档案 + 互动问答档案；纯港股：港股公告档案（无互动问答）；A+H：识别并保存两个市场证券代码及东财 `InnerCode`，共用同一公司档案。
-- 公司唯一主键：有 A 股用 A 股代码，纯港股用港股代码；目录保持 `cache/{证券代码}/`。
+## 四、公告上游资料
 
-### 公告与互动问答
+证券搜索、公告和互动问答上游证据只在[公告主文档](docs/AH公告与互动问答改造方案.md)§8维护。
 
-- A/H 公告按证券代码分别存缓存，查询时内存合并排序筛选；**A/H 同一事项不同 `art_code`/标题不得去重删除**。
-- 互动问答单独建档，不和公告混合；首次全量、后续增量。
+## 五、美股公告与阅读资料
 
-## 四、已验证的上游边界（公告侧）
-
-- 东财搜索返回 A 股/港股/人民币柜台/权证/期货/ADR 等多种真实候选；`check` 不过滤，由 AI 根据返回字段选择。
-- 数字代码搜索是模糊匹配（`03308` 可能命中 `603308`）：数字代码先按 `Code` 精确匹配，再用返回 `Name` 补查同名证券。
-- **港股公告必须按当前证券 `InnerCode` 过滤**（代码可能被旧公司复用：03308 混金鹰商贸、00300 混昆明机床）。
-- 互动问答翻页是 POST `interface/GetData.aspx`，不是页面 URL 的 `page=` 参数。
-- PDF 下载后必须检查响应以 `%PDF-` 开头（防临时反爬页面被当 PDF 缓存）；PDF 仅实际阅读时下载，建档时不批量下载。
-- 判定策略：**SecurityTypeName 白名单 + TypeUS 黑名单，未知 TypeUS 默认接受**（兼容性优先，历史教训：科创板/北交所曾被误拒）。
-
-### 东财证券分类字段速查（2026-08 实测）
-
-| SecurityTypeName | TypeUS（该市场内含义） | 判定 |
-|---|---|---|
-| 沪A / 深A / 科创板 / 京A（北交所） | 2 / 6 / 80 / 23 / 81 | A 股，接受 |
-| 港股 | 3=普通股/人民币柜台/同股不同权；**1=杠杆ETF；6=权证** | 接受（排除 1、6） |
-| 沪B / 深B | 3 / 7 | B 股，接受 |
-| 美股 | 1=原生正股；3=ADR；**5=ETF；6=票据** | 接受（排除 5、6） |
-| 三板 / 英股 / 日股 / 粉单 / 债券 / 基金 / 期货 / 期权 / 指数 / 板块 | — | 无数据通道，拒绝 |
-
-## 五、美股公告支持要点（2026-08 已实现）
-
-- 美股走 SEC EDGAR：内部两套通道（东财/EDGAR）、对外统一参数；字母代码自动路由 EDGAR。
-- HTML 按 page-break 切虚拟页（无分页按结构切块），复用 PDF 阅读引擎；参数语义与 PDF 完全一致。
-- ticker→CIK 用 company_tickers.json（本地缓存 24h）；建档对外只有 1 个动作（`establish_company(codes=["AAPL"])`）。
-- 发行类表单（424B*/FWP）默认保留不过滤（用户决策）。
-- **title 只做"原始信息 + 翻译"，不做推断**：8-K items 翻译进 title、FORM_MEANINGS 表单类型翻译；**EDGAR 没有的季度/财年不推算**（财年可能非自然年），有原始信息原样附上、没有的不编。
+美股SEC路由、提交类型、标题原始信息与翻译规则见[PROJECT](PROJECT.md)；PDF/HTML阅读策略与验收见[阅读产品文档](docs/公告阅读产品设计.md)。
 
 ## 六、铁律（绝对不能改/必须遵守）
 
@@ -118,7 +96,7 @@ $env:PYTHONPATH = 'src'
 
 ## 八、文档体系与归属
 
-**每条信息只有一个家**（2026-10-20 用户定，重复维护是混乱的根源）。常设四份：
+每个主题只维护一个定义位置。market-data文档归属如下：
 
 | 文档 | 是什么 | 写什么 | 不写什么 |
 |---|---|---|---|
@@ -127,9 +105,11 @@ $env:PYTHONPATH = 'src'
 | `字段与数据源支持情况.md` | **上游客观能力** | 各源支持的市场/字段/参数/返回格式/单位/限制、实测记录；附件 `ifind财务报表科目.md` = iFinD 三表科目中文名与变量名对照表 | 任何决策 |
 | `docs/决策记录.md` | **变动历史** | 倒序日记（最新在最上面）：某日改了什么、之前什么样、为什么改、影响哪份文档 | 规则正文（只在原地维护） |
 
-**临时文档**：`docs/market-data调整方案稿-YYYY-MM-DD.md`保存未完成步骤、待资料及待定事项。当前[剩余事项](<docs/market-data调整方案稿-2026-10-23.md>)仅保留尚未闭环部分；已实现行为已并入正式文档，不重复维护。全部完成即删除。
+临时文档只保存未完成步骤、待资料及待定事项。市场数据问题见[剩余事项](<docs/market-data调整方案稿-2026-10-23.md>)，本轮文档处置及内容迁移去向见[文档维护方案](<docs/文档维护调整方案-2026-10-29.md>)；已实现行为回归所属主文档，完成稿在核对内容迁移、实际Git提交与引用后删除，不在工作区另留整份归档稿。
 
-公告侧文档：`docs/AH公告与互动问答改造方案.md`（公告侧唯一权威）、`PROJECT.md`（公告 CLI/MCP 契约）、`docs/公告阅读产品设计.md`（阅读策略与验收标准）。
+公告侧文档：[公告主文档](docs/AH公告与互动问答改造方案.md)维护公司建档、映射、公告/互动问答行为及上游证据；[PROJECT](PROJECT.md)维护公告CLI/MCP契约及运行入口；[阅读产品文档](docs/公告阅读产品设计.md)维护阅读策略、引擎、样本与验收。三者交界只引用，不复述。
+
+绘图现行行为入口为[架构§2.6](docs/market-data架构设计.md#26-行情绘图get_quote_chart2026-10-19-并入)。[原绘图专题](docs/chart-MCP绘图工具设计.md)尚有独有的视觉及参数规则，在迁入架构并修复引用前保留；清理范围见文档维护方案，不作为第二套现行规范。
 
 **图表**：文档正文直接写 mermaid 代码块（DSH 可直接渲染），图源就是正文本身，不另存 `.mmd`、不导出 PNG；图题用加粗行放在代码块上方。改图直接改该代码块。
 
@@ -137,7 +117,7 @@ $env:PYTHONPATH = 'src'
 
 **子文档**：行为细则过长时可按主题拆子文档（如 `docs/行为-财报工具.md`），仍属「行为规范」类，规则不变：其它文档只索引不复述。
 
-## 九、关键坑（操作级，详见 skill a-share-announcements-mcp-dev）
+## 九、运行与验证约束
 
 - FastMCP 未知参数静默忽略 → server.py 已设 `extra="forbid"` 严格模式（未知参数显式报错）。
 - 导出用户版必须导出到实际生效目录（`D:\HermesSync\tools\a-share-announcement-reading`），export 后 Hermes 内置 MCP 需重启才生效（能力库每次新起进程不受影响）。
