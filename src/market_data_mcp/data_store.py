@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,7 +35,16 @@ def write(root: str, code: str, domain: str, module: str, payload: dict) -> None
             json.dump(payload, stream, ensure_ascii=False, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, target)
+        # 依据 docs/行为-财报工具.md §3，仅对已复现的Windows替换占用有限重试。
+        retry_delays = (0.05, 0.10, 0.20)
+        for attempt in range(len(retry_delays) + 1):
+            try:
+                os.replace(temporary, target)
+                break
+            except OSError as exc:
+                if getattr(exc, "winerror", None) != 5 or attempt == len(retry_delays):
+                    raise
+                time.sleep(retry_delays[attempt])
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

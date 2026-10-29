@@ -309,6 +309,8 @@ A/北交所新缓存位于`cache/{code}/company_data/{section}.json`，schema_ve
 
 所有iFinD请求遵守§8；无可用结构化通道时返回available=false及原因。
 
+company_ifind_service共用data_store.write，原子写入的有限重试与失败处理只在[财报细则§3](行为-财报工具.md#3-缓存与检查状态)维护；港美legacy公司信息缓存不受本项改动影响。
+
 ## 6. 明确不做（边界）
 
 - ❌ 不做汇总文档工具（用户自己写脚本汇总）

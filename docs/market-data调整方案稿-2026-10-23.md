@@ -20,15 +20,12 @@
 
 ## 2026-10-29跨公司导出发现，暂缓处理
 
-其中串公司核查与缓存写入失败已按用户指定优先开展诊断；诊断结论及待确认的最小修复范围只见[A股优先修复方案](market-data调整方案稿-2026-10-29.md)，尚未修改工具源码。
-
-用户明确本轮只改研究项目中的报告/绘图脚本；以下问题只记录，不修改本项目源码、不导出用户版、不部署或推送。已对照当前开发版与用户版，server.py、cli.py、financial_service.py、financial_contract.py、company_ifind_service.py、providers/financial_statements.py、providers/ifind.py、data_store.py内容一致。
+以下问题来自2026-10-29研究脚本导出实测。当时只修改研究项目中的报告/绘图脚本，上游问题仅记录；此后按用户授权逐项处理，本表只保留未闭环部分，已闭环事项及验收见[决策记录](决策记录.md)。
 
 | 位置 | 已观察证据及待处理事项 |
 |---|---|
 | MCP财报展示 | 同参真实调用300308.SZ、2025-12-31、segments、items=income by product及income by customer：CLI返回产品收入占比0.97951312203735、毛利率0.4260645926294703；MCP渲染取ratio而非income_share，产品占比空白，且省略gross_profit、gross_margin和rank。客户top5占比0.7598被渲染成无名称行，合计语义丢失。需修server.py的_render_financial_markdown，保留实际字段及排名/合计含义，不要求两入口文本格式相同。 |
 | CLI批次状态 | 重庆路桥分部、分红子结果status=partial_success且ok=true，cli.py的_status仅统计ok，批次误报success。汇总须保留部分成功、失败和过期状态。 |
-| 缓存写入 | 重庆路桥2026-06-30分产品segments_product.json、2023年度dividends.json原子替换均出现WinError 5拒绝访问。须先查占用/权限原因，不把写入失败当成未披露或补0；目前未确定系统原因，不先假设需要重试。 |
 | 科目单位 | 基本/稀释每股收益unit仍为“原币基础单位”，普通科目统一默认该单位。需区分金额、每股值及其他非金额指标，有依据再换算。 |
 | 港股公司信息参数 | company_service.py对非A/BJ走legacy分支，years/periods/as_of_date校验后未传入legacy。需明确支持边界，不能静默接受但不执行；MCP与CLI同步。 |
 | 港股预测单位 | 经济通经AKShare把百万元人民币/百万港元均重命名为“纯利/亏损”，分/港仙均重命名为“每股盈利”，响应未保留原始币种。需保留来源表头、币种、量纲、纯利口径和数据日期。脚本本轮保留原值并标明未确认，不从证券市场或财报币种猜预测币种。 |

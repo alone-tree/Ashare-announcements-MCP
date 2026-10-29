@@ -118,6 +118,36 @@ def test_holders_fetch_failure_never_falls_back_to_legacy_cache(tmp_path, monkey
     assert old_file.read_bytes() == original
 
 
+def test_dividends_write_failure_keeps_old_value_and_check_time(tmp_path, monkeypatch):
+    requests = []
+
+    def section(root, mc, name, **kwargs):
+        requests.append(kwargs["years"])
+        return [{"year": 2023, "现金分红": len(requests)}]
+
+    monkeypatch.setattr(ci, "section", section)
+    args = {"sections": ["dividends"], "years": [2023]}
+    before = company_service.get_company_profile(str(tmp_path), "600106.SH", **args)
+    target = data_store.path(str(tmp_path), "600106.SH", "company_data", "dividends")
+    original = target.read_bytes()
+    error = PermissionError("模拟持续拒绝访问")
+    error.winerror = 5
+
+    def denied(*args):
+        raise error
+
+    monkeypatch.setattr(data_store.os, "replace", denied)
+    monkeypatch.setattr(data_store.time, "sleep", lambda _: None)
+    after = company_service.get_company_profile(str(tmp_path), "600106.SH", force_refresh=True, **args)
+    result = after["sections"]["dividends"]
+    assert after["status"] == "partial_success" and result["stale"]
+    assert result["data"] == before["sections"]["dividends"]["data"]
+    assert result["checks"] == before["sections"]["dividends"]["checks"]
+    assert result["failed"][0]["reason"] == str(error)
+    assert requests == [[2023], [2023]]  # 重试落盘，不重复请求上游。
+    assert target.read_bytes() == original and not list(target.parent.glob("*.tmp"))
+
+
 def test_sina_fetch_has_no_business_writes(tmp_path, monkeypatch):
     import pandas as pd
     from market_data_mcp.providers import sina
