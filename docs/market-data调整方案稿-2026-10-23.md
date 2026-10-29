@@ -20,6 +20,8 @@
 
 ## 2026-10-29跨公司导出发现，暂缓处理
 
+其中串公司核查与缓存写入失败已按用户指定优先开展诊断；诊断结论及待确认的最小修复范围只见[A股优先修复方案](market-data调整方案稿-2026-10-29.md)，尚未修改工具源码。
+
 用户明确本轮只改研究项目中的报告/绘图脚本；以下问题只记录，不修改本项目源码、不导出用户版、不部署或推送。已对照当前开发版与用户版，server.py、cli.py、financial_service.py、financial_contract.py、company_ifind_service.py、providers/financial_statements.py、providers/ifind.py、data_store.py内容一致。
 
 | 位置 | 已观察证据及待处理事项 |
