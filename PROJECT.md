@@ -14,9 +14,10 @@
 
 支持七个 tool（与 MCP 工具一一对应）：
 
+- `establish_company`：`action="check"`配`keyword`查询候选，`action="establish"`配`codes`数组建档；公司识别与映射规则见[公告主文档§3—4](docs/AH公告与互动问答改造方案.md#3-establish_company)。
 - `query_batch`：批量同步并查询多家公司，返回日期和关键词范围内的全部公告。
 - `query_a_share_interactions_batch`：批量查询 A 股互动问答（原 `query_interactions_batch` 改名，仅 A 股适用）。
-- `search_batch`：批量检索整份 PDF，返回命中页和短片段；默认不主动 OCR。
+- `search_batch`：批量检索整份 PDF，返回命中页和短片段；`ocr_scanned=true`为默认值。
 - `read_batch`：批量读取指定页段；默认 `return_pages=20`、`ocr=true`。
 - `query_transcripts_batch`：批量查询美股电话会议索引/正文（参数 `period`、`force_refresh`）。
 - `search_transcripts_batch`：批量检索电话会议正文（参数 `query`）。
@@ -32,22 +33,25 @@ query_announcements(
     start_date: str | None = None,
     end_date: str | None = None,
     keyword: str | None = None,
+    market: str = "all",
 )
 ```
 
-- 首次查询直接翻完东方财富全部列表，建立完整档案。
-- 后续每次查询前检查最新公告并增量补全。
+- 查询前须显式建档；未建档时提示`check → establish → query`。建档与同步规则见[公告主文档§3—5](docs/AH公告与互动问答改造方案.md#3-establish_company)。
+- `market`可取`all/A/H`，只筛选本地结果；`A`包含B股，`H`只筛港股，美股提交使用`all`。所有关联证券仍执行同步。
 - 日期、关键词、翻页只作用于本地缓存。
 - 每页固定最多 50 条；返回完整公告数、匹配数和总页数。
 - 股票代码自动清理市场前后缀；关键词空格为 OR，显式 `AND` 为 AND。
 
 ### `search_announcement`
 
-在完整逐页索引中检索关键词，返回命中页和短片段。扫描页可按需 OCR 并写回缓存，因此后续检索和阅读无需重复识别。
+参数为`stock_code`、`url`、`query`、`max_results=20`、`ocr_scanned=true`。在完整逐页索引中检索关键词，返回命中页和短片段；扫描页索引与续查流程见[阅读产品文档§4.3](docs/公告阅读产品设计.md#43-扫描件)。
 
 ### `read_announcement`
 
-不传 `start_page` 时自动检测：短公告（≤20 页）直接返回全文；长公告返回文档画像（页数、profile、扫描页、文本覆盖率、推荐动作）和前 5 页正文预览。传 `start_page` 时精读指定页段：正常页通过 PyMuPDF4LLM 尽量保留标题、段落和表格；扫描页通过 RapidOCR 恢复文字。单次最多返回 `return_pages` 页（默认 20，不设上限，可一次读完全文），使用 `next_page` 继续。
+参数为`stock_code`、`url`、`start_page=None`、`return_pages=20`、`ocr=true`。不传`start_page`时自动检测：短公告（≤20页）返回全文，长公告返回画像和前5页正文预览。传`start_page`时按页精读，`return_pages`不设上限，可一次读完全文，使用`next_page`续读。PDF页码从1开始，参数语义同样适用于SEC HTML虚拟页；阅读引擎、扫描页和表格策略只在[阅读产品文档](docs/公告阅读产品设计.md)维护。
+
+阅读与检索的`url`接受东方财富`pdf.dfcfw.com`、SEC EDGAR链接或本地已存在的PDF路径，不要求公司先建档。链接与附件的已知边界见[公告主文档§8.3](docs/AH公告与互动问答改造方案.md#83-公告详情与附件)。
 
 ### `query_transcripts`
 
@@ -81,7 +85,7 @@ search_transcripts(
 
 ### `query_a_share_interactions`
 
-A 股互动问答查询（原 `query_interactions` 改名，凸显 A 股范围；核心功能不变）。首次全量建档，之后增量更新；仅 A 股适用，传 H 股代码可定位关联 A 股问答，纯港股/B 股/本地公司/美股返回 `applicable=false`。
+参数为`stock_code`、`page=1`、`start_date=None`、`end_date=None`、`keyword=None`。仅A股适用；关联H股可定位A股，纯港股/B股/本地公司/美股返回`applicable=false`。同步、筛选与缓存见[公告主文档§6](docs/AH公告与互动问答改造方案.md#6-互动问答)。
 
 ## 美股公告提交与标题
 
@@ -116,6 +120,7 @@ search_announcement
   -> 查询逐页索引
   -> 必要时由独立工作进程每批 OCR 3 个扫描页并缓存
   -> 返回命中页和片段
+```
 
 ## 缓存结构
 
@@ -129,8 +134,7 @@ cache/{股票代码}/
   transcripts/{FY2025-Q1}.json  # 电话会议正文（逐发言轮次）
 ```
 
-提取缓存记录 PDF 文件大小和修改时间。源文件变化或索引版本升级时自动重建。
-电话会议：正文全文缓存（每财季一篇，~40-60K 字符）；首次同步最近 12 财季、每次调用同步索引页、`force_refresh` 重试失败季；`report_date` 由公告档案（EDGAR 10-Q/10-K）反查，不解析 XBRL。
+提取缓存结构与失效规则见[阅读产品文档§3](docs/公告阅读产品设计.md#3-核心判断)；电话会议同步与状态语义见上文`query_transcripts`，不维护第二套规则。
 
 ## 依赖
 
@@ -143,12 +147,12 @@ cache/{股票代码}/
 | `rapidocr` | 中文扫描页 OCR |
 | `onnxruntime` | 本地 CPU OCR 推理 |
 
-OCR 工作进程必须使用 `stdin=DEVNULL`，不能继承 MCP stdio 输入管道；否则 ONNX 初始化会在能力库 relay 场景下长期无响应。
+OCR进程及引擎初始化约束见[阅读产品文档§3](docs/公告阅读产品设计.md#3-核心判断)。
 
 ## 导出与注册
 
 ```bat
-python scripts\export.py "D:\HermesSync	ools-share-announcement-reading"
+python scripts\export.py "D:\HermesSync\tools\a-share-announcement-reading"
 ```
 
 Hermes 配置（config.yaml a-stock-announcements）直接注册导出目录的 `ashare_announcements_mcp/server.py`；历史的能力库 A股公告阅读 注册已不用。所有修改必须先在本开发库完成并通过测试，随后先提交 Git，再执行 export；禁止直接修改用户版导出目录。

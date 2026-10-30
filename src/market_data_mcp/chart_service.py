@@ -1,20 +1,8 @@
 # -*- coding: utf-8 -*-
 """market-data 绘图服务：K线/折线行情图（原 market-data-chart MCP 引擎，2026-10-19 并入本包）。
 
-数据链路：直接 import 调用 market_data_mcp.service.get_quote()，不复制取数代码；
-绘图层完全不操心数据（有缓存用缓存，没缓存由 get_quote 自动补拉）。
-
-视觉风格全部代码写死（尺寸/PPI/中文字体/配色），不提供模板系统：
-- 红涨绿跌（A股口径）
-- MA5/10/20/60 按当前周期计算（周图 MA5 = 5 周均线）；均线数据不足不绘制
-- log_scale 对 K线/折线/成交量副图都生效；数据含负值或 0 时退回普通坐标
-- 事件标注（events：CSV 路径或 JSON 数组）K线/折线都支持；axvline + 顶部错开文字
-- 高低点标注（keypoints，仅折线图）：自动提取回撤阶段前高/低点，按回撤阈值过滤
-- 每次调用都重新绘图（不按参数做图缓存复用），PNG 落盘 {root}/cache/_charts/
-- 只返回文件路径，不返回图片内容
-
-历史决策（视觉/参数/输出口径）见 docs/chart-MCP绘图工具设计.md，并入记录见
-docs/market-data改造设计-2026-10-19.md §3.6 与 docs/market-data架构设计.md。
+依据 docs/market-data架构设计.md §2.6 实现参数、视觉与输出，取数复用 service.get_quote；
+本注释不另维护行为规则。原独立MCP及并入历史见 docs/决策记录.md。
 """
 
 from __future__ import annotations

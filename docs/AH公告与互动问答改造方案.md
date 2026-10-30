@@ -1,8 +1,10 @@
-# A/H 公告与互动问答改造方案
+# 公告与互动问答行为及上游资料
 
 ## 1. 目标与边界
 
-把现有 A 股公告工具克制地扩展为：
+本文件是公告侧公司建档、映射、公告与互动问答业务规则及上游证据的唯一维护位置。文件沿用原路径；逐参数契约与运行入口见[PROJECT](../PROJECT.md)，阅读策略与验收见[阅读产品文档](公告阅读产品设计.md)。
+
+A/H公告主路径的目标是：
 
 - 查询纯 A 股、纯港股和 A+H 公司的公告；
 - A/H 公告分别缓存，查询时合并；
@@ -12,18 +14,9 @@
 
 这是个人投资工具。不要增加未经真实使用证明的抽象、字段、迁移工具或错误日志。
 
-## 2. 实施顺序
+## 2. 实施与资料入口
 
-必须小步实现，每一步完成真实调用和测试后再继续：
-
-1. 简化 `establish_company(action="check")`；
-2. 实现 `cache/companies.json` 和 `action="establish"`；
-3. 改造 A/H 公告查询；
-4. 增加互动问答查询。
-
-当前分支中的 `check` 是探索版，仍带有过滤和自动同名补查逻辑，不是本方案确认的最终行为。
-
-> 状态：四步已全部完成并通过真实调用验证（提交 c1f6110 / c0d58ec / 6f4a602 / 5255027 / 830fb7c）。`check` 已按本方案简化；`establish`、A/H 合并查询、互动问答均已实现。
+check简化、公司映射、A/H合并查询和互动问答已实现，早期探索与实施历史由Git及[决策记录](决策记录.md)保存。本文件不维护临时分支、工作区状态或测试环境；开发约束见[AGENTS](../AGENTS.md)，本地代码入口见§9。
 
 ## 3. `establish_company`
 
@@ -76,7 +69,7 @@ establish_company(
 - 拒绝两个 A 股、两个 H 股或三个及以上代码；
 - 不自动搜索、猜测或补全另一市场；
 - 代码必须能精确查询到证券；
-- 拒绝用权证、期货、ADR 等非普通 A/H 公司证券建档；
+- A/H建档的证券分类按§8.1.1执行，拒绝权证、期货等不支持类别；美股及ADR字母代码建档见PROJECT，不套用A/H配对规则；
 - 工具描述提醒 AI 不要使用 `-R`、`-WR` 人民币柜台代码，应选择主要港股代码；
 - A/H 是否属于同一家公司由 AI 根据 `check` 结果选择，程序不实现复杂关系推断。
 
@@ -175,13 +168,7 @@ cache/03308/announcements.json
 
 ### 5.1 `query_announcements`
 
-增加：
-
-```python
-market: str = "all"
-```
-
-允许 `all`、`A`、`H`，默认 `all`。市场筛选只作用于本地结果，不影响所有关联证券都执行增量更新。
+参数签名、分页及market取值只在[PROJECT的query_announcements契约](../PROJECT.md#query_announcements)维护。
 
 查询规则：
 
@@ -239,25 +226,13 @@ cache/300308/interactions.json
 
 不与公告混合。
 
-查询入口：
-
-```python
-query_interactions(
-    stock_code: str,
-    page: int = 1,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    keyword: str | None = None,
-)
-```
+入口为`query_a_share_interactions`，签名及市场适用性见[PROJECT](../PROJECT.md#query_a_share_interactions)。
 
 规则：
 
 - 输入 A 股或关联 H 股代码都通过 `companies.json` 定位 A 股代码；
-- 纯港股返回“港股无互动问答，不适用”；
 - 首次获取完整历史，后续增量更新；
 - 更新失败但已有旧缓存时继续返回旧数据；
-- 每页最多 50 条；
 - 日期按回答时间筛选；
 - 关键词同时检索问题和回答；
 - 空格表示 OR，显式 `AND` 表示 AND；
@@ -269,7 +244,7 @@ query_interactions(
 - 实际阅读时才下载；
 - 公告详情接口 `api/content/ann` 可返回正文和 `attach_url_web`；
 - 下载后必须验证响应以 `%PDF-` 开头，避免把临时反爬页面缓存为 PDF；
-- 现有 `inspect_announcement`、`search_announcement`、`read_announcement` 阅读流程尽量复用。
+- 下载后交给既有阅读管线；阅读参数见PROJECT，索引、格式转换和OCR见阅读产品文档，不另设inspect工具。
 
 ## 8. 已验证的上游接口
 
@@ -700,27 +675,16 @@ https://stockanalysis.com/stocks/{ticker}/transcripts/
 **正文页**：`/stocks/{ticker}/transcripts/{id}-q{q}-{year}/`
 
 - 结构：`#transcript-panel-full` 内每个发言轮次是 `div.border-t.border-sharp.pt-5`，内含 speaker（`div.text-lg.font-bold`）与若干 `<p>`（句子包在 `span.transcript-sentence`）；站点级解析，不做公司级适配。
-- 无独立日期字段；报告期不进正文，由工具从公告档案反查（见下）。
+- 页面无独立报告截止日字段；财季标签由索引页提供。
 
-**财季标签与 report_date**：
-
-- 财季标签直接取索引页的 `q{q}-{year}`，不再由 10-Q/10-K 推算（`_derive_quarters` 只保留用于把标签映射到报告期）。
-- `report_date`/`form` 从本地公告档案的 10-Q/10-K 反查：有则附上，没有留空；刚开完会尚未提交 10-Q 时为空属正常（如 2026-10-21 的 META FY2026-Q3）。
-- 是否存在电话会完全由索引页决定，不再受「有没有 10-Q/10-K」影响。
-- ADR/外国发行人的电话会常挂在主上市代码下：美股代码页 404 时读个股页 `transcriptsLinkSymbol`（如 TSM → `TPE-2330`、BABA → `HKG-9988`），改走 `/quote/{exchange}/{code}/transcripts/`——站点级规则，不写公司特例表。实测 TSM 62 季、BABA 48 季、NIO 32 季、ASML 41 季。
-- 只有个股页也没有 `transcriptsLinkSymbol`、或主上市代码页同样 404 时，才返回空索引 + note（不报错、不冒充有数据）。
-
-**状态与缓存**：
-
-- `ok`=正文已缓存；`missing`=正文页 404（该季上游未收录）；`failed`=网络/HTTP/解析异常（带 `http_status` 或 `error`）。
-- 全文缓存（每财季一篇 ~40–60K 字符）；首次同步下载最近 12 财季，`period` 指定早期季时按需补下载；`force_refresh` 重试全部非 `ok` 财季。
+ADR/外国发行人的电话会可挂在主上市代码下；实测个股页`transcriptsLinkSymbol`提供TSM → `TPE-2330`、BABA → `HKG-9988`，主上市代码页覆盖TSM 62季、BABA 48季、NIO 32季、ASML 41季。工具的路由、report_date关联、状态与缓存规则仅见[PROJECT的query_transcripts契约](../PROJECT.md#query_transcripts)。
 
 **已退役来源（2026-10-22）**：
 
 - Alpha Spread：原主源，正文是 `div.comment` 结构。2026-09 起 Cloudflare managed challenge，须 `alphaspread_cookies.json` 的 cf_clearance + 配套 UA，而 cf_clearance 绑定出口 IP，2026-09-10 之后长期 403；同时站点改版（`div.comment` → `article.earnings-call__turn`）使旧解析器取不到正文。已整体移除。
 - AlphaStreet（`news.alphastreet.com`）：原备用源（Alpha Spread 404 时补位，只覆盖最近约 8 季）。CloudFront 对整站（含 robots.txt）返回 403，换 UA/有头浏览器均无效（区域/IP 级封锁），不可用。
 
-## 9. 当前代码入口与工作区状态
+## 9. 代码入口
 
 实现前应先阅读：
 
@@ -738,44 +702,10 @@ src/ashare_announcements_mcp/server.py
     MCP工具入口。
 
 src/ashare_announcements_mcp/company.py
-    当前探索版证券搜索。它会过滤候选并自动同名补查，与最终check设计不一致。
+    证券候选查询、明确代码建档及公司映射。
 
 tests/test_company.py
-    当前探索版check测试，也需要随第一步一起调整。
+    公司候选、建档和映射回归测试。
 ```
 
-临时真实探针：
-
-```text
-.codex-temp/source_probe.py
-.codex-temp/zhongji_history_probe.py
-```
-
-临时探针只作证据，不应导入生产代码或纳入产品模块。
-
-开发测试环境：
-
-```powershell
-$env:PYTHONPATH = 'src'
-& 'D:\venvs\a-share-announcements\Scripts\python.exe' -m pytest -q
-```
-
-项目使用 `src/` 布局；不设置 `PYTHONPATH=src` 时，当前测试环境无法导入包。
-
-当前工作分支：
-
-```text
-codex/establish-company-check
-```
-
-当前分支存在未提交的探索版 `check` 代码、测试、本文档和 `.codex-temp/`。下一位实现者应保留用户工作，不要擅自清理、重置或提交临时探针。
-
-## 10. 不需要重复探索的事项
-
-- 不需要再次研究问答页面的“点击加载更多”按钮；POST分页已经跑通。
-- 不需要再次验证中际旭创问答能否全量获取；114页全部成功。
-- 不需要再次验证东方财富能否查询H股公告；接口与A股基本同构。
-- 不需要再次验证港股代码复用；`03308` 和 `00300` 已经证明必须按 `InnerCode` 过滤。
-- 不需要再次比较带时间戳和不带时间戳的PDF地址；底层文件一致。
-- 不需要再次设计A/H自动关系推断；已经决定由AI显式向 `establish` 提交一个或两个明确代码。
-- 不需要新增缓存目录层级；已经决定保留现有每个证券代码一个目录，只新增 `cache/companies.json`。
+早期探针与探索分支说明保存在本文件Git历史，不作为当前工作区状态。§8的真实上游证据继续保留；未闭环附件、检索提示及上市材料方向仍在§8.3，不因本轮整理宣称已修复。
