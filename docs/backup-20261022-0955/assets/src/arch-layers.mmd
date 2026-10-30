@@ -1,9 +1,0 @@
-flowchart TD
-    A["MCP 入口 server.py<br/>5 工具 · 严格参数模式"] --> B["CLI 入口 cli.py<br/>stdin JSON → stdout JSON"]
-    A --> C["调度层 service.py<br/>参数校验 · 市场路由 · 筛选 · 派生"]
-    B --> C
-    C --> D["取数层 providers/<br/>新浪 · iFinD · 东财 · SEC"]
-    C --> E["缓存层 cache / financial_cache<br/>JSON 文件 + 版本链"]
-    D --> E
-    C --> F["审计 logs/requests.jsonl<br/>每次上游请求一条"]
-    E --> G["输出<br/>markdown 矩阵 · 长表 · CSV · PNG"]
