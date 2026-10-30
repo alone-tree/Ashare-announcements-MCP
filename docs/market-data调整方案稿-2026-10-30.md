@@ -2,7 +2,7 @@
 
 ## 一、范围与状态
 
-用户要求处理MCP营收结构丢字段、CLI把子结果partial_success汇总为success两项问题。状态为方案待确认，未修改工具源码。问题入口仍为[剩余事项](market-data调整方案稿-2026-10-23.md)，已有证据为`.codex-temp/dev-smoke-20261029-1725/`内真实stdio与CLI返回。
+用户要求处理MCP营收结构丢字段、CLI把子结果partial_success汇总为success两项问题，并于2026-10-30确认“按此方案实施”。本轮按下述范围执行。问题入口仍为[剩余事项](market-data调整方案稿-2026-10-23.md)，已有证据为`.codex-temp/dev-smoke-20261029-1725/`内真实stdio与CLI返回。
 
 本轮只修改server.py的营收结构Markdown展示、cli.py的批次status判定及对应测试。取数、计算公式、缓存、CLI数据本体与CSV不在变更范围内；不导出用户版、不改注册、不推送。
 
