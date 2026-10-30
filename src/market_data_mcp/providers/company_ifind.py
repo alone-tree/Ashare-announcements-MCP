@@ -112,7 +112,7 @@ def annual_report_info(root, mc, period):
     """财报细则§2的年报补充；参数原式与样本在支持情况§7维护。"""
     api_period = period.replace("-", "")
     fields = {"AUDITOR": "ths_audit_institution_stock", "OPINION_TYPE": "ths_audit_opinion_type_stock",
-              "OSOPINION_TYPE": "ths_ica_opinion_type_stock", "NOTICE_DATE": "ths_regular_report_actual_dd_stock"}
+              "INTERNAL_CONTROL_OPINION": "ths_ica_opinion_type_stock", "NOTICE_DATE": "ths_regular_report_actual_dd_stock"}
     return basic(root, mc, fields, {key: api_period + (",100" if key in ("AUDITOR", "OPINION_TYPE") else "")
                                   for key in fields})
 

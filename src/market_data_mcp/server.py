@@ -66,7 +66,8 @@ _FINANCIAL_META_ROWS = [
     ("东财更新日", "UPDATE_DATE"),
     ("货币", "CURRENCY"),
     ("审计意见", "OPINION_TYPE"),
-    ("内控审计意见", "OSOPINION_TYPE"),
+    ("境外审计意见", "OSOPINION_TYPE"),
+    ("内控审计意见", "INTERNAL_CONTROL_OPINION"),
     ("审计单位", "AUDITOR"),
 ]
 

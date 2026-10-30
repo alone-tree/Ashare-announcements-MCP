@@ -33,7 +33,7 @@ def test_source_supplement_does_not_overwrite_or_duplicate_verified_names():
     names = [labels.display_name("A", code, code) for code in labels.A_SHARE_SOURCE_LABELS]
     assert len(names) == len(set(names))
     assert not (set(names) & {v[0] for v in labels.A_SHARE_ITEM_NAMES.values()})
-    assert labels.display_name("A", "ABLE_OCI_OTHER", "ABLE_OCI_OTHER") == "ABLE_OCI_OTHER"
+    assert "东财汇总项" in labels.display_name("A", "ABLE_OCI_OTHER", "ABLE_OCI_OTHER")
 
 
 def test_same_name_raw_codes_preserve_nonempty_and_null_in_mcp_and_csv(tmp_path):
@@ -79,7 +79,7 @@ def test_old_cache_chinese_query_csv_and_mcp_units(tmp_path, monkeypatch):
                 "items": [{"item_code": c, "item_name": c, "amount": v, "source": "eastmoney"} for c, v in {
                     "BASIC_EPS": 0.123456, "DILUTED_EPS": 0.12, "OPERATE_INCOME": 100.125,
                     "NETCASH_OPERATE": 80, "FBNETCASH_OPERATE": 81, "FB_NETCASH_OPERATE": 82,
-                    "NETCASH_OPERATENOTE": 83, "ABLE_OCI_OTHER": 9,
+                    "NETCASH_OPERATENOTE": 83, "ABLE_OCI_OTHER": 9, "UNVERIFIED_NEW_ITEM": 10,
                 }.items()]}]
     def fetch(root, mc, statement):
         if statement == "income":
@@ -101,7 +101,8 @@ def test_old_cache_chinese_query_csv_and_mcp_units(tmp_path, monkeypatch):
     assert "BASIC_EPS" in {i["item_name"] for i in json.loads(before)["reports"][0]["versions"][0]["items"]}
     eps = next(r for r in rows if r["item_name"] == "基本每股收益")
     assert eps["unit"] == "原币/股" and eps["amount"] == 0.123456
-    assert any("ABLE_OCI_OTHER" in note for note in result["notes"])
+    assert any("UNVERIFIED_NEW_ITEM" in note for note in result["notes"])
+    assert any("东财汇总项" in note for note in result["notes"])
     path = tmp_path / "out.csv"
     fs.get_financial_data(str(tmp_path), "200725.SZ", "cumulative", **args, export_path=str(path))
     exported = list(csv.DictReader(path.open(encoding="utf-8-sig")))

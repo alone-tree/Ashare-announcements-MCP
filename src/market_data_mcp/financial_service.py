@@ -101,7 +101,7 @@ def merge_financial_requirements(plans, selected, all_items, market):
             if name in SEGMENTS:
                 continue
             if name in META_KEYS:
-                required.add("income")
+                required.add("balance" if name == "境外审计意见" else "income")
                 continue
             found = [s for s in ("balance", "income", "cash_flow") if name in DEFAULT_ITEMS[s]]
             if not found and (name in {"营业收入", "归母净利润"} or plan["kind"] == "ratio" and name not in {"负债合计", "资产总计"}):
@@ -326,7 +326,7 @@ def _segment_results(root, mc, periods, names, force, minimal, notes, top_n=5):
 
 def _supplement_report_info(root, mc, period, metadata, requested_keys, force):
     """财报细则§2/§3：元信息缺项补充独立提交，不写回东财报表版本。"""
-    keys = {"AUDITOR", "OPINION_TYPE", "OSOPINION_TYPE", "NOTICE_DATE"}
+    keys = {"AUDITOR", "OPINION_TYPE", "INTERNAL_CONTROL_OPINION", "NOTICE_DATE"}
     if mc.market not in ("A", "BJ") or not period.endswith("12-31") or not any(
         metadata.get(key) in (None, "") for key in keys & requested_keys
     ):
@@ -346,8 +346,12 @@ def _supplement_report_info(root, mc, period, metadata, requested_keys, force):
     except Exception as exc:
         failures.append({"item": "报表信息补充", "report_date": period, "reason": str(exc), "stale": bool(cached)})
     combined, sources = dict(metadata), {}
-    for key, value in (cached or {}).get("data", {}).items():
-        if combined.get(key) in (None, ""):
+    # 财报细则§3：仅此已校验ifind来源的旧缓存键表示内控，不迁移东财原始键。
+    values = dict((cached or {}).get("data", {}))
+    if "INTERNAL_CONTROL_OPINION" not in values and "OSOPINION_TYPE" in values:
+        values["INTERNAL_CONTROL_OPINION"] = values["OSOPINION_TYPE"]
+    for key, value in values.items():
+        if key in keys and combined.get(key) in (None, ""):
             combined[key], sources[key] = value, "ifind"
     return combined, sources, failures
 
@@ -383,8 +387,10 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     required = merge_financial_requirements(plans, selected, all_items, mc.market)
     if segment_names and items is not None:
         required.add("income")  # 营收占比依赖同报告期累计营业总收入。
-    if meta_names:
+    if any(name != "境外审计意见" for name in meta_names):
         required.add("income")
+    if "境外审计意见" in meta_names:
+        required.add("balance")  # 该源元信息在利润表可能缺列，显式请求读取资产表。
     if not required and periods is None:
         required.add("income")  # 发现真实报告期，不按日历猜港美季度。
     notes, refresh_errors = [], []
@@ -470,7 +476,10 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     source_labels = sorted({str(row.get("item_code")) for row in output
                             if row.get("item_code") in financial_items.A_SHARE_SOURCE_LABELS}) if mc.market in ("A", "BJ") else []
     if source_labels:
-        notes.append("部分科目使用东财网页中文标签；补充资料、其他项目及平衡项目保持独立原值，标签不代表金额口径已逐项核验")
+        notes.append("部分科目使用东财来源标签或已核实的源分类名称；补充资料、其他项目及平衡项目保持独立原值，标签不代表金额口径已逐项核验")
+    for note in dict.fromkeys(financial_items.item_note(mc.market, row.get("item_code")) for row in output):
+        if note:
+            notes.append(note)
     unnamed = sorted({str(row.get("item_code")) for row in output
                       if row.get("amount") is not None and str(row.get("item_name") or "").isascii()
                       and financial_items.display_name(mc.market, row.get("item_code"), row.get("item_name")).isascii()}) if mc.market in ("A", "BJ") else []

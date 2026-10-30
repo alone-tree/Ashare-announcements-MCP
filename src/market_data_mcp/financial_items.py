@@ -254,14 +254,24 @@ A_SHARE_ITEM_NAMES: dict[str, list[str]] = {
     "OPERATE_RECE_REDUCE": ["经营性应收项目的减少"],
     "OPERATE_PAYABLE_ADD": ["经营性应付项目的增加"],
     "BOND_INTEREST_EXPENSE": ["债券利息支出"],
+    # 2016年以来原文逐项核验；三项手续费旧码与现有码分别保留。
+    "ACCEPT_DEPOSIT_INTERBANK": ["吸收存款及同业存放"],
+    "DIV_HOLDSALE_ASSET": ["划分为持有待售的资产"],
+    "DIV_HOLDSALE_LIAB": ["划分为持有待售的负债"],
+    "ASSETMANAGE_FEE_NI": ["资产管理业务手续费净收入（旧字段）"],
+    "BROKER_FEE_NI": ["经纪业务手续费净收入（旧字段）"],
+    "INVESTBANK_FEE_NI": ["投资银行业务手续费净收入（旧字段）"],
 }
 
 
-# 东财2026-10-30通用/银行/券商/保险F10网页的字段标签。
+# 东财通用/银行/券商/保险F10网页标签及公告核实的源分类名称。
 # 来源及金额口径疑点见《字段与数据源支持情况》；不等同于逐项年报核验。
 # 补充资料与备用字段加中文限定，以免同名输出覆盖主表金额。
 A_SHARE_SOURCE_LABELS: dict[str, str] = {
-    "ACCEPT_DEPOSIT_INTERBA": "吸收存款及同业存放",
+    "ABLE_OCI_OTHER": "将重分类进损益的其他综合收益其他项目（东财汇总项）",
+    "UNABLE_OCI_OTHER": "不能重分类进损益的其他综合收益其他项目（东财汇总项）",
+    "OCI_OTHER": "其他综合收益其他项目（东财原始项）",
+    "ACCEPT_DEPOSIT_INTERBA": "吸收存款及同业存放（网页字段）",
     "ACCOUNTS_RECE_ADD": "应收账款净增加额",
     "ACCRUED_EXPENSE_ADD": "预提费用的增加",
     "ADD_PLEDGE_TIMEDEPOSITS": "增加质押和定期存款所支付的现金",
@@ -575,6 +585,20 @@ A_SHARE_SOURCE_LABELS: dict[str, str] = {
     "UNINSURANCE_CNI": "非保险业务手续费及佣金净收入",
     "UNINVOLVE_INVESTFIN_OTHER": "不涉及现金收支的投资和筹资活动金额其他项目",
 }
+
+
+A_SHARE_ITEM_NOTES = {
+    "ABLE_OCI_OTHER": "将重分类进损益的其他综合收益其他项目为东财汇总项，实际构成随行业、报告期变化，可对应单行或多行合计；不等同于某一保险合同科目，不与已列综合收益分项重复相加",
+    "UNABLE_OCI_OTHER": "不能重分类进损益的其他综合收益其他项目为东财汇总项，实际构成随行业、报告期变化；不固定对应某一公司具体科目，不与已列综合收益分项重复相加",
+    "OCI_OTHER": "其他综合收益其他项目保留东财原始值；已核验历史样本与权益法下可转损益的其他综合收益同值，可能与已列分项重复，不作为额外独立收益相加",
+    "ASSETMANAGE_FEE_NI": "资产管理业务手续费净收入旧字段在已核验期间与现行同义字段同值，分别保留原值，不能重复相加",
+    "BROKER_FEE_NI": "经纪业务手续费净收入旧字段在已核验期间与现行同义字段同值，分别保留原值，不能重复相加",
+    "INVESTBANK_FEE_NI": "投资银行业务手续费净收入旧字段在已核验期间与现行同义字段同值，分别保留原值，不能重复相加",
+}
+
+
+def item_note(market: str, item_code: object) -> str:
+    return A_SHARE_ITEM_NOTES.get(str(item_code or ""), "") if market in ("A", "BJ") else ""
 
 
 def display_name(market: str, item_code: object, source_name: object) -> str:

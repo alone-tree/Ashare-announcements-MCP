@@ -789,6 +789,9 @@ def _localize_financial_rows(rows: list[dict], market: str) -> list[dict]:
             index = codes.index(str(item.get("item_code") or "")) + 1
             item["item_name"] += f"（同名字段{index}）"
         item.setdefault("unit", financial_items.item_unit(item, market))
+        note = financial_items.item_note(market, item.get("item_code"))
+        if note:
+            item["note"] = "；".join(filter(None, (item.get("note"), note)))
         item.pop("item_code", None)
         output.append(item)
     return output

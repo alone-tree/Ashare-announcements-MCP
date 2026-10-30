@@ -126,7 +126,7 @@ def test_annual_info_cached_separately_and_source_preserved(tmp_path, monkeypatc
     def report_info(root, mc, period):
         calls.append(period)
         return {"AUDITOR": "示例事务所", "OPINION_TYPE": "无法表示意见",
-                "OSOPINION_TYPE": "带强调事项段的无保留意见", "NOTICE_DATE": "20260421"}
+                "INTERNAL_CONTROL_OPINION": "带强调事项段的无保留意见", "NOTICE_DATE": "20260421"}
     monkeypatch.setattr(ci, "annual_report_info", report_info, raising=False)
     args = dict(periods=["2025-12-31"], statements=["meta"], items=["公告日", "审计单位", "审计意见", "内控审计意见"])
     for _ in range(2):

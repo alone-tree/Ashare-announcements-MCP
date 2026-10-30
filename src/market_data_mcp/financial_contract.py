@@ -23,7 +23,8 @@ RATIOS = {
     "资产负债率": ("负债合计", "资产总计"),
 }
 META_KEYS = {"报告截止日": "REPORT_DATE", "公告日": "NOTICE_DATE", "币种": "CURRENCY",
-             "审计意见": "OPINION_TYPE", "内控审计意见": "OSOPINION_TYPE", "审计单位": "AUDITOR"}
+             "审计意见": "OPINION_TYPE", "内控审计意见": "INTERNAL_CONTROL_OPINION",
+             "境外审计意见": "OSOPINION_TYPE", "审计单位": "AUDITOR"}
 # 只补充同义名称，不跨市场映射或用相近科目替代。
 ALIASES = {"合并净利润": ["净利润"], "归母净利润": ["归属于母公司股东的净利润"],
            "所有者权益合计": ["股东权益合计"], "经营活动现金流入": ["经营活动现金流入小计"],
