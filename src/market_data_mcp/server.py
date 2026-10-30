@@ -85,6 +85,40 @@ def _fmt_financial_meta(value):
     return text[:-len(" 00:00:00")] if text.endswith(" 00:00:00") else text
 
 
+def _render_segments_markdown(segments: list[dict]) -> str:
+    """依据docs/行为-财报工具.md §6.1，按数据形态展示实际返回列。"""
+    concentration_dimensions = {"income by customer", "purchase by supplier"}
+    tables = [
+        ("主营构成", [row for row in segments if row.get("dimension") not in concentration_dimensions],
+         [("report_date", "报告期"), ("dimension", "维度"), ("rank", "排名"), ("name", "名称"),
+          ("income", "收入"), ("income_share", "营收占比"), ("gross_profit", "毛利"), ("gross_margin", "毛利率")]),
+        ("客户/供应商集中度", [row for row in segments if row.get("dimension") in concentration_dimensions],
+         [("report_date", "报告期"), ("dimension", "维度"), ("rank", "排名/汇总"), ("name", "名称"), ("ratio", "占比")]),
+    ]
+    lines = ["## 营收结构（累计口径）"]
+    for title, records, fields in tables:
+        if not records:
+            continue
+        columns = [(key, label) for key, label in fields if any(key in row for row in records)]
+        lines.extend(["", f"### {title}", "", "| " + " | ".join(label for _, label in columns) + " |",
+                      "|" + "|".join("---" for _ in columns) + "|"])
+        for row in records:
+            cells = []
+            for key, _ in columns:
+                value = row.get(key)
+                if key == "rank" and value == "top5":
+                    text = "前5大合计"
+                elif key in ("income_share", "gross_margin", "ratio") and isinstance(value, (int, float)):
+                    text = f"{value:.2%}"
+                elif key in ("income", "gross_profit"):
+                    text = _fmt_financial_amount(value)
+                else:
+                    text = "" if value is None else str(value)
+                cells.append(text)
+            lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 def _render_financial_markdown(result: dict) -> dict:
     """把财报rows渲染为「变量 × 报告期」markdown表。
 
@@ -136,12 +170,7 @@ def _render_financial_markdown(result: dict) -> dict:
         blocks.append("\n".join(md))
     segments = result.pop("segments", [])
     if segments:
-        lines = ["## 营收结构（累计口径）", "", "| 报告期 | 维度 | 名称 | 收入 | 占比 |", "|---|---|---|---:|---:|"]
-        for row in segments:
-            ratio = row.get("ratio")
-            ratio_text = f"{ratio:.2%}" if isinstance(ratio, (int, float)) else ""
-            lines.append(f"| {row['report_date']} | {row['dimension']} | {row.get('name') or ''} | {_fmt_financial_amount(row.get('income'))} | {ratio_text} |")
-        blocks.append("\n".join(lines))
+        blocks.append(_render_segments_markdown(segments))
     if "meta" not in (result.get("statements") or []):
         meta_by_date: dict[str, dict] = {}
         for row in rows:

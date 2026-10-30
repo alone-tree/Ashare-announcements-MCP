@@ -27,8 +27,11 @@ def _data_root() -> str:
 
 
 def _status(items: list[dict[str, Any]]) -> str:
+    """按docs/market-data架构设计.md §1.6汇总完成度，保留子结果的部分成功与过期状态。"""
     succeeded = sum(bool(item.get("ok")) for item in items)
-    if succeeded == len(items):
+    if succeeded == len(items) and all(
+        item.get("status", "success") == "success" and not item.get("stale") for item in items
+    ):
         return "success"
     return "partial_success" if succeeded else "failed"
 

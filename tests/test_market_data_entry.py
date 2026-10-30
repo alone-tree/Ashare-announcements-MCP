@@ -36,6 +36,36 @@ class TestCli:
         with pytest.raises(ValueError, match="非空数组"):
             cli.dispatch({"tool": "get_quote_batch"})
 
+    @pytest.mark.parametrize("items,status,batch_ok,succeeded,failed", [
+        ([{"ok": True, "status": "success"}], "success", True, 1, 0),
+        ([{"ok": True}], "success", True, 1, 0),
+        ([{"ok": True, "status": "partial_success"}], "partial_success", True, 1, 0),
+        ([{"ok": True, "status": "success"}, {"ok": True, "status": "partial_success"}], "partial_success", True, 2, 0),
+        ([{"ok": True, "status": "success", "stale": True}], "partial_success", True, 1, 0),
+        ([{"ok": True}, {"ok": False, "status": "failed"}], "partial_success", False, 1, 1),
+        ([{"ok": False, "status": "failed"}], "failed", False, 0, 1),
+        ([{"ok": False}, {"ok": False}], "failed", False, 0, 2),
+    ])
+    def test_batch_status_preserves_child_completeness_and_existing_counts(
+        self, items, status, batch_ok, succeeded, failed,
+    ):
+        result = cli._batch_response("example", items, "results")
+        assert result["status"] == status and result["ok"] is batch_ok
+        assert result["requested"] == len(items)
+        assert result["succeeded"] == succeeded and result["failed"] == failed
+        assert result["results"] == items
+
+    def test_company_batch_does_not_promote_partial_success(self, monkeypatch):
+        child = {"ok": True, "status": "partial_success", "failed_sections": ["forecast"],
+                 "sections": {"profile": {"ok": True, "data": {"公司名称": "示例公司"}},
+                              "forecast": {"ok": False, "error": "forecast必须传years"}}}
+        monkeypatch.setattr(cli.company_service, "get_company_profile", lambda *a, **k: child)
+        result = cli.dispatch({"tool": "get_company_profile_batch", "codes": ["600106.SH"],
+                               "sections": ["profile", "forecast"]})
+        assert result["status"] == result["results"][0]["status"] == "partial_success"
+        assert result["ok"] and result["succeeded"] == 1 and result["failed"] == 0
+        assert result["results"][0]["failed_sections"] == ["forecast"]
+
     def test_main_stdin_stdout(self, monkeypatch, capsys):
         monkeypatch.setattr(service, "get_quote", lambda root, code, **kw: {"ok": True})
         monkeypatch.setattr("sys.stdin", type("S", (), {"read": lambda self: '{"tool": "get_quote_batch", "codes": ["600519.SH"]}'})())

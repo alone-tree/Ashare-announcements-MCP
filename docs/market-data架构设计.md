@@ -124,6 +124,10 @@ flowchart LR
 
 **币种**：行情、成交额、**市值均为原币**（A 股人民币/港股港元/美股美元；市值 = 股本 × 原币收盘），工具不换汇率；需要其他币种由调用方自行换算（2026-08-08 定：市值币种 = 原始币种）。
 
+market-data的CLI批处理入口按子结果已有ok、status和stale汇总批次status：全部ok=true、status为success或未提供且均非stale时为success；至少一个ok=true且存在部分成功、失败或stale结果时为partial_success；没有ok=true的结果时为failed。各工具内部section仍由所属工具自行汇总，批次不另做递归扫描。
+
+批次requested为请求数量，succeeded仍统计子结果ok=true的数量，failed为其余数量，批次ok仍表示全部子结果ok=true。这些字段反映可用结果口径，status反映完成度；因此全部子结果均有可用数据但其中一项部分成功时，批次可以ok=true、failed=0，同时status必须为partial_success。子结果及其stale等信息原样保留，不新增顶层响应字段。
+
 ### 1.7 如何新增
 
 **新增市场**：① 后缀路由表加一行（后缀→渠道）；② 各数据源代码格式转换（iFinD/AKShare 差异表，见数据源文档）；③ 字段表逐列补该市场的来源链；④ 按探测纪律实测各源（一次一小点、带超时、先查接口签名）；⑤ 补测试。

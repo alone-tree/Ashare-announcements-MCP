@@ -3,6 +3,8 @@
 
 import asyncio
 
+import pytest
+
 from market_data_mcp import cli, server
 
 
@@ -137,6 +139,69 @@ def test_financial_markdown_passthrough_export_and_version_audit():
     md = versioned["markdown"]
     assert "| 报告期 | 科目 | 金额 | version_id | is_latest | version_count |" in md
     assert "| 2025-12-31 | 净利润 | 100.00 | abc | True | 2 |" in md
+
+
+@pytest.mark.parametrize("dimension", ["income by product", "income by industry", "income by region"])
+def test_segments_markdown_preserves_main_business_fields(dimension):
+    result = {
+        "ok": True, "statements": ["segments"], "amount_basis": "cumulative", "rows": [],
+        "segments": [{"report_date": "2025-12-31", "dimension": dimension, "rank": 1,
+                      "name": "主营项目", "income": 100.0, "income_share": 0.25,
+                      "gross_profit": 20.0, "gross_margin": 0.20}],
+    }
+    rendered = server._render_financial_markdown(result)
+    md = rendered["markdown"]
+    assert "## 营收结构（累计口径）" in md and "### 主营构成" in md
+    assert "| 报告期 | 维度 | 排名 | 名称 | 收入 | 营收占比 | 毛利 | 毛利率 |" in md
+    assert f"| 2025-12-31 | {dimension} | 1 | 主营项目 | 100.00 | 25.00% | 20.00 | 20.00% |" in md
+    assert "rows" not in rendered and "segments" not in rendered
+
+
+@pytest.mark.parametrize("dimension,ratio,display", [
+    ("income by customer", 0.7598, "75.98%"),
+    ("purchase by supplier", 0.515, "51.50%"),
+])
+def test_segments_markdown_marks_top5_total_without_inventing_name(dimension, ratio, display):
+    md = server._render_financial_markdown({
+        "ok": True, "statements": ["segments"], "rows": [],
+        "segments": [
+            {"report_date": "2025-12-31", "dimension": dimension, "rank": 1, "name": "", "ratio": None},
+            {"report_date": "2025-12-31", "dimension": dimension, "rank": "top5", "ratio": ratio},
+        ],
+    })["markdown"]
+    assert "### 客户/供应商集中度" in md
+    assert "| 报告期 | 维度 | 排名/汇总 | 名称 | 占比 |" in md
+    assert f"| 2025-12-31 | {dimension} | 1 |  |  |" in md
+    assert f"| 2025-12-31 | {dimension} | 前5大合计 |  | {display} |" in md
+    assert "主营构成" not in md and "毛利" not in md
+
+
+def test_segments_markdown_keeps_default_selection_minimal():
+    md = server._render_financial_markdown({
+        "ok": True, "statements": ["segments"], "rows": [],
+        "segments": [{"report_date": "2025-12-31", "dimension": "income by product",
+                      "name": "默认项目", "income": 0}],
+    })["markdown"]
+    assert "| 报告期 | 维度 | 名称 | 收入 |" in md
+    assert "| 默认项目 | 0.00 |" in md
+    assert all(label not in md for label in ("排名", "营收占比", "毛利"))
+
+
+def test_segments_markdown_preserves_zero_negative_large_ratios_and_placeholders():
+    md = server._render_financial_markdown({
+        "ok": True, "statements": ["segments"], "rows": [],
+        "segments": [
+            {"report_date": "2025-12-31", "dimension": "income by region", "rank": 1,
+             "name": "零比率", "income": 100, "income_share": 0, "gross_profit": 0, "gross_margin": 0},
+            {"report_date": "2025-12-31", "dimension": "income by region", "rank": 2,
+             "name": "内部抵销", "income": -10, "income_share": -0.017891, "gross_profit": None, "gross_margin": None},
+            {"report_date": "2025-12-31", "dimension": "income by region", "rank": 3,
+             "name": "国内", "income": 200, "income_share": 1.009445, "gross_profit": "--", "gross_margin": None},
+        ],
+    })["markdown"]
+    assert "| 零比率 | 100.00 | 0.00% | 0.00 | 0.00% |" in md
+    assert "| 内部抵销 | -10.00 | -1.79% |  |  |" in md
+    assert "| 国内 | 200.00 | 100.94% | -- |  |" in md
 
 
 def test_data_catalog_mcp_is_registered_and_forwards_company_statements(monkeypatch):
