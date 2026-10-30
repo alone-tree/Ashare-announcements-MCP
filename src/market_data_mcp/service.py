@@ -774,12 +774,21 @@ def _export_financial_csv(path: str, rows: list[dict]) -> None:
 
 def _localize_financial_rows(rows: list[dict], market: str) -> list[dict]:
     """把上游科目转为面向 AI 的中文名；内部代码不对外返回。"""
+    name_codes: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        name = financial_items.display_name(market, row.get("item_code"), row.get("item_name"))
+        name_codes.setdefault((row.get("statement"), name), set()).add(str(row.get("item_code") or ""))
     output = []
     for row in rows:
         item = dict(row)
         item["item_name"] = financial_items.display_name(
             market, item.get("item_code"), item.get("item_name")
         )
+        codes = sorted(name_codes[(item.get("statement"), item["item_name"])])
+        if len(codes) > 1:
+            index = codes.index(str(item.get("item_code") or "")) + 1
+            item["item_name"] += f"（同名字段{index}）"
+        item.setdefault("unit", financial_items.item_unit(item, market))
         item.pop("item_code", None)
         output.append(item)
     return output

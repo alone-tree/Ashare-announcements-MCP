@@ -467,8 +467,15 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     if include_versions:
         notes.append("派生指标仅使用当前累计版本；历史版本仅用于原始报表审计" if basis == "cumulative"
                      else "single口径不生成历史单季版本，include_versions仅显示当前累计版本")
-    for row in output:
-        row.setdefault("unit", "text" if row["statement"] == "meta" else "原币基础单位")
+    source_labels = sorted({str(row.get("item_code")) for row in output
+                            if row.get("item_code") in financial_items.A_SHARE_SOURCE_LABELS}) if mc.market in ("A", "BJ") else []
+    if source_labels:
+        notes.append("部分科目使用东财网页中文标签；补充资料、其他项目及平衡项目保持独立原值，标签不代表金额口径已逐项核验")
+    unnamed = sorted({str(row.get("item_code")) for row in output
+                      if row.get("amount") is not None and str(row.get("item_name") or "").isascii()
+                      and financial_items.display_name(mc.market, row.get("item_code"), row.get("item_name")).isascii()}) if mc.market in ("A", "BJ") else []
+    if unnamed:
+        notes.append("以下上游字段的中文释义尚未核实，保留原名：" + "、".join(unnamed))
     output = service._localize_financial_rows(output, mc.market)
     version_map = {}
     if include_versions:
@@ -489,7 +496,8 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
               "status": "partial_success" if successful and failures else "success" if successful else "failed",
               "stale": bool(refresh_errors) or any(f.get("stale") for f in failed), "failed_items": failures, "notes": notes,
               "source": ",".join(sorted({r.get("source", "eastmoney") for r in output + segments})) or "eastmoney",
-              "units": {"amount": "原币金额，币种见报告期元信息", "ratio": "比值，0.25=25%"},
+               "units": {"amount": "原币金额，币种见报告期元信息", "per_share": "原币/股，币种见报告期元信息",
+                         "shares": "股", "ratio": "比值，0.25=25%", "text": "文本，不作金额换算"},
               "rows": output, "segments": segments}
     if sec:
         result["filings"] = sec["data"]

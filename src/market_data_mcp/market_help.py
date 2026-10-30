@@ -48,7 +48,10 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
         result.update(default_items=DEFAULT_ITEMS, derived_items=RATIOS, statements=STATEMENTS,
                       segment_items=SEGMENTS, growth=["科目名同比增长率", "科目名环比增长率"],
                       quote_fields=VALID_VARS,
-                      ratio_unit="比值（0.25表示25%）", unsupported=["ROE", "ROA", "周转率", "TTM", "日频估值"])
+                      ratio_unit="比值（0.25表示25%）",
+                      financial_units={"amount": "原币基础单位", "per_share": "原币/股", "shares": "股",
+                                       "ratio": "比值（0.25表示25%）", "text": "文本"},
+                      unsupported=["ROE", "ROA", "周转率", "TTM", "日频估值"])
     if topic in (None, "ranges"):
         result["ranges"] = {"financial": "按源实际报告截止日；不承诺固定起始年",
                             "ifind_series": "当前账号实测近5年；更早股本月频采样，非逐日精确变化",

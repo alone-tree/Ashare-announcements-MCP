@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """财报科目中文展示与确定性名称匹配。
 
-映射只收录已通过实际公司财报金额核对的 A 股东财字段；未收录字段返回原名。
+已核验财报名称与东财网页标签分开维护；中文标签不构成金额口径的验证。
 港股、美股上游已提供中文名称，不经过本表。
 
 结构：dict[code, [中文全名, *简称]]。第一项为展示与精确匹配的全名，其余是
 仅用于 items 请求匹配的简称，不改变返回的 item_name。
 
-收录标准（2026-08-28 全量核对定）：
+已核验名称收录标准（2026-08-28 全量核对定）：
 - 金额与年报合并报表（含现金流量表补充资料）逐项核对一致才收录；行名去掉
   序号前缀（一、/减：/加：/其中：）与填列说明括注后收录核心名；
 - 同一报表行的停用重复 code、恒 0 的 *_BALANCE 死字段、语义随公司漂移的
-  code 不收录（保留英文原名），如 BEGIN_CCE/END_CASH、DEFER_TAX、
+  code 不收录在已核验名称表；有官网标签时在下方标签表显示，如 BEGIN_CCE/END_CASH、DEFER_TAX、
   FBOPERATE_NETCASH_OTHER、FINANCE_INFLOW_OTHER、
   FINANCE_OUTFLOW_OTHER、BORROW_REPO_ADD、LEND_RESALE_ADD、
   OPERATE_INFLOW_OTHER、OPERATE_OUTFLOW_OTHER、IA_LPE_AMORTIZE、
@@ -21,7 +21,8 @@
   货币资金]，显示名取银行口径，等价关系随返回 notes 说明；
 - 全名重复仅限行业/年代替代 code 对：利息收入（FE_INTEREST_INCOME 与
   INTEREST_INCOME）、信用减值损失（CREDIT_IMPAIRMENT_INCOME 与 _LOSS）、
-  资产减值损失（ASSET_IMPAIRMENT_INCOME 与 _LOSS），四家样本无同公司并存。
+  资产减值损失（ASSET_IMPAIRMENT_INCOME 与 _LOSS）；四家样本中有值项未并存，
+  原始宽表仍可能同时含对应空值列，输出层须区分同名代码。
 核验样本：中际旭创 300308.SZ、交通银行 601328.SH、江苏金租 600901.SH、
 中信证券 600030.SH 2025 年年度报告（合并口径）。
 """
@@ -108,7 +109,7 @@ A_SHARE_ITEM_NAMES: dict[str, list[str]] = {
     "ACCOUNTS_RECE": ["应收账款"],
     "FINANCE_RECE": ["应收款项融资"],
     "PREPAYMENT": ["预付款项"],
-    "TOTAL_OTHER_RECE": ["其他应收款"],
+    "TOTAL_OTHER_RECE": ["其他应收款合计"],
     "INVENTORY": ["存货"],
     "FIXED_ASSET": ["固定资产"],
     "CIP": ["在建工程"],
@@ -256,13 +257,333 @@ A_SHARE_ITEM_NAMES: dict[str, list[str]] = {
 }
 
 
+# 东财2026-10-30通用/银行/券商/保险F10网页的字段标签。
+# 来源及金额口径疑点见《字段与数据源支持情况》；不等同于逐项年报核验。
+# 补充资料与备用字段加中文限定，以免同名输出覆盖主表金额。
+A_SHARE_SOURCE_LABELS: dict[str, str] = {
+    "ACCEPT_DEPOSIT_INTERBA": "吸收存款及同业存放",
+    "ACCOUNTS_RECE_ADD": "应收账款净增加额",
+    "ACCRUED_EXPENSE_ADD": "预提费用的增加",
+    "ADD_PLEDGE_TIMEDEPOSITS": "增加质押和定期存款所支付的现金",
+    "ADVANCE_PREMIUM": "预收保费",
+    "ADVANCE_RECE": "预收账款",
+    "ADVANCE_RECEIVABLES": "预收款项",
+    "ADVICE_ASSIGN_DIVIDEND": "建议分派股利",
+    "AFA_FAIRVALUE_CHANGE": "可供出售金融资产公允价值变动损益",
+    "AFA_REDUCE": "可供出售金融资产的减少",
+    "AGENT_UNDERWRITE_SECURITY": "代理承销证券款",
+    "AMORTIZE_COMPENSATE_EXPENSE": "摊回赔付支出",
+    "AMORTIZE_COST_FINLIAB": "以摊余成本计量的金融负债",
+    "AMORTIZE_COST_NCFINASSET": "以摊余成本计量的金融资产（非流动）",
+    "AMORTIZE_COST_NCFINLIAB": "以摊余成本计量的金融负债（非流动）",
+    "AMORTIZE_INSURANCE_RESERVE": "摊回保险责任准备金",
+    "AMORTIZE_REINSURE_EXPENSE": "摊回分保费用",
+    "APPOINT_FVTPL_FINASSET": "指定以公允价值计量且其变动计入当期损益的金融资产",
+    "APPOINT_FVTPL_FINLIAB": "指定以公允价值计量且其变动计入当期损益的金融负债",
+    "ASSET_BALANCE": "资产平衡项目",
+    "ASSET_OTHER": "资产其他项目",
+    "ASSIGN_CASH_DIVIDEND": "拟分配现金股利",
+    "AVAILABLE_SALE_FINASSET": "可供出售金融资产",
+    "BANKSECURITY_LEND_ADD": "银行业务及证券业务拆借资金净增加额",
+    "BANKSECURITY_LEND_REDUCE": "银行业务及证券业务拆借资金净减少额",
+    "BANKSECURITY_REPO_ADD": "银行及证券业务卖出回购资金净增加额",
+    "BANKSECURITY_REPO_REDUCE": "银行业务及证券业务卖出回购资金净减少额",
+    "BANKSECURITY_RESALE_ADD": "银行业务及证券业务买入返售资金净增加额",
+    "BANKSECURITY_RESALE_REDUCE": "银行及证券业务买入返售资金净减少额",
+    "BANK_INTEREST_EXPENSE": "银行业务利息支出",
+    "BANK_INTEREST_INCOME": "银行业务利息收入",
+    "BANK_INTEREST_NI": "银行业务利息净收入",
+    "BEGIN_CASH_EQUIVALENTS": "现金等价物的期初余额",
+    "BEGIN_CCE": "期初现金及现金等价物余额",
+    "BORROW_REPO_ADD": "拆入资金及卖出回购金融资产款净增加额",
+    "BORROW_REPO_REDUCE": "拆入资金及卖出回购金融资产款净减少额",
+    "BROKER_NI": "证券经纪业务净收入",
+    "BUY_FIN_LEASE": "购买融资租赁资产支付的现金",
+    "BUY_RESALE_ADD": "买入返售金融资产净增加额",
+    "BUY_SUBSIDIARY_EQUITY": "购买子公司少数股权而支付的现金",
+    "CCE_ADDNOTE": "现金及现金等价物净增加额（补充资料附注）",
+    "CCE_ADD_BALANCE": "现金及现金等价物净增加额平衡项目",
+    "CCE_ADD_BALANCENOTE": "现金及现金等价物净增加额平衡项目（补充资料附注）",
+    "CCE_ADD_OTHER": "现金及现金等价物净增加额其他项目",
+    "CCE_ADD_OTHERNOTE": "现金及现金等价物净增加额其他项目（补充资料附注）",
+    "CD_NOTE_PAYABLE": "存款证及应付票据",
+    "COMMISSION_NI_OTHER": "手续费及佣金净收入其他项目",
+    "COMPENSATE_EXPENSE": "赔付支出",
+    "COMPENSATE_PAYABLE": "应付赔付款",
+    "CONTRACT_ASSET": "合同资产",
+    "CONVERT_BOND_1YEAR": "一年内到期的可转换公司债券",
+    "CREDITOR_INVEST": "债权投资",
+    "CREDITOR_PLAN_INVEST": "债权计划投资",
+    "CREDIT_AGENT_SECURITY": "信用交易代理买卖证券款",
+    "CREDIT_EXCESS_RESERVE": "信用备付金",
+    "CURRENT_ASSET_BALANCE": "流动资产平衡项目",
+    "CURRENT_ASSET_OTHER": "流动资产其他项目",
+    "CURRENT_LIAB_BALANCE": "流动负债平衡项目",
+    "CURRENT_LIAB_OTHER": "流动负债其他项目",
+    "CUSTOMER_CREDIT_DEPOSIT": "客户信用资金存款",
+    "CUSTOMER_DEPOSIT_ADD": "客户存款净增加额",
+    "DEBT_TRANSFER_CAPITAL": "债务转为资本",
+    "DEFER_INCOME_AMORTIZE": "递延收益摊销",
+    "DEFER_TAX": "递延所得税",
+    "DEPOSIT_ADD": "存款的增加",
+    "DEPOSIT_INTERBANK_ADD": "客户存款和同业存放款项净增加额",
+    "DEPOSIT_IOFI_REDUCE": "存放同业及其他金融机构款项净减少额",
+    "DEPOSIT_PBC_ADD": "存放中央银行款项净增加额",
+    "DEPOSIT_PBC_REDUCE": "存放中央银行款项净减少额（东财备用字段）",
+    "DIRECT_INVEST_ADD": "直接投资经营资金增加",
+    "DIRECT_INVEST_REDUCE": "直接投资经营资金减少",
+    "DISCONTINUED_NETPROFIT": "终止经营净利润",
+    "DISPOSAL_AFA_ADD": "处置可供出售金融资产净增加额",
+    "DISPOSAL_AFA_REDUCE": "处置可供出售金融资产净减少额",
+    "DISPOSAL_MORTGAGE_ASSET": "处置抵债资产收到的现金",
+    "DISPOSAL_SUBSIDIARY_JOINT": "处置子公司、联营企业及合营企业投资及其他企业收到的现金",
+    "DISPOSAL_SUBSIDIARY_OUTFLOW": "处置子公司及其他营业单位流出的现金净额",
+    "DISPOSAL_TFA_ADD": "处置交易性金融资产净增加额",
+    "DISPOSAL_TFA_REDUCE": "处置交易性金融资产的净减少额",
+    "DIVIDEND_PAYABLE": "应付股利",
+    "DIVIDEND_RECE": "应收股利",
+    "EARNED_PREMIUM": "已赚保费",
+    "EARNED_PREMIUM_BALANCE": "已赚保费平衡项目",
+    "EFFECT_NETPROFIT_BALANCE": "影响净利润的平衡项目",
+    "EFFECT_NETPROFIT_OTHER": "影响净利润的其他项目",
+    "EFFECT_TP_OTHER": "影响利润总额的其他项目",
+    "END_CASH": "现金的期末余额",
+    "END_CASH_EQUIVALENTS": "现金等价物的期末余额",
+    "END_CCE_BALANCE": "期末现金及现金等价物余额平衡项目",
+    "END_CCE_OTHER": "期末现金及现金等价物余额其他项目",
+    "EQUITY_BALANCE": "股东权益平衡项目",
+    "EQUITY_OTHER": "股东权益其他项目",
+    "EXPORT_REFUND_RECE": "应收出口退税",
+    "EXTRACT_INSURANCE_RESERVE": "提取保险责任准备金",
+    "EXTRACT_UNEXPIRE_RESERVE": "提取未到期责任准备金",
+    "FAIRVALUE_CHANGE": "公允价值变动损益",
+    "FBCCE_ADD": "现金及现金等价物净增加额（补充资料）",
+    "FBCCE_ADD_BALANCE": "现金及现金等价物净增加额平衡项目（补充资料）",
+    "FBCCE_ADD_OTHER": "现金及现金等价物净增加额其他项目（补充资料）",
+    "FBNETCASH_OPERATE": "经营活动产生的现金流量净额（补充资料）",
+    "FBOPERATE_NETCASH_BALANCE": "经营活动产生的现金流量净额平衡项目（补充资料）",
+    "FBOPERATE_NETCASH_OTHER": "经营活动产生的现金流量净额其他项目（补充资料）",
+    "FB_CCE_ADD": "现金及现金等价物净增加额（补充资料备用字段）",
+    "FB_CCE_ADD_BALANCE": "现金及现金等价物净增加额平衡项目（补充资料备用字段）",
+    "FB_CCE_ADD_OTHER": "现金及现金等价物净增加额其他项目（补充资料备用字段）",
+    "FB_NETCASH_OPERATE": "经营活动产生的现金流量净额（补充资料备用字段）",
+    "FB_OPERATE_NETCASH_BALANCE": "经营活动产生的现金流量净额平衡项目（补充资料备用字段）",
+    "FB_OPERATE_NETCASH_OTHER": "经营活动产生的现金流量净额其他项目（补充资料备用字段）",
+    "FEE_COMMISSION_PAYABLE": "应付手续费及佣金",
+    "FINANCE_ADVISER_NI": "财务顾问净收入",
+    "FINANCE_INFLOW_BALANCE": "筹资活动现金流入的平衡项目",
+    "FINANCE_INFLOW_OTHER": "筹资活动现金流入的其他项目",
+    "FINANCE_NETCASH_BALANCE": "筹资活动产生的现金流量净额平衡项目",
+    "FINANCE_NETCASH_OTHER": "筹资活动产生的现金流量净额其他项目",
+    "FINANCE_OUTFLOW_BALANCE": "筹资活动现金流出的平衡项目",
+    "FINANCE_OUTFLOW_OTHER": "筹资活动现金流出的其他项目",
+    "FINASSET_REDUCE": "金融性资产的减少",
+    "FINLEASE_OBTAIN_FA": "融资租入固定资产",
+    "FINLIAB_ADD": "金融性负债的增加",
+    "FIN_SECURITY": "融出证券",
+    "FIXED_ASSET_DEPR": "固定资产折旧",
+    "FIXED_ASSET_DISPOSAL": "固定资产清理",
+    "FUND_MANAGE_NI": "基金管理业务净收入",
+    "FUND_SALE_NI": "基金销售业务净收入",
+    "FVTOCI_NCFINASSET": "以公允价值计量且其变动计入其他综合收益的金融资产（非流动）",
+    "HD_RESERVE": "长期健康险责任准备金",
+    "HEDGE_RESERVE": "套期储备",
+    "HOLDSALE_ASSET": "持有待售资产",
+    "HOLDSALE_LIAB": "持有待售负债",
+    "HOLD_MATURITY_INVEST": "持有至到期投资",
+    "IA_LPE_AMORTIZE": "无形资产及长期待摊费用等摊销",
+    "IND_ACC_ASSET": "独立账户资产",
+    "IND_ACC_LIAB": "独立账户负债",
+    "INSURANCE_CONTRACT_RESERVE": "保险合同准备金",
+    "INSURANCE_INCOME": "保险业务收入",
+    "INSURED_DEPOSIT_INVEST": "保户储金及投资款",
+    "INSURED_INVEST_ADD": "保户储金及投资款净增加额",
+    "INSURED_INVEST_REDUCE": "保户储金及投资款净减少额",
+    "INSURED_PLA": "保户质押贷款净增加额",
+    "INSURED_PLEDGE_LOAN": "保户质押贷款",
+    "INTERBANK_OTHER_REDUCE": "同业及其他机构存放款减少净额",
+    "INTEREST_RECE": "应收利息",
+    "INTERNAL_PAYABLE": "内部应付款",
+    "INTERNAL_RECE": "内部应收款",
+    "INVEST_INFLOW_BALANCE": "投资活动现金流入的平衡项目",
+    "INVEST_INFLOW_OTHER": "投资活动现金流入的其他项目",
+    "INVEST_JOINT": "对联营和合营企业的投资",
+    "INVEST_NETCASH_BALANCE": "投资活动产生的现金流量净额平衡项目",
+    "INVEST_NETCASH_OTHER": "投资活动产生的现金流量净额其他项目",
+    "INVEST_OUTFLOW_BALANCE": "投资活动现金流出的平衡项目",
+    "INVEST_OUTFLOW_OTHER": "投资活动现金流出的其他项目",
+    "INVEST_RECE": "应收款项类投资",
+    "INVEST_REVALUE_RESERVE": "投资重估储备",
+    "INVEST_SUBSIDIARY": "对子公司的投资",
+    "IOFI_ADD": "同业及其他金融机构存放款项净增加额",
+    "IR_DEPR": "投资性房地产折旧",
+    "ISSUED_CD_REDUCE": "已发行存款证净减少额",
+    "ISSUE_CD": "发行存款证",
+    "ISSUE_OTHER_BOND": "发行其他债券所收到的现金",
+    "ISSUE_SHARES_EXPENSE": "股份发行支付的费用",
+    "ISSUE_SUBBOND": "发行次级债券所收到的现金",
+    "LD_RESERVE": "寿险责任准备金",
+    "LEND_ADD": "拆借款项的净增加",
+    "LEND_FUND_REDUCE": "拆出资金净减少额",
+    "LEND_RESALE_ADD": "拆出资金及买入返售金融资产净增加额",
+    "LEND_RESALE_REDUCE": "拆出资金及买入返售金融资产净减少额",
+    "LIAB_BALANCE": "负债平衡项目",
+    "LIAB_EQUITY_BALANCE": "负债及股东权益平衡项目",
+    "LIAB_EQUITY_OTHER": "负债和股东权益其他项目",
+    "LIAB_OTHER": "负债其他项目",
+    "LOAN_ADVANCE_REDUCE": "发放贷款及垫款的净减少额",
+    "LOAN_PBC_REDUCE": "向中央银行借款净减少额",
+    "LOAN_REDUCE": "贷款的减少",
+    "LONGASSET_AMORTIZE": "长期资产摊销",
+    "LONG_RECE": "长期应收款",
+    "LONG_STAFFSALARY_PAYABLE": "长期应付职工薪酬",
+    "MORTGAGE_ASSET_IMPAIRMENT": "抵债资产减值准备",
+    "NETCASH_OPERATENOTE": "经营活动产生的现金流量净额（补充资料附注）",
+    "NETPROFIT_BALANCE": "净利润差额（合计平衡项目）",
+    "NETPROFIT_OTHER": "净利润其他项目",
+    "NET_CD": "存款证净额",
+    "NET_COMPENSATE_EXPENSE": "赔付支出净额",
+    "NET_CONTRACT_RESERVE": "提取保险合同准备金净额",
+    "NET_EXPOSURE_INCOME": "净敞口套期收益",
+    "NET_PENDMORTGAGE_ASSET": "待处理抵债资产净额",
+    "NONCURRENT_ASSET_1YEAR": "一年内到期的非流动资产",
+    "NONCURRENT_ASSET_BALANCE": "非流动资产平衡项目",
+    "NONCURRENT_ASSET_OTHER": "非流动资产其他项目",
+    "NONCURRENT_DISPOSAL_INCOME": "非流动资产处置利得",
+    "NONCURRENT_DISPOSAL_LOSS": "非流动资产处置净损失",
+    "NONCURRENT_LIAB_BALANCE": "非流动负债平衡项目",
+    "NONCURRENT_LIAB_OTHER": "非流动负债其他项目",
+    "OFI_BF_ADD": "向其他金融机构拆入资金净增加额",
+    "OILGAS_BIOLOGY_DEPR": "固定资产折旧、油气资产折耗、生产性生物资产折旧（东财备用字段）",
+    "OIL_GAS_ASSET": "油气资产",
+    "OPERATE_EXPENSE_BALANCE": "营业支出平衡项目",
+    "OPERATE_INCOME_BALANCE": "营业收入平衡项目",
+    "OPERATE_INFLOW_BALANCE": "经营活动现金流入的平衡项目",
+    "OPERATE_INFLOW_OTHER": "经营活动现金流入的其他项目",
+    "OPERATE_NETCASH_BALANCE": "经营活动产生的现金流量净额平衡项目",
+    "OPERATE_NETCASH_BALANCENOTE": "经营活动产生的现金流量净额平衡项目（补充资料附注）",
+    "OPERATE_NETCASH_OTHER": "经营活动产生的现金流量净额其他项目",
+    "OPERATE_NETCASH_OTHERNOTE": "经营活动产生的现金流量净额其他项目（补充资料附注）",
+    "OPERATE_OUTFLOW_BALANCE": "经营活动现金流出的平衡项目",
+    "OPERATE_OUTFLOW_OTHER": "经营活动现金流出的其他项目",
+    "OPERATE_PROFIT_BALANCE": "营业利润平衡项目",
+    "OPERATE_PROFIT_OTHER": "营业利润其他项目",
+    "OTHER": "其他",
+    "OTHERFINTOOL_ADD": "购买、处置或发行其他金融工具净增加额",
+    "OTHERFINTOOL_REDUCE": "购买、处置或发行其他金融工具净减少额",
+    "OTHER_ASSET_IMPAIRMENT": "计提其他资产减值准备",
+    "OTHER_EQUITY_OTHER": "其他权益工具（东财其他项目）",
+    "OTHER_PAYABLE": "其他应付款",
+    "OTHER_RECE": "其他应收款",
+    "OUTWARD_REMIT": "汇出汇款",
+    "PARENT_EQUITY_BALANCE": "归属于母公司股东权益平衡项目",
+    "PARENT_EQUITY_OTHER": "归属于母公司股东权益其他项目",
+    "PAY_AGENT_TRADE": "代理买卖证券支付的现金净额（净减少额）",
+    "PAY_BOND_INTEREST": "偿付债券利息支付的现金",
+    "PAY_BUY_RESALE": "买入返售金融资产支付的现金净额",
+    "PAY_COMMISSION": "支付手续费及佣金的现金",
+    "PAY_INTEREST": "支付利息的现金",
+    "PAY_ORIGIC_COMPENSATE": "支付原保险合同赔付等款项的现金",
+    "PAY_POLICY_BONUS": "支付保单红利的现金",
+    "PAY_REINSURE": "支付再保险业务现金净额",
+    "PAY_SELL_REPO": "支付卖出回购金融资产款现金净额",
+    "PAY_TRADE_FINASSET": "支付交易性金融资产现金净额",
+    "PBC_INTERBANK_ADD": "存放中央银行和同业款项净增加额",
+    "PBC_INTERBANK_REDUCE": "存放中央银行和同业款项净减少额",
+    "PBC_IOFI_ADD": "存放中央银行和同业及其他金融机构款项净增加额",
+    "PEND_MORTGAGE_ASSET": "待处理抵债资产",
+    "PERPETUAL_BOND_PAYBALE": "永续债（应付债券）",
+    "PLEDGE_LOAN": "质押借款",
+    "PLEDGE_LOAN_ADD": "质押贷款净增加额",
+    "POLICY_BONUS_EXPENSE": "保单红利支出",
+    "POLICY_BONUS_PAYABLE": "应付保单红利",
+    "PRECIOUS_METAL": "贵金属",
+    "PRECOMBINE_PROFIT": "被合并方在合并前实现利润",
+    "PREDICT_CURRENT_LIAB": "预计流动负债",
+    "PREDICT_LIAB_ADD": "预计负债的增加",
+    "PREFERRED_SHARES_PAYBALE": "优先股（应付债券）",
+    "PREMIUM_RECE": "应收保费",
+    "PREPAID_EXPENSE_REDUCE": "待摊费用的减少",
+    "PRODUCTIVE_BIOLOGY_ASSET": "生产性生物资产",
+    "PROJECT_MATERIAL": "工程物资",
+    "PROVISION_INVEST_IMPAIRMENT": "计提投资减值准备",
+    "PROVISION_LOAN_IMPAIRMENT": "计提贷款减值准备",
+    "PROVISION_PREDICT_LIAB": "计提预计负债",
+    "PURCHASE_SUBSIDIARY_OTHER": "收购子公司及其他营业单位支付的现金净额",
+    "RC_RESERVE_RECE": "应收分保合同准备金",
+    "RECEIVE_ADD_EQUITY": "增加股本所收到的现金",
+    "RECEIVE_AGENT_UNDERWRITE": "代理承销证券收到的现金净额",
+    "RECEIVE_BUY_RESALE": "买入返售金融资产收到的现金",
+    "RECEIVE_COMMISSION": "收取手续费及佣金的现金",
+    "RECEIVE_DIVIDEND_PROFIT": "分得股利或利润所收到的现金",
+    "RECEIVE_INTEREST": "收取利息的现金",
+    "RECEIVE_ORIGIC_PREMIUM": "收到原保险合同保费取得的现金",
+    "RECEIVE_OTHER_FINANCE": "收到的其他与筹资活动有关的现金",
+    "RECEIVE_REINSURE_NET": "收到再保险业务现金净额",
+    "RECEIVE_SELL_REPO": "收到卖出回购金融资产款现金净额",
+    "RECEIVE_TRADE_FINASSET": "收到交易性金融资产现金净额",
+    "RECEIVE_WRITEOFF": "收到已核销款项",
+    "RECOMMEND_NI": "保荐业务净收入",
+    "REDUCE_PLEDGE_TIMEDEPOSITS": "减少质押和定期存款所收到的现金",
+    "REFUND_CAPITAL_DEPOSIT": "存出资本保证金",
+    "REFUND_DEPOSIT_RECE": "存入保证金",
+    "REINSURE_EXPENSE": "分保费用",
+    "REINSURE_INCOME": "分保费收入",
+    "REINSURE_PAYABLE": "应付分保账款",
+    "REINSURE_PREMIUM": "分出保费",
+    "REINSURE_RECE": "应收分保账款",
+    "REPO_BUSINESS_REDUCE": "回购业务资金净减少额",
+    "RHD_RESERVE_RECE": "应收分保长期健康险责任准备金",
+    "RLD_RESERVE_RECE": "应收分保寿险责任准备金",
+    "RUC_RESERVE_RECE": "应收分保未决赔偿准备金",
+    "RUD_RESERVE_RECE": "应收分保未到期责任准备金",
+    "SELL_REPO_ADD": "卖出回购金融资产款净增加额",
+    "SHORT_BOND_PAYABLE": "应付短期债券",
+    "SPECIAL_PAYABLE": "专项应付款",
+    "SUBBOND_PAYABLE": "应付次级债券",
+    "SUBSIDIARY_ACCEPT_INVEST": "子公司吸收少数股东投资收到的现金",
+    "SUBSIDIARY_REDUCE_CASH": "子公司减资支付给少数股东的现金",
+    "SUBSIDY_RECE": "应收补贴款",
+    "SURRENDER_VALUE": "退保金",
+    "TIME_DEPOSIT": "定期存款",
+    "TOC_OTHER": "营业总成本其他项目",
+    "TOI_OTHER": "营业总收入其他项目",
+    "TOTAL_FINANCE_INFLOW": "筹资活动现金流入小计",
+    "TOTAL_FINANCE_OUTFLOW": "筹资活动现金流出小计",
+    "TOTAL_INVEST_INFLOW": "投资活动现金流入小计",
+    "TOTAL_INVEST_OUTFLOW": "投资活动现金流出小计",
+    "TOTAL_OPERATE_OUTFLOW": "经营活动现金流出小计",
+    "TOTAL_OTHER_PAYABLE": "其他应付款合计",
+    "TOTAL_PROFIT_BALANCE": "利润总额平衡项目",
+    "TRADE_FINASSET": "交易性金融资产（东财备用字段）",
+    "TRADE_FINASSET_ADD": "交易性金融资产净增加额",
+    "TRADE_FINASSET_REDUCE": "交易性金融资产净减少额",
+    "TRADE_FINLIAB": "交易性金融负债（东财备用字段）",
+    "TRADE_FINLIAB_ADD": "交易性金融负债净增加额",
+    "TRADE_FINLIAB_REDUCE": "交易性金融负债净减少额",
+    "TRADE_RISK_RESERVE": "交易风险准备",
+    "TRADE_SEAT_FEE": "交易席位费",
+    "TRADE_SETTLE_ADD": "客户交易结算资金增加",
+    "TRADE_SETTLE_REDUCE": "客户交易结算资金减少",
+    "TRANSFER_INVEST_IMPAIRMENT": "转回投资减值准备",
+    "UC_RESERVE": "未决赔款准备金",
+    "UD_RESERVE": "未到期责任准备金",
+    "UNCONFIRM_INVEST_LOSS": "未确定的投资损失",
+    "UNDERWRITE_SECURITY": "承销证券收到的现金净额",
+    "UNINSURANCE_CE": "非保险业务手续费及佣金支出",
+    "UNINSURANCE_CI": "非保险业务手续费及佣金收入",
+    "UNINSURANCE_CNI": "非保险业务手续费及佣金净收入",
+    "UNINVOLVE_INVESTFIN_OTHER": "不涉及现金收支的投资和筹资活动金额其他项目",
+}
+
+
 def display_name(market: str, item_code: object, source_name: object) -> str:
     """有可靠中文名则只返回中文全名；无映射时保留上游原名。"""
     code = str(item_code or "")
     name = str(source_name or code)
     if market in ("A", "BJ"):
         names = A_SHARE_ITEM_NAMES.get(code)
-        return names[0] if names else name
+        return names[0] if names else A_SHARE_SOURCE_LABELS.get(code, name)
     return name
 
 
@@ -272,5 +593,26 @@ def match_names(market: str, item_code: object, source_name: object) -> list[str
     name = str(source_name or code)
     if market in ("A", "BJ"):
         names = A_SHARE_ITEM_NAMES.get(code)
-        return list(names) if names else [name]
+        return list(names) if names else [A_SHARE_SOURCE_LABELS.get(code, name)]
     return [name]
+
+
+def item_unit(row: dict, market: str) -> str:
+    """在删除内部科目码前识别量纲，不修改数值或从上市市场猜币种。"""
+    if row.get("statement") == "meta":
+        return "text"
+    code = str(row.get("item_code") or "").upper()
+    name = display_name(market, code, row.get("item_name")).lower()
+    if "OPINION" in code:
+        return "text"
+    if code in {"BASIC_EPS", "DILUTED_EPS"} or "PER_SHARE" in code or any(
+        marker in name for marker in ("每股", "per share")
+    ):
+        return "原币/股"
+    if any(marker in code for marker in (
+        "WEIGHTED_AVERAGE_SHARE", "WEIGHTED_AVG_SHARE", "WEIGHTAVG_SHARE", "AVERAGE_SHARES", "AVG_SHARES"
+    )) or any(marker in name for marker in (
+        "加权平均股", "平均股数", "weighted average shares", "weighted average number of shares"
+    )):
+        return "股"
+    return "原币基础单位"

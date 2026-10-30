@@ -82,11 +82,11 @@ def test_financial_markdown_renders_variable_by_period_matrix():
         "amount_basis": "single",
         "rows": [
             {"report_date": "2026-03-31", "statement": "income", "item_name": "营业收入",
-             "amount": 213359674.81, "value_basis": "single",
+             "amount": 213359674.81, "value_basis": "single", "unit": "原币基础单位",
              "report_metadata": {"NOTICE_DATE": "2026-04-29 00:00:00", "CURRENCY": "CNY",
                                   "OPINION_TYPE": None, "UPDATE_DATE": "2026-04-29 00:00:00"}},
             {"report_date": "2026-06-30", "statement": "income", "item_name": "营业收入",
-             "amount": 1105675.0499999998, "value_basis": "single",
+             "amount": 1105675.0499999998, "value_basis": "single", "unit": "原币基础单位",
              "report_metadata": {"NOTICE_DATE": "2026-08-28 00:00:00", "CURRENCY": "CNY",
                                   "OPINION_TYPE": None, "UPDATE_DATE": "2026-08-28 00:00:00"}},
         ],
@@ -96,9 +96,9 @@ def test_financial_markdown_renders_variable_by_period_matrix():
 
     md = rendered["markdown"]
     assert "## 利润表（value_basis=single）" in md
-    assert "| 科目 | 2026-03-31 | 2026-06-30 |" in md
-    assert "|---|---:|---:|" in md
-    assert "| 营业收入 | 213359674.81 | 1105675.05 |" in md
+    assert "| 科目 | 单位 | 2026-03-31 | 2026-06-30 |" in md
+    assert "|---|---|---:|---:|" in md
+    assert "| 营业收入 | 原币基础单位 | 213359674.81 | 1105675.05 |" in md
     assert "## 报告期元信息" in md
     assert "| 项目 | 2026-03-31 | 2026-06-30 |" in md
     assert "| 公告日 | 2026-04-29 | 2026-08-28 |" in md
@@ -132,14 +132,14 @@ def test_financial_markdown_passthrough_export_and_version_audit():
         "include_versions": True,
         "rows": [
             {"report_date": "2025-12-31", "statement": "income", "item_name": "净利润",
-             "amount": 100.0, "value_basis": "cumulative", "version_id": "abc",
+             "amount": 100.0, "value_basis": "cumulative", "version_id": "abc", "unit": "原币基础单位",
              "is_latest": True, "version_count": 2, "report_metadata": {}},
         ],
     })
 
     md = versioned["markdown"]
-    assert "| 报告期 | 科目 | 金额 | version_id | is_latest | version_count |" in md
-    assert "| 2025-12-31 | 净利润 | 100.00 | abc | True | 2 |" in md
+    assert "| 报告期 | 科目 | 单位 | 数值 | version_id | is_latest | version_count |" in md
+    assert "| 2025-12-31 | 净利润 | 原币基础单位 | 100.00 | abc | True | 2 |" in md
 
 
 @pytest.mark.parametrize("dimension", ["income by product", "income by industry", "income by region"])

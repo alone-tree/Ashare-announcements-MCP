@@ -145,13 +145,15 @@ def _render_financial_markdown(result: dict) -> dict:
             md = [
                 f"## {title}（value_basis={value_basis}，版本审计）",
                 "",
-                "| 报告期 | 科目 | 金额 | version_id | is_latest | version_count |",
-                "|---|---|---:|---|---|---:|",
+                "| 报告期 | 科目 | 单位 | 数值 | version_id | is_latest | version_count |",
+                "|---|---|---|---:|---|---|---:|",
             ]
             for row in srows:
-                md.append("| {} | {} | {} | {} | {} | {} |".format(
-                    row.get("report_date"), row.get("item_name"),
-                    _fmt_financial_amount(row.get("amount")),
+                value = row.get("amount")
+                cell = f"{value * 100:.2f}%" if row.get("unit") == "ratio" and isinstance(value, (int, float)) else _fmt_financial_amount(value)
+                md.append("| {} | {} | {} | {} | {} | {} | {} |".format(
+                    row.get("report_date"), row.get("item_name"), row.get("unit") or "",
+                    cell,
                     row.get("version_id") or "", row.get("is_latest"), row.get("version_count"),
                 ))
         else:
@@ -159,17 +161,17 @@ def _render_financial_markdown(result: dict) -> dict:
             md = [
                 f"## {title}（value_basis={value_basis}）",
                 "",
-                "| 科目 | " + " | ".join(dates) + " |",
-                "|---" + "|---:" * len(dates) + "|",
+                "| 科目 | 单位 | " + " | ".join(dates) + " |",
+                "|---|---" + "|---:" * len(dates) + "|",
             ]
-            items: dict[str, dict[str, str]] = {}
+            items: dict[tuple[str, str], dict[str, str]] = {}
             for row in srows:
                 report_date = row["report_date"]
                 value = row.get("amount")
                 cell = f"{value * 100:.2f}%" if row.get("unit") == "ratio" and isinstance(value, (int, float)) else _fmt_financial_amount(value)
-                items.setdefault(row.get("item_name"), {})[report_date] = cell
-            for name, cells in items.items():
-                md.append("| {} | {} |".format(name, " | ".join(cells.get(d, "") for d in dates)))
+                items.setdefault((row.get("item_name"), row.get("unit") or ""), {})[report_date] = cell
+            for (name, unit), cells in items.items():
+                md.append("| {} | {} | {} |".format(name, unit, " | ".join(cells.get(d, "") for d in dates)))
         blocks.append("\n".join(md))
     segments = result.pop("segments", [])
     if segments:
