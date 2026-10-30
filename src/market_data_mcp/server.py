@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any
+from typing import Annotated, Any
+from pydantic import Field, StrictInt
 
 # 支持直接执行导出目录中的 server.py（与公告 MCP 同款；不依赖 cwd）
 if __package__ in (None, ""):
@@ -65,6 +66,8 @@ _FINANCIAL_META_ROWS = [
     ("东财更新日", "UPDATE_DATE"),
     ("货币", "CURRENCY"),
     ("审计意见", "OPINION_TYPE"),
+    ("内控审计意见", "OSOPINION_TYPE"),
+    ("审计单位", "AUDITOR"),
 ]
 
 
@@ -240,12 +243,14 @@ def create_server() -> Any:
         force_refresh: bool = False,
         export_path: str | None = None,
         items: list[str] | None = None,
+        top_n: Annotated[StrictInt, Field(ge=1, le=99)] = 5,
     ) -> dict[str, Any]:
         """获取财报常用科目、营收结构及派生指标；详细口径查get_market_data_help。
 
         amount_basis必填：cumulative或single。periods省略为最近5个已披露报告期。
         statements支持balance/income/cash_flow/segments/meta。items省略返回常用清单，
-        ["ALL_ITEMS"]返回全部原始科目；营收结构item为income by product/industry/region。
+        ["ALL_ITEMS"]返回全部原始科目；主营item为income by product/industry/region。
+        top_n为主营排名上限，默认5，可取1—99；客户/供应商集中度仍为前五及合计。
         计算依赖自动补齐，single下营收结构仍为累计。force_refresh重查请求范围。
         export_path指定CSV；超过200行自动导出。include_versions保留已观察原始版本。
         """
@@ -259,6 +264,7 @@ def create_server() -> Any:
             force_refresh=force_refresh,
             export_path=export_path,
             items=items,
+            top_n=top_n,
         ))
 
     @mcp.tool()

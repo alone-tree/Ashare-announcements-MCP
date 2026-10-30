@@ -1,5 +1,6 @@
 """按已验证指标请求公司信息、营收结构；不写业务缓存。"""
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from market_data_mcp.providers import ifind
 from market_data_mcp.routing import to_ifind
@@ -19,6 +20,7 @@ PROFILE = {
 IPO = {"发行股数": "ths_ipo_quantity_stock", "发行价格": "ths_ipo_price_stock",
        "募集资金总额": "ths_ipo_rc_stock", "募集资金净额": "ths_ipo_actual_rc_stock",
        "发行后总股本": "ths_total_shares_after_ipo_ld_stock", "发行后市盈率": "ths_ipo_pe_dlt_stock",
+       "发行后市净率": "ths_ipo_pb_stock", "发行费用": "ipo_fee",
        "保荐机构（主承销商）": "ths_ipo_main_underwrite_stock", "保荐代表人": "ths_ipo_sponsor_representative_stock",
        "发行人律师": "ths_law_firm_stock", "经办律师": "ths_lawyer_stock",
        "会计事务所": "ths_accounting_firm_stock", "经办会计师": "ths_accountant_stock",
@@ -75,7 +77,12 @@ def _ratio_value(value):
     return value / 100 if isinstance(value, (int, float)) else value
 
 
-def segments(root, mc, period, dimension):
+def segment_row_empty(row):
+    return all(row.get(key) in (None, "") for key in ("name", "income", "gross_profit"))
+
+
+def segments(root, mc, period, dimension, top_n=5, start_rank=1):
+    """依据财报细则§5，主营按请求上限获取，保留末项空行供缓存判断覆盖。"""
     api_period = period.replace("-", "")
     if dimension in CONCENTRATION:
         spec = CONCENTRATION[dimension]
@@ -93,9 +100,21 @@ def segments(root, mc, period, dimension):
               "gross_profit": f"ths_moc_project_profit_{dimension}_stock"}
     rows = []
     # 同一码不同排名不能合并；每个排名是独立SDK批次。
-    for rank in range(1, 6):
-        rows.append({"rank": rank, **basic(root, mc, fields, f"{period.replace('-', '')},{rank}")})
+    for rank in range(start_rank, top_n + 1):
+        row = {"rank": rank, **basic(root, mc, fields, f"{api_period},{rank}")}
+        rows.append(row)
+        if segment_row_empty(row):
+            break
     return rows
+
+
+def annual_report_info(root, mc, period):
+    """财报细则§2的年报补充；参数原式与样本在支持情况§7维护。"""
+    api_period = period.replace("-", "")
+    fields = {"AUDITOR": "ths_audit_institution_stock", "OPINION_TYPE": "ths_audit_opinion_type_stock",
+              "OSOPINION_TYPE": "ths_ica_opinion_type_stock", "NOTICE_DATE": "ths_regular_report_actual_dd_stock"}
+    return basic(root, mc, fields, {key: api_period + (",100" if key in ("AUDITOR", "OPINION_TYPE") else "")
+                                  for key in fields})
 
 
 def _annual_year(latest: str) -> int:
@@ -122,7 +141,16 @@ def section(root, mc, name, *, periods=None, years=None, as_of_date=None):
             output["上市以来违规次数"] = None
         return output
     if name == "ipo":
-        return basic(root, mc, IPO)
+        output = basic(root, mc, IPO, {"发行费用": "10000"})
+        fee = output.get("发行费用")
+        if fee not in (None, ""):
+            try:
+                amount = Decimal(str(fee)) * 10000
+                if amount.is_finite():
+                    output["发行费用"] = float(amount)
+            except InvalidOperation:
+                pass  # 文本占位保留，不由募资差额编造费用。
+        return output
     if name == "holders":
         return [{"report_date": period, "rank": rank,
                  **basic(root, mc, HOLDERS, f"{period.replace('-', '')},{rank}")}

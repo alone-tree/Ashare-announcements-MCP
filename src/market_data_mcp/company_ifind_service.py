@@ -37,7 +37,9 @@ def get_section(root, mc, section, periods, years, as_of_date, force):
         key = hashlib.sha256(json.dumps(query, sort_keys=True).encode()).hexdigest()
         cached = payload["scopes"].get(key)
         try:
-            if force or not cached or not data_store.fresh(cached.get("checked_at")):
+            missing_ipo_fields = section == "ipo" and cached and not {
+                "发行后市净率", "发行费用"}.issubset(cached.get("data", {}))
+            if force or not cached or missing_ipo_fields or not data_store.fresh(cached.get("checked_at")):
                 value = company_ifind.section(root, mc, section,
                     periods=[scope] if section == "holders" else None,
                     years=[scope] if section in ("forecast", "dividends") else None,
@@ -60,4 +62,6 @@ def get_section(root, mc, section, periods, years, as_of_date, force):
         result["error"] = "部分范围刷新失败，可用旧值已保留" if output else "全部范围请求失败"
     if section == "forecast" and as_of_date is None:
         result["notes"] = ["未指定数据日期，按请求日取最新可用快照；as_of_date为查询日期，上游未披露实际更新日"]
+    if section == "ipo":
+        result["units"] = {"发行费用": "原币基础单位", "发行后市净率": "倍"}
     return result

@@ -266,7 +266,7 @@ def evaluate_financial_items(plans, periods, rows, market, basis, include_versio
     return output, failed
 
 
-def _segment_results(root, mc, periods, names, force, minimal, notes):
+def _segment_results(root, mc, periods, names, force, minimal, notes, top_n=5):
     code = f"{mc.code}.{mc.suffix}"
     output, failed = [], []
     if not names:
@@ -289,39 +289,80 @@ def _segment_results(root, mc, periods, names, force, minimal, notes):
             "meta": {"schema_version": 2, "source": "ifind"}, "periods": {}}
         for period in periods:
             cached = payload["periods"].get(period)
+            concentration = dimension in company_ifind.CONCENTRATION
+            covered = cached and (concentration or cached.get("exhausted") or cached.get("top_n", 5) >= top_n)
             try:
-                if force or cached is None:
+                if force or not covered:
                     if not anchor or period > anchor:
                         raise ValueError("尚未确认该报告期已披露")
-                    records = company_ifind.segments(root, mc, period, dimension)
+                    if concentration:
+                        records = company_ifind.segments(root, mc, period, dimension)
+                    else:
+                        start = 1 if force or not cached else cached.get("top_n", 5) + 1
+                        fresh = company_ifind.segments(root, mc, period, dimension, top_n, start)
+                        exhausted = bool(fresh and company_ifind.segment_row_empty(fresh[-1]))
+                        prefix = [r for r in (cached or {}).get("rows", []) if r["rank"] < start]
+                        suffix = [r for r in (cached or {}).get("rows", []) if r["rank"] > top_n] if not exhausted else []
+                        records = prefix + fresh + suffix
                     candidate = {"rows": records, "checked_at": _now()}
+                    if not concentration:
+                        candidate.update(top_n=top_n, exhausted=exhausted)
                     updated = {**payload, "periods": {**payload["periods"], period: candidate}}
                     data_store.write(root, code, DOMAIN, module, updated)
                     payload, cached = updated, candidate
             except Exception as exc:
-                failed.append({"item": name, "report_date": period, "reason": str(exc)})
+                failed.append({"item": name, "report_date": period, "reason": str(exc), "stale": bool(cached)})
             if cached:
-                records = cached["rows"][:1] if minimal else cached["rows"]
-                for record in records:
+                for record in cached["rows"]:
+                    if not concentration and (record["rank"] > top_n or company_ifind.segment_row_empty(record)):
+                        continue
                     item = {"report_date": period, "dimension": name, "value_basis": "cumulative", "source": "ifind", **record}
-                    if minimal:
+                    if minimal and not concentration:
                         item.pop("gross_profit", None)
                         item.pop("rank", None)
                     output.append(item)
     return output, failed
 
 
-def get_financial_data(root, code, amount_basis, periods=None, statements=None, items=None,
-                       include_versions=False, force_refresh=False, export_path=None):
+def _supplement_report_info(root, mc, period, metadata, requested_keys, force):
+    """财报细则§2/§3：元信息缺项补充独立提交，不写回东财报表版本。"""
+    keys = {"AUDITOR", "OPINION_TYPE", "OSOPINION_TYPE", "NOTICE_DATE"}
+    if mc.market not in ("A", "BJ") or not period.endswith("12-31") or not any(
+        metadata.get(key) in (None, "") for key in keys & requested_keys
+    ):
+        return metadata, {}, []
+    code = f"{mc.code}.{mc.suffix}"
+    payload = data_store.read(root, code, DOMAIN, "report_info_ifind", "ifind") or {
+        "meta": {"schema_version": 2, "source": "ifind"}, "periods": {}}
+    cached = payload["periods"].get(period)
+    failures = []
     try:
-        mc = validate_financial_request(code, amount_basis, periods, statements, items)
+        if force or not cached or not data_store.fresh(cached.get("checked_at")):
+            values = company_ifind.annual_report_info(root, mc, period)
+            candidate = {"data": values, "checked_at": _now()}
+            updated = {**payload, "periods": {**payload["periods"], period: candidate}}
+            data_store.write(root, code, DOMAIN, "report_info_ifind", updated)
+            cached = candidate
+    except Exception as exc:
+        failures.append({"item": "报表信息补充", "report_date": period, "reason": str(exc), "stale": bool(cached)})
+    combined, sources = dict(metadata), {}
+    for key, value in (cached or {}).get("data", {}).items():
+        if combined.get(key) in (None, ""):
+            combined[key], sources[key] = value, "ifind"
+    return combined, sources, failures
+
+
+def get_financial_data(root, code, amount_basis, periods=None, statements=None, items=None,
+                       include_versions=False, force_refresh=False, export_path=None, top_n=5):
+    try:
+        mc = validate_financial_request(code, amount_basis, periods, statements, items, top_n)
         return execute_financial_request(root, mc, amount_basis, periods, statements, items,
-                                         include_versions, force_refresh, export_path)
+                                         include_versions, force_refresh, export_path, top_n)
     except (ValueError, TypeError) as exc:
         return {"ok": False, "error": str(exc)}
 
 
-def execute_financial_request(root, mc, basis, periods, statements, items, include_versions, force, export_path):
+def execute_financial_request(root, mc, basis, periods, statements, items, include_versions, force, export_path, top_n=5):
     code = f"{mc.code}.{mc.suffix}"
     selected = list(dict.fromkeys(statements or STATEMENTS))
     all_items = items is not None and "ALL_ITEMS" in items
@@ -394,12 +435,18 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     for period in requested:
         period_rows = [r for r in latest_rows if r["report_date"] == period]
         metadata = period_rows[0].get("report_metadata", {}) if period_rows else {}
+        metadata, info_sources, info_failures = _supplement_report_info(
+            root, mc, period, metadata, {META_KEYS[name] for name in meta_names}, force)
+        failed.extend(info_failures)
+        for row in output:
+            if info_sources and row["report_date"] == period and row.get("is_latest", True):
+                row["report_metadata"] = metadata
         for name in meta_names:
             value = period if name == "报告截止日" else metadata.get(META_KEYS[name])
             output.append({"report_date": period, "statement": "meta", "item_code": META_KEYS[name],
-                           "item_name": name, "amount": value, "source": "eastmoney", "value_basis": "metadata",
+                           "item_name": name, "amount": value, "source": info_sources.get(META_KEYS[name], "eastmoney"), "value_basis": "metadata",
                            "report_metadata": metadata})
-    segments, segment_failures = _segment_results(root, mc, requested, segment_names, force, items is None, notes)
+    segments, segment_failures = _segment_results(root, mc, requested, segment_names, force, items is None, notes, top_n)
     if items is not None:
         for segment in segments:
             income, gross = _number_for_calculation(segment.get("income")), _number_for_calculation(segment.get("gross_profit"))
@@ -440,8 +487,8 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
               "amount_basis": basis, "periods": requested, "include_versions": include_versions,
               **({"versions": version_map} if version_map else {}),
               "status": "partial_success" if successful and failures else "success" if successful else "failed",
-              "stale": bool(refresh_errors), "failed_items": failures, "notes": notes,
-              "source": "eastmoney,ifind" if segments else "eastmoney",
+              "stale": bool(refresh_errors) or any(f.get("stale") for f in failed), "failed_items": failures, "notes": notes,
+              "source": ",".join(sorted({r.get("source", "eastmoney") for r in output + segments})) or "eastmoney",
               "units": {"amount": "原币金额，币种见报告期元信息", "ratio": "比值，0.25=25%"},
               "rows": output, "segments": segments}
     if sec:

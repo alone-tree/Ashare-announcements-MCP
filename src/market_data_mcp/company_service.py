@@ -3,7 +3,7 @@
 
 架构 docs/market-data架构设计.md §5：
 - **当前双路径（2026-10-22 起）**：A/BJ → company_ifind_service（iFinD 指标，profile 25 字段含
-  员工人数与上市以来违规次数、ipo 14 字段含中介机构 8 项）；HK/US → 本模块 _legacy 路径
+  员工人数与上市以来违规次数、ipo 16字段含中介机构8项、发行后PB和发行费用）；HK/US → 本模块 _legacy 路径
 - legacy 路径（_SECTION_PLAN）：五类 sections，profile/ipo/dividends/forecast/holders；
   多源合并策略 A：主源优先、缺的信息从补充源补（每字段单一来源）；
   **无失败回退**（主源失败即结构化报错，可重试）；补充源仅字段补全，不参与失败回退

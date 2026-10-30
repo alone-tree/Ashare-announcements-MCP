@@ -10,7 +10,7 @@ DEFAULT_ITEMS = {
                   "筹资活动现金流量净额", "现金及现金等价物净增加额", "期末现金及现金等价物余额"],
     "segments": ["income by product", "income by industry", "income by region",
                  "income by customer", "purchase by supplier"],
-    "meta": ["报告截止日", "公告日", "币种", "审计意见", "内控审计意见"],
+    "meta": ["报告截止日", "公告日", "币种", "审计意见", "内控审计意见", "审计单位"],
 }
 SEGMENTS = {"income by product": "product", "income by industry": "industry", "income by region": "district",
             "income by customer": "customer", "purchase by supplier": "supplier"}
@@ -30,10 +30,12 @@ ALIASES = {"合并净利润": ["净利润"], "归母净利润": ["归属于母�
            "应收票据及账款": ["应收票据及应收账款"], "应付票据及账款": ["应付票据及应付账款"]}
 
 
-def validate_financial_request(code, amount_basis, periods, statements, items):
+def validate_financial_request(code, amount_basis, periods, statements, items, top_n=5):
     from datetime import date
     from market_data_mcp.routing import parse_code
     mc = parse_code(code)
+    if type(top_n) is not int or not 1 <= top_n <= 99:
+        raise ValueError("top_n必须是1—99的整数")
     if amount_basis not in ("cumulative", "single"):
         raise ValueError("amount_basis 必须明确为 cumulative 或 single")
     if statements is not None and (not isinstance(statements, list) or not statements

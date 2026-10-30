@@ -47,6 +47,7 @@ def test_financial_statements_mcp_forwards_contract(monkeypatch):
             "include_versions": True,
             "force_refresh": True,
             "export_path": None,
+            "top_n": 5,
         },
     )]
 
@@ -239,3 +240,31 @@ def test_data_catalog_cli_batch_uses_same_service(monkeypatch):
 
     assert response["ok"]
     assert response["items"] == [{"item_name": "600519.SH"}]
+
+
+def test_top_n_forwarded_by_both_entries(monkeypatch):
+    calls = []
+    def fake(root, code, **kwargs):
+        calls.append(kwargs["top_n"])
+        return {"ok": True, "rows": []}
+    monkeypatch.setattr(server, "get_financial_data_service", fake)
+    monkeypatch.setattr(cli.financial_service, "get_financial_data", fake)
+    mcp = server.create_server()
+    asyncio.run(mcp.call_tool("get_financial_data", {"code": "002586.SZ", "amount_basis": "cumulative", "top_n": 99}))
+    cli.dispatch({"tool": "get_financial_data_batch", "codes": ["002586.SZ"], "amount_basis": "cumulative", "top_n": 99})
+    assert calls == [99, 99]
+
+
+@pytest.mark.parametrize("value", [True, 5.0, "5", None])
+def test_mcp_top_n_is_strict_integer(monkeypatch, value):
+    monkeypatch.setattr(server, "get_financial_data_service", lambda *a, **k: pytest.fail("非法参数不得请求"))
+    tool = next(t for t in server.create_server()._tool_manager.list_tools() if t.name == "get_financial_data")
+    with pytest.raises(Exception, match="valid integer"):
+        asyncio.run(tool.run({"code": "002586.SZ", "amount_basis": "cumulative", "top_n": value}))
+
+
+def test_cli_explicit_null_top_n_is_not_silently_defaulted(monkeypatch):
+    monkeypatch.setattr(cli.financial_service.financial_statements, "fetch_batch", lambda *a: pytest.fail("非法参数不得请求"))
+    response = cli.dispatch({"tool": "get_financial_data_batch", "codes": ["002586.SZ"],
+                             "amount_basis": "cumulative", "top_n": None})
+    assert not response["ok"] and "top_n" in response["results"][0]["error"]
