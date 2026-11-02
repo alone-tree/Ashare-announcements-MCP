@@ -33,7 +33,7 @@
 | `get_quote_chart` | code, adjust, start_date, end_date, period, log_scale, field, events, keypoints, drawdown_threshold | 不写缓存；取数复用 `get_quote`，PNG 落 `cache/_charts/` |
 | `get_financial_data` | 完整参数及默认清单见财报子文档 | 独立报表与补充模块，见§3 |
 | `get_market_data_help` | tool, market, code, topic | 本地只读能力及缓存查询，见§4 |
-| `get_company_profile` | code, sections, periods, years, as_of_date, force_refresh | section及时间范围独立缓存，见§5 |
+| `get_company_profile` | 完整参数及返回见§5 | 类型及时间范围独立缓存，见§5 |
 
 不单设财务比率工具；计算指标归属财报工具。旧工具名不注册为兼容别名。
 
@@ -306,24 +306,38 @@ ipo另含发行后市净率与发行费用，采用支持情况§7已验证模�
 
 ### 5.2 参数与时间范围
 
-`code`必填；`sections`省略取全部，显式空列表报错；分类名为profile/ipo/dividends/forecast/holders。`force_refresh`默认false。
+`get_company_profile(code, information_type, force_refresh=False, extra_parameters=None)`。code为带市场后缀的股票代码；information_type必填，一次选一种类型：profile（工商/概况）、ipo（IPO）、dividends（年度分红）、holders（十大股东）、forecast（盈利预测）。默认返回本类型完整字段和记录，不设科目筛选。extra_parameters为可省略的JSON对象；force_refresh只重查本次范围，不改变日期条件。
 
-| section | 时间参数 |
+大陆市场的时间条件放在extra_parameters中：
+
+| 类型 | 额外参数及默认行为 |
 |---|---|
-| profile、ipo | 当前概况与IPO资料 |
-| holders | periods为明确报告截止日列表，省略取最新一期 |
-| forecast | years为必填年份整数列表；as_of_date可指定YYYY-MM-DD，省略按请求日取最新可用快照 |
-| dividends | years为年度列表，省略取本年及之前共5年 |
+| profile、ipo | 无额外参数；返回完整概况或IPO资料 |
+| holders | shareholder_report_dates为股东名单报告截止日列表，省略取最新已披露一期；不得混用公告日或查询日 |
+| forecast | forecast_years为预测业绩所属年度列表，省略取未来三年、不含当前年度（2026年请求即2027、2028、2029年）；forecast_as_of_date为预测取数基准日，省略按请求当天查询该日可用预测 |
+| dividends | dividend_years为分红统计年度列表，省略取本年及之前共5年；统计年度沿用上游，未经核实不解释为利润所属年 |
 
-预测返回查询数据日期；上游未给实际更新日时明确未披露，不能将查询日期称为实际上游更新日。缺少years只令forecast失败，其余独立section继续。
+年度参数为非空整数数组；股东报告截止日为非空YYYY-MM-DD数组；预测取数基准日为YYYY-MM-DD字符串。日期必须有效且不晚于今天。拒绝未知参数、错误类型、不属于本信息类型或市场无法执行的条件，不忽略条件后返回默认值。force_refresh只接受布尔值。
+
+例如`get_company_profile("600519.SH", "dividends", extra_parameters={"dividend_years":[2020,2021]})`指定两个统计年度；`extra_parameters={"shareholder_report_dates":["2024-12-31"]}`用于holders；`extra_parameters={"forecast_years":[2027],"forecast_as_of_date":"2024-06-01"}`用于forecast，年份和取数日期互相独立。
+
+港股保留既有粒度：分红为原始记录、预测为券商明细，尚未实现大陆同口径的年度、报告期或历史预测筛选；传入这些额外参数会明确报错。美股未接入结构化公司信息。不把大陆默认年度范围套用港股或美股。
+
+MCP基本说明只列类型、完整返回及四参数用途。结果中的extra_parameter_help仅说明本类型本市场实际可执行的额外参数，含用途、格式、默认值和完整调用对象；无可用参数时不附空说明。参数错误时仍提供相应帮助。
+
+CLI为`{"tool":"get_company_profile_batch","codes":["600519.SH"],"information_type":"dividends"}`，其余参数、默认值与MCP一致。旧sections/periods/years/as_of_date不再作为公开参数，不注册兼容别名。
 
 ### 5.3 缓存、刷新及返回
 
-沪深A/B股及北交所新缓存位于`cache/{code}/company_data/{section}.json`，schema_version=2，按报告期、年度及预测数据日期形成scopes。每个独立时间范围成功检查后缓存30天；成功空值也复用，未检查的新范围立即请求；force_refresh重查请求范围。
+沪深A/B股及北交所新缓存位于`cache/{code}/company_data/{section}.json`，schema_version=2，按报告期、年度及预测取数基准日形成scopes。每个独立时间范围成功检查后缓存30天；成功空值也复用，未检查的新范围立即请求；force_refresh重查请求范围。默认预测日期先解析为请求日再参与缓存键，跨日不把原先的默认快照标为新日期。最新股东报告期探针也沿用30天缓存，普通查询的“最新”以已检查快照为准，强制刷新会重查报告期。
 
 旧IPO缓存缺少发行后市净率或发行费用字段键时，按需更新该section；已有字段但值为空视为成功检查过，不为寻找非空值反复重拉。更新失败保留旧数据及检查时间。
 
-旧沪深股东缓存不可信，保留原文件但新通道不读取；沪深A/B股及北交所公共入口取数失败时也不得回退到旧新浪股东缓存。不同证券的新缓存各自独立。港美保留原section缓存。失败不推进成功检查时间，已提交的其他section或时间范围不回滚。刷新失败可读本通道旧值并标注stale；完全无可用结果返回失败，部分结果可用返回partial_success。
+旧沪深股东缓存不可信，保留原文件但新通道不读取；沪深A/B股及北交所公共入口取数失败时也不得回退到旧新浪股东缓存。不同证券的新缓存各自独立。港美保留原section缓存。失败不推进成功检查时间，已提交的其他时间范围不回滚。刷新失败可读本通道旧值并标注stale；最新股东报告期探针失败后沿用已知期末也必须标注stale及失败原因。完全无可用结果返回失败，部分结果可用返回partial_success。
+
+单公司结果平铺code、market、information_type、data与来源、缓存、检查时间、错误等实际元信息，不再套sections。query回显实际请求的年度、报告截止日及预测取数基准日；默认股东期末取自成功检查记录。预测取数基准日不等于上游实际更新日，未披露更新日时不推断。港股返回既有缓存的checked_at，不虚构数据所属期或单位。
+
+MCP将data完整渲染为markdown：概况、IPO按科目/值成表，记录列表按实际所有字段的并集成表；保留查询和来源等元信息及extra_parameter_help，不重复返回data。CLI保留原始结构化data。空值留空、零保留为零、无记录与available=false分开表达；嵌套原始值保留，不截断字段或记录，不猜币种、不改变原始数值精度。现有单位元信息原样保留。CLI批次完成度遵循§1.6。
 
 所有iFinD请求遵守§8；无可用结构化通道时返回available=false及原因。
 

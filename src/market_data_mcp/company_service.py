@@ -16,13 +16,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from datetime import date
+from typing import Any, Callable, Literal
 
 from market_data_mcp import company_cache
 from market_data_mcp.providers import company_info
 from market_data_mcp.routing import MarketCode, parse_code
 
 VALID_SECTIONS = ("profile", "ipo", "dividends", "forecast", "holders")
+InformationType = Literal["profile", "ipo", "dividends", "holders", "forecast"]
 
 _US_REASON = "美股无结构化公司信息，请用公告 MCP 查询 SEC 提交（get_company_profile 不提供）"
 _HK_US_REASON = "该市场无结构化数据，请用公告 MCP 查询公告原文"
@@ -290,42 +292,115 @@ def _legacy_get_company_profile(
     return response
 
 
-def get_company_profile(root: str, code: str, sections: list[str] | None = None,
-                        force_refresh: bool = False, periods: list[str] | None = None,
-                        years: list[int] | None = None, as_of_date: str | None = None) -> dict:
-    from datetime import date
+def _extra_parameter_help(code: str, information_type: str, market: str) -> dict:
+    """按架构§5只说明当前市场、当前类型可执行的条件。"""
+    if market not in ("A", "BJ"):
+        return {}
+    specifications = {
+        "dividends": {
+            "dividend_years": ("分红统计年度列表；沿用上游统计口径，不等同于利润所属年", "非空整数数组", [2020, 2021], "本年及此前四年"),
+        },
+        "holders": {
+            "shareholder_report_dates": ("股东名单报告截止日列表，不是公告日或查询日", "非空YYYY-MM-DD数组，不晚于今天", ["2024-12-31"], "最新已披露一期"),
+        },
+        "forecast": {
+            "forecast_years": ("预测业绩所属年度列表，不是取数日期", "非空整数数组", [date.today().year + 1], "未来三年，不含当前年度"),
+            "forecast_as_of_date": ("盈利预测取数基准日；上游实际更新日未披露", "YYYY-MM-DD字符串，不晚于今天", "2024-06-01", "请求当天的可用预测"),
+        },
+    }
+    return {
+        key: {"description": description, "format": value_format, "default": default,
+              "example": {"code": code, "information_type": information_type, "extra_parameters": {key: example}}}
+        for key, (description, value_format, example, default) in specifications.get(information_type, {}).items()
+    }
+
+
+def _calendar_date(value: Any, name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{name}必须为YYYY-MM-DD字符串，不晚于今天")
+    try:
+        valid = date.fromisoformat(value).isoformat() == value and value <= date.today().isoformat()
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError(f"{name}必须为有效的YYYY-MM-DD，不晚于今天")
+    return value
+
+
+def get_company_profile(root: str, code: str, information_type: InformationType,
+                        force_refresh: bool = False, extra_parameters: dict | None = None) -> dict:
+    """按架构§5，一次返回一种公司信息的完整数据及本类型条件用法。"""
     from market_data_mcp import company_ifind_service
+    response = {"code": code, "information_type": information_type}
     try:
         mc = parse_code(code)
-        selected = list(VALID_SECTIONS) if sections is None else sections
-        if not isinstance(selected, list) or not selected:
-            raise ValueError(f"sections必须是{list(VALID_SECTIONS)}的非空子集")
-        if any(s not in VALID_SECTIONS for s in selected):
-            raise ValueError(f"未知 section，支持{list(VALID_SECTIONS)}")
-        if periods is not None:
-            if not isinstance(periods, list) or not periods:
-                raise ValueError("periods须为非空报告截止日数组")
-            for period in periods:
-                if date.fromisoformat(period).isoformat() != period or period > date.today().isoformat():
-                    raise ValueError("无效报告截止日")
-        if years is not None and (not isinstance(years, list) or not years or any(type(y) is not int or not 1 <= y <= 9999 for y in years)):
-            raise ValueError("years必须是非空年份整数数组")
-        if as_of_date is not None and (date.fromisoformat(as_of_date).isoformat() != as_of_date or as_of_date > date.today().isoformat()):
-            raise ValueError("as_of_date必须是有效且不晚于今天的YYYY-MM-DD")
+        response.update(code=f"{mc.code}.{mc.suffix}", market=mc.market)
+        if not isinstance(information_type, str) or information_type not in VALID_SECTIONS:
+            raise ValueError(f"information_type必须为{list(VALID_SECTIONS)}之一")
+        help_parameters = _extra_parameter_help(response["code"], information_type, mc.market)
+        if help_parameters:
+            response["extra_parameter_help"] = help_parameters
+        if type(force_refresh) is not bool:
+            raise ValueError("force_refresh必须为布尔值true或false")
+        if extra_parameters is not None and not isinstance(extra_parameters, dict):
+            raise ValueError("extra_parameters必须为JSON对象或null")
+        extra = extra_parameters or {}
+        unknown = set(extra) - set(help_parameters)
+        if unknown:
+            allowed = list(help_parameters)
+            usage = f"可用参数：{allowed}，完整传法见extra_parameter_help" if allowed else "该市场本类型暂无可用额外参数，请省略extra_parameters"
+            raise ValueError(f"{mc.market}市场{information_type}不支持额外参数{sorted(unknown)}；"
+                             + usage)
+        for key, value in extra.items():
+            if key in ("dividend_years", "forecast_years"):
+                if not isinstance(value, list) or not value or any(type(y) is not int or not 1 <= y <= 9999 for y in value):
+                    raise ValueError(f"{key}必须为1—9999之间的非空年份整数数组")
+            elif key == "shareholder_report_dates":
+                if not isinstance(value, list) or not value:
+                    raise ValueError("shareholder_report_dates必须为非空报告截止日数组")
+                for period in value:
+                    _calendar_date(period, key)
+            else:
+                _calendar_date(value, key)
     except (ValueError, TypeError) as exc:
-        return {"ok": False, "error": str(exc)}
+        return {**response, "ok": False, "status": "failed", "error": str(exc)}
     if mc.market not in ("A", "BJ"):
-        result = _legacy_get_company_profile(root, code, sections, force_refresh)
-        result.setdefault("notes", []).append("该市场iFinD公司信息未验证，保留现有通道")
-        return result
-    results = {}
-    for section in dict.fromkeys(selected):
-        try:
-            results[section] = company_ifind_service.get_section(root, mc, section, periods, years, as_of_date, force_refresh)
-        except Exception as exc:
-            results[section] = {"ok": False, "error": str(exc)}
-    successes = sum(bool(r.get("ok")) for r in results.values())
-    failed = [s for s, r in results.items() if not r.get("ok") or r.get("failed")]
-    return {"ok": successes > 0, "code": f"{mc.code}.{mc.suffix}", "market": mc.market,
-            "status": "partial_success" if successes and failed else "success" if successes else "failed",
-            "sections": results, "failed_sections": failed}
+        legacy = _legacy_get_company_profile(root, code, [information_type], force_refresh)
+        result = legacy.get("sections", {}).get(information_type, {})
+        result = {"ok": legacy["ok"], **result}
+        if legacy.get("error"):
+            result.setdefault("error", legacy["error"])
+        if result.get("ok") and result.get("available") is not False:
+            cached = company_cache.read_section(root, response["code"], information_type)
+            if cached:
+                result["checked_at"] = cached["meta"].get("updated_at")
+        result.setdefault("notes", []).append("该市场保留现有通道，不支持额外的年度、报告期或预测取数日筛选")
+        return {**response, **result, "status": "success" if result["ok"] else "failed"}
+
+    today = date.today()
+    query = {}
+    years = periods = as_of_date = None
+    if information_type == "dividends":
+        years = list(dict.fromkeys(extra.get("dividend_years", range(today.year - 4, today.year + 1))))
+        query["dividend_years"] = years
+    elif information_type == "holders":
+        if "shareholder_report_dates" in extra:
+            periods = list(dict.fromkeys(extra["shareholder_report_dates"]))
+    elif information_type == "forecast":
+        years = list(dict.fromkeys(extra.get("forecast_years", range(today.year + 1, today.year + 4))))
+        as_of_date = extra.get("forecast_as_of_date", today.isoformat())
+        query.update(forecast_years=years, forecast_as_of_date=as_of_date)
+    try:
+        result = company_ifind_service.get_section(root, mc, information_type, periods, years, as_of_date, force_refresh)
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc)}
+    if information_type == "holders":
+        actual_periods = [check["query"]["scope"] for check in result.get("checks", [])]
+        if periods is not None or actual_periods:
+            query["shareholder_report_dates"] = periods if periods is not None else actual_periods
+    if query:
+        response["query"] = query
+    if information_type == "forecast":
+        result.setdefault("notes", []).append("forecast_as_of_date为预测取数基准日，上游实际更新日未披露；缓存检查时间另见checks")
+    status = "partial_success" if result.get("ok") and (result.get("failed") or result.get("stale")) else "success" if result.get("ok") else "failed"
+    return {**response, **result, "status": status}

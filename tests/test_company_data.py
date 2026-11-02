@@ -14,11 +14,17 @@ def test_annual_year_follows_template_n8_rule():
     assert ci._annual_year("2026-09-30") == 2025
 
 
-def test_forecast_years_required_without_network(tmp_path, monkeypatch):
-    monkeypatch.setattr(cs.company_ifind, "section", lambda *a, **k: pytest.fail("不应请求"))
-    result = company_service.get_company_profile(str(tmp_path), "600519.SH", sections=["forecast"])
-    assert not result["ok"]
-    assert "years" in result["sections"]["forecast"]["error"]
+def test_forecast_defaults_to_next_three_years(tmp_path, monkeypatch):
+    from datetime import date
+    calls = []
+    def section(*args, **kwargs):
+        calls.append(kwargs)
+        return [{"year": kwargs["years"][0], "as_of_date": kwargs["as_of_date"], "营收均值": None}]
+    monkeypatch.setattr(cs.company_ifind, "section", section)
+    result = company_service.get_company_profile(str(tmp_path), "600519.SH", "forecast")
+    assert result["ok"]
+    assert [c["years"][0] for c in calls] == list(range(date.today().year + 1, date.today().year + 4))
+    assert result["query"]["forecast_as_of_date"] == date.today().isoformat()
 
 
 def test_time_scope_cache_and_partial_failure(tmp_path, monkeypatch):
@@ -30,12 +36,12 @@ def test_time_scope_cache_and_partial_failure(tmp_path, monkeypatch):
             raise RuntimeError("失败")
         return [{"year": year, "营收均值": None}]
     monkeypatch.setattr(cs.company_ifind, "section", section)
-    args = dict(sections=["forecast"], years=[2026, 2027, 2028])
+    args = dict(information_type="forecast", extra_parameters={"forecast_years": [2026, 2027, 2028]})
     a = company_service.get_company_profile(str(tmp_path), "600519.SH", **args)
     assert a["ok"] and a["status"] == "partial_success"
     b = company_service.get_company_profile(str(tmp_path), "600519.SH", **args)
     assert calls == [2026, 2027, 2028, 2028]  # 已检查空值也复用；失败可重试
-    company_service.get_company_profile(str(tmp_path), "600519.SH", sections=["forecast"], years=[2025])
+    company_service.get_company_profile(str(tmp_path), "600519.SH", "forecast", extra_parameters={"forecast_years": [2025]})
     assert calls[-1] == 2025
 
 
@@ -47,10 +53,11 @@ def test_holders_default_latest_and_historical_scope(tmp_path, monkeypatch):
         return [{"report_date": kwargs["periods"][0], "名称": "股东"}]
     monkeypatch.setattr(cs.company_ifind, "section", section)
     for _ in range(2):
-        r = company_service.get_company_profile(str(tmp_path), "600519.SH", sections=["holders"])
+        r = company_service.get_company_profile(str(tmp_path), "600519.SH", "holders")
     assert calls == [["2025-09-30"]]
-    assert r["sections"]["holders"]["data"][0]["report_date"] == "2025-09-30"
-    company_service.get_company_profile(str(tmp_path), "600519.SH", sections=["holders"], periods=["2024-06-30"])
+    assert r["data"][0]["report_date"] == "2025-09-30"
+    assert r["query"]["shareholder_report_dates"] == ["2025-09-30"]
+    company_service.get_company_profile(str(tmp_path), "600519.SH", "holders", extra_parameters={"shareholder_report_dates": ["2024-06-30"]})
     assert calls[-1] == ["2024-06-30"]
 
 
@@ -80,12 +87,12 @@ def test_holders_cli_keeps_companies_separate_and_ignores_legacy_cache(tmp_path,
     monkeypatch.setattr(company_service, "_legacy_get_company_profile",
                         lambda *a, **k: pytest.fail("A股/北交所不得进入旧通道"))
     request = {"tool": "get_company_profile_batch", "codes": codes,
-               "sections": ["holders"], "periods": [period]}
+               "information_type": "holders", "extra_parameters": {"shareholder_report_dates": [period]}}
     for cached in (False, True):
         response = cli.dispatch(request)
         assert response["ok"] and response["status"] == "success"
         for code, result in zip(codes, response["results"]):
-            holders = result["sections"]["holders"]
+            holders = result
             assert result["code"] == code and holders["source"] == "ifind"
             assert holders["cached"] is cached
             assert holders["data"] == [{"report_date": period, "rank": 1, "名称": f"股东-{code}"}]
@@ -108,11 +115,12 @@ def test_holders_fetch_failure_never_falls_back_to_legacy_cache(tmp_path, monkey
     monkeypatch.setattr(company_service, "_legacy_get_company_profile",
                         lambda *a, **k: pytest.fail("不能回退到旧股东缓存"))
     result = company_service.get_company_profile(
-        str(tmp_path), code, sections=["holders"], periods=["2026-06-30"],
+        str(tmp_path), code, "holders", extra_parameters={"shareholder_report_dates": ["2026-06-30"]},
     )
     assert not result["ok"] and result["status"] == "failed"
-    holders = result["sections"]["holders"]
+    holders = result
     assert not holders["ok"] and holders["data"] == [] and holders["checks"] == []
+    assert holders["cached"] is False
     assert holders["failed"][0]["reason"] == "本次iFinD请求失败"
     assert not data_store.path(str(tmp_path), code, "company_data", "holders").exists()
     assert old_file.read_bytes() == original
@@ -126,7 +134,7 @@ def test_dividends_write_failure_keeps_old_value_and_check_time(tmp_path, monkey
         return [{"year": 2023, "现金分红": len(requests)}]
 
     monkeypatch.setattr(ci, "section", section)
-    args = {"sections": ["dividends"], "years": [2023]}
+    args = {"information_type": "dividends", "extra_parameters": {"dividend_years": [2023]}}
     before = company_service.get_company_profile(str(tmp_path), "600106.SH", **args)
     target = data_store.path(str(tmp_path), "600106.SH", "company_data", "dividends")
     original = target.read_bytes()
@@ -139,10 +147,10 @@ def test_dividends_write_failure_keeps_old_value_and_check_time(tmp_path, monkey
     monkeypatch.setattr(data_store.os, "replace", denied)
     monkeypatch.setattr(data_store.time, "sleep", lambda _: None)
     after = company_service.get_company_profile(str(tmp_path), "600106.SH", force_refresh=True, **args)
-    result = after["sections"]["dividends"]
+    result = after
     assert after["status"] == "partial_success" and result["stale"]
-    assert result["data"] == before["sections"]["dividends"]["data"]
-    assert result["checks"] == before["sections"]["dividends"]["checks"]
+    assert result["data"] == before["data"]
+    assert result["checks"] == before["checks"]
     assert result["failed"][0]["reason"] == str(error)
     assert requests == [[2023], [2023]]  # 重试落盘，不重复请求上游。
     assert target.read_bytes() == original and not list(target.parent.glob("*.tmp"))

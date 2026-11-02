@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import os
 import sys
+import json
 from typing import Annotated, Any
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictBool, StrictInt
 
 # 支持直接执行导出目录中的 server.py（与公告 MCP 同款；不依赖 cwd）
 if __package__ in (None, ""):
@@ -58,6 +59,38 @@ def _wrap(fn):
     wrapper.__name__ = fn.__name__
     wrapper.__doc__ = fn.__doc__
     return wrapper
+
+
+def _render_company_markdown(result: dict) -> dict:
+    """公司信息全字段成表，元信息和按类型返回的参数说明原样保留。"""
+    if "data" not in result:
+        return result
+    data = result["data"]
+
+    def cell(value):
+        if value is None:
+            return ""
+        text = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace("|", "&#124;").replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
+
+    if isinstance(data, dict):
+        lines = ["| 科目 | 值 |", "|---|---|"]
+        lines.extend(f"| {cell(key)} | {cell(value)} |" for key, value in data.items())
+    elif isinstance(data, list) and data and all(isinstance(row, dict) for row in data):
+        columns = list(dict.fromkeys(key for row in data for key in row))
+        labels = {"year": "年度", "as_of_date": "预测取数基准日", "report_date": "股东名单报告截止日", "rank": "排名"}
+        if result.get("information_type") == "forecast":
+            labels["year"] = "预测业绩所属年度"
+        elif result.get("information_type") == "dividends":
+            labels["year"] = "分红统计年度"
+        lines = ["| " + " | ".join(cell(labels.get(key, key)) for key in columns) + " |",
+                 "|" + "|".join("---" for _ in columns) + "|"]
+        lines.extend("| " + " | ".join(cell(row.get(key)) for key in columns) + " |" for row in data)
+    elif data is None or data == []:
+        lines = ["未接入此类数据" if result.get("available") is False else "无可用记录"]
+    else:
+        lines = ["| 数据 |", "|---|", f"| {cell(data)} |"]
+    return {**{key: value for key, value in result.items() if key != "data"}, "markdown": "\n".join(lines)}
 
 
 _FINANCIAL_TITLES = {"income": "利润表", "balance": "资产负债表", "cash_flow": "现金流量表", "meta": "报表信息"}
@@ -288,21 +321,18 @@ def create_server() -> Any:
     @mcp.tool()
     def get_company_profile(
         code: str,
-        sections: list[str] | None = None,
-        force_refresh: bool = False,
-        periods: list[str] | None = None,
-        years: list[int] | None = None,
-        as_of_date: str | None = None,
+        information_type: company_service.InformationType,
+        force_refresh: StrictBool = False,
+        extra_parameters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """获取profile/ipo/dividends/forecast/holders，详细市场边界查get_market_data_help。
+        """按类型获取完整公司信息：profile工商/概况、ipo上市发行、dividends年度分红、holders十大股东、forecast盈利预测。
 
-        holders的periods省略取最新一期；forecast必须传years，as_of_date省略取最新快照。
-        dividends按years取年度统计，省略取本年及之前共5年。force_refresh跳过30天缓存。
+        force_refresh跳过本次范围缓存；extra_parameters可省略，其可用条件和完整传法随本次结果返回。
         """
-        return _wrap(company_service.get_company_profile)(
-            _data_root(), code, sections=sections, force_refresh=force_refresh,
-            periods=periods, years=years, as_of_date=as_of_date,
-        )
+        return _render_company_markdown(_wrap(company_service.get_company_profile)(
+            _data_root(), code, information_type=information_type, force_refresh=force_refresh,
+            extra_parameters=extra_parameters,
+        ))
 
     @mcp.tool()
     def get_quote_chart(

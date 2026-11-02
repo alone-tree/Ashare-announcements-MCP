@@ -21,23 +21,22 @@ def _fake_fail(section, source, error):
     return fetch
 
 
-def test_sections_param_validation(tmp_path):
-    r = company_service.get_company_profile(str(tmp_path), "300308.SZ", sections=[])
-    assert r["ok"] is False and "非空子集" in r["error"]
-    r = company_service.get_company_profile(str(tmp_path), "300308.SZ", sections=["bogus"])
-    assert r["ok"] is False and "未知 section" in r["error"]
-    r = company_service.get_company_profile(str(tmp_path), "300308")
+def test_information_type_param_validation(tmp_path):
+    r = company_service.get_company_profile(str(tmp_path), "300308.SZ", [])
+    assert r["ok"] is False and "information_type" in r["error"]
+    r = company_service.get_company_profile(str(tmp_path), "300308.SZ", "bogus")
+    assert r["ok"] is False and "information_type" in r["error"]
+    r = company_service.get_company_profile(str(tmp_path), "300308", "profile")
     assert r["ok"] is False and "后缀" in r["error"]
 
 
 def test_us_returns_unavailable_hint(tmp_path):
     # 美股无结构化来源：available=false + SEC 提示，不是错误（真实 plan 中 US 均为 None）
-    r = company_service.get_company_profile(str(tmp_path), "AAPL.US")
+    r = company_service.get_company_profile(str(tmp_path), "AAPL.US", "profile")
     assert r["ok"] is True
     assert r["market"] == "US"
-    for section, item in r["sections"].items():
-        assert item["available"] is False
-        assert "SEC" in item["reason"]
+    assert r["available"] is False
+    assert "SEC" in r["reason"]
 
 
 def test_hk_unavailable_sections(tmp_path):
@@ -53,10 +52,11 @@ def test_hk_unavailable_sections(tmp_path):
     monkeypatch = __import__("pytest").MonkeyPatch()
     monkeypatch.setattr(company_service, "_SECTION_PLAN", plan)
     try:
-        r = company_service.get_company_profile(str(tmp_path), "00700.HK", sections=["profile", "ipo"])
+        r = company_service.get_company_profile(str(tmp_path), "00700.HK", "profile")
         assert r["ok"] is True
-        assert r["sections"]["profile"]["data"]["公司名称"] == "Y"
-        assert r["sections"]["ipo"]["available"] is False
+        assert r["data"]["公司名称"] == "Y"
+        r = company_service.get_company_profile(str(tmp_path), "00700.HK", "ipo")
+        assert r["available"] is False
     finally:
         monkeypatch.undo()
 

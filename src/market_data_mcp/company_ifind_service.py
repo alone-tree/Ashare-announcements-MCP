@@ -11,6 +11,7 @@ def get_section(root, mc, section, periods, years, as_of_date, force):
     code = f"{mc.code}.{mc.suffix}"
     payload = data_store.read(root, code, "company_data", section, "ifind") or {
         "meta": {"schema_version": 2, "source": "ifind"}, "scopes": {}}
+    latest_failures = []
     if section == "forecast" and not years:
         return {"ok": False, "error": "forecast必须传years"}
     if section == "holders" and periods is None:
@@ -27,10 +28,11 @@ def get_section(root, mc, section, periods, years, as_of_date, force):
                 if not probe:
                     return {"ok": False, "error": str(exc)}
                 periods = [probe["report_date"]]
+                latest_failures.append({"scope": "最新报告期检查", "reason": str(exc)})
     if section == "dividends" and years is None:
         years = list(range(date.today().year - 4, date.today().year + 1))
     scopes = periods if section == "holders" else years if section in ("forecast", "dividends") else [None]
-    output, failures, checks = [], [], []
+    output, failures, checks = [], latest_failures, []
     reused = True
     for scope in scopes:
         query = {"scope": scope, "as_of_date": as_of_date if section == "forecast" else None}
@@ -56,7 +58,7 @@ def get_section(root, mc, section, periods, years, as_of_date, force):
             output.extend(value if isinstance(value, list) else [value])
             checks.append({"query": cached["query"], "checked_at": cached["checked_at"]})
     result = {"ok": bool(output), "data": output[0] if section in ("profile", "ipo") and output else output,
-              "source": "ifind", "cached": reused, "stale": bool(failures), "checks": checks,
+              "source": "ifind", "cached": bool(checks) and reused, "stale": bool(failures), "checks": checks,
               "failed": failures}
     if failures:
         result["error"] = "部分范围刷新失败，可用旧值已保留" if output else "全部范围请求失败"

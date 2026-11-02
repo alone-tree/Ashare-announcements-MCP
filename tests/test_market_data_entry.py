@@ -56,15 +56,15 @@ class TestCli:
         assert result["results"] == items
 
     def test_company_batch_does_not_promote_partial_success(self, monkeypatch):
-        child = {"ok": True, "status": "partial_success", "failed_sections": ["forecast"],
-                 "sections": {"profile": {"ok": True, "data": {"公司名称": "示例公司"}},
-                              "forecast": {"ok": False, "error": "forecast必须传years"}}}
+        child = {"ok": True, "status": "partial_success", "information_type": "forecast",
+                 "data": [{"year": 2027, "营收均值": 100}],
+                 "failed": [{"scope": 2028, "reason": "上游超时"}]}
         monkeypatch.setattr(cli.company_service, "get_company_profile", lambda *a, **k: child)
         result = cli.dispatch({"tool": "get_company_profile_batch", "codes": ["600106.SH"],
-                               "sections": ["profile", "forecast"]})
+                               "information_type": "forecast"})
         assert result["status"] == result["results"][0]["status"] == "partial_success"
         assert result["ok"] and result["succeeded"] == 1 and result["failed"] == 0
-        assert result["results"][0]["failed_sections"] == ["forecast"]
+        assert result["results"][0]["failed"][0]["scope"] == 2028
 
     def test_main_stdin_stdout(self, monkeypatch, capsys):
         monkeypatch.setattr(service, "get_quote", lambda root, code, **kw: {"ok": True})

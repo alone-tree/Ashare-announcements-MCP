@@ -124,10 +124,9 @@ def get_company_profile_batch(request: dict[str, Any]) -> dict[str, Any]:
         try:
             result = company_service.get_company_profile(
                 _data_root(), code,
-                sections=request.get("sections"),
-                force_refresh=bool(request.get("force_refresh")),
-                periods=request.get("periods"), years=request.get("years"),
-                as_of_date=request.get("as_of_date"),
+                information_type=request.get("information_type"),
+                force_refresh=request.get("force_refresh", False),
+                extra_parameters=request.get("extra_parameters"),
             )
             items.append({"code": code, **result})
         except Exception as exc:  # noqa: BLE001 —— 单家公司失败不阻断批次
@@ -175,7 +174,7 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
         "get_quote_chart_batch": {"tool", "codes", "adjust", "start_date", "end_date", "period", "log_scale", "field", "events", "keypoints", "drawdown_threshold"},
         "get_financial_data_batch": {"tool", "codes", "amount_basis", "statements", "periods", "items", "top_n", "include_versions", "force_refresh", "export_path"},
         "get_market_data_help": {"tool", "arguments"},
-        "get_company_profile_batch": {"tool", "codes", "sections", "periods", "years", "as_of_date", "force_refresh"},
+        "get_company_profile_batch": {"tool", "codes", "information_type", "extra_parameters", "force_refresh"},
     }
     if tool in parameters and set(request) - parameters[tool]:
         raise ValueError(f"未知参数：{sorted(set(request) - parameters[tool])}")

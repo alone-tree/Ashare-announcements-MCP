@@ -196,13 +196,13 @@ def test_ipo_formulas_normalize_fee_and_upgrade_old_cache(tmp_path, monkeypatch)
     monkeypatch.setattr(ci, "section", lambda *a, **k: value)
     data_store.write(str(tmp_path), "002586.SZ", "company_data", "ipo", {
         "meta": {"schema_version": 2, "source": "ifind"}, "scopes": {}})
-    first = company_service.get_company_profile(str(tmp_path), "002586.SZ", sections=["ipo"])
-    assert first["sections"]["ipo"]["units"]["发行费用"] == "原币基础单位"
+    first = company_service.get_company_profile(str(tmp_path), "002586.SZ", "ipo")
+    assert first["units"]["发行费用"] == "原币基础单位"
     payload = data_store.read(str(tmp_path), "002586.SZ", "company_data", "ipo")
     for entry in payload["scopes"].values():
         entry["data"] = {"发行价格": 19}
     data_store.write(str(tmp_path), "002586.SZ", "company_data", "ipo", payload)
-    second = company_service.get_company_profile(str(tmp_path), "002586.SZ", sections=["ipo"])
-    assert second["sections"]["ipo"]["data"]["发行费用"] == 37343000
+    second = company_service.get_company_profile(str(tmp_path), "002586.SZ", "ipo")
+    assert second["data"]["发行费用"] == 37343000
     monkeypatch.setattr(ci, "section", lambda *a, **k: pytest.fail("已有空值也应复用"))
-    company_service.get_company_profile(str(tmp_path), "002586.SZ", sections=["ipo"])
+    company_service.get_company_profile(str(tmp_path), "002586.SZ", "ipo")
