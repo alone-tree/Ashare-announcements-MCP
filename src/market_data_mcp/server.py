@@ -255,7 +255,7 @@ def create_server() -> Any:
         vars: 返回字段列表（date 恒保留），可选 open/high/low/close/volume/amount/turnover/
               outstanding_share/total_market_cap/float_market_cap；不传默认 close。
         adjust: raw=除权价、hfq=后复权、qfq=前复权（本地现算）。
-        start_date/end_date: YYYY-MM-DD；空 = 最近 10 个交易日 / 当天。
+        start_date/end_date: YYYY-MM-DD；空 = 最近 14 个自然日 / 当天。
             start_date 传 "all"：起点不约束——end 留空 = 返回全部数据；end 指定 = 只取 ≤end 的早期数据。
         period: daily/weekly/monthly（周/月由日线本地聚合）。
         export_path: 空 = 直接返回数据（超过 200 行自动导出到缓存目录并返回路径）；
@@ -312,7 +312,12 @@ def create_server() -> Any:
     ) -> dict[str, Any]:
         """查询工具能力、科目、口径、历史边界、刷新及导出；指定code可查本地缓存。
 
-        topic可选tools/items/ranges/refresh/cache/export。纯本地只读，不登录或联网。
+        tool: 需要查看说明的工具名称。
+        market: 市场范围。
+        code: 需要检查本地缓存的带后缀股票代码。
+        topic: 帮助主题，不是行情科目或财报科目。可选tools工具说明、items科目/字段、
+               ranges覆盖边界、refresh刷新规则、cache本地缓存、export导出。
+        纯本地只读，不登录或联网。
         """
         return _wrap(get_market_data_help_service)(
             _data_root(), tool=tool, market=market, code=code, topic=topic,

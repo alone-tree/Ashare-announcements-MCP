@@ -189,7 +189,7 @@ def test_ipo_formulas_normalize_fee_and_upgrade_old_cache(tmp_path, monkeypatch)
         calls.append((fields, parameters))
         assert fields["发行后市净率"] == "ths_ipo_pb_stock" and fields["发行费用"] == "ipo_fee"
         assert parameters.get("发行费用") == "10000"
-        return {"发行后市净率": 2.84, "发行费用": 3734.3}
+        return {"发行后市净率": 2.84, "发行费用": 3734.3, "上市日期": "20040716"}
     monkeypatch.setattr(ci, "basic", basic)
     value = ci.section(str(tmp_path), parse_code("002586.SZ"), "ipo")
     assert value["发行后市净率"] == 2.84 and value["发行费用"] == 37343000

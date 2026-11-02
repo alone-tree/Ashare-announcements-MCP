@@ -97,8 +97,8 @@ def _is_sina_chain(chain: list | None) -> bool:
 
 
 def _default_start(end: str) -> str:
-    """end 为空时默认起点：最近 10 个交易日（≈14 自然日）。"""
-    return (date.fromisoformat(end) - timedelta(days=14)).isoformat()
+    """end 为空时默认起点：最近 14 个自然日（含端点为 14 天，约两周）。"""
+    return (date.fromisoformat(end) - timedelta(days=13)).isoformat()
 
 
 def _latest_share(share_series: dict[str, float | None], d: str) -> float | None:

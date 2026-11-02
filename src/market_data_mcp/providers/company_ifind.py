@@ -24,7 +24,8 @@ IPO = {"发行股数": "ths_ipo_quantity_stock", "发行价格": "ths_ipo_price_
        "保荐机构（主承销商）": "ths_ipo_main_underwrite_stock", "保荐代表人": "ths_ipo_sponsor_representative_stock",
        "发行人律师": "ths_law_firm_stock", "经办律师": "ths_lawyer_stock",
        "会计事务所": "ths_accounting_firm_stock", "经办会计师": "ths_accountant_stock",
-       "资产评估机构": "ths_asset_evaluate_org_stock", "经办评估师": "ths_charged_evaluator_stock"}
+       "资产评估机构": "ths_asset_evaluate_org_stock", "经办评估师": "ths_charged_evaluator_stock",
+       "上市日期": "ths_ipo_date_stock"}
 HOLDERS = {"名称": "ths_holder_name_stock", "性质": "ths_holder_nature_stock",
            "持股数": "ths_holder_held_num_stock", "限售股数": "ths_holder_held_ls_num_stock",
            "质押股数": "ths_ma_holder_pledge_stock", "冻结股数": "ths_holder_freeze_stock",

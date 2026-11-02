@@ -40,7 +40,7 @@ def get_section(root, mc, section, periods, years, as_of_date, force):
         cached = payload["scopes"].get(key)
         try:
             missing_ipo_fields = section == "ipo" and cached and not {
-                "发行后市净率", "发行费用"}.issubset(cached.get("data", {}))
+                "发行后市净率", "发行费用", "上市日期"}.issubset(cached.get("data", {}))
             if force or not cached or missing_ipo_fields or not data_store.fresh(cached.get("checked_at")):
                 value = company_ifind.section(root, mc, section,
                     periods=[scope] if section == "holders" else None,

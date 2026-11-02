@@ -93,7 +93,7 @@ def test_dividend_defaults_and_type_specific_help(tmp_path, monkeypatch):
 
 def test_mcp_and_cli_use_same_request_and_preserve_all_fields(tmp_path, monkeypatch):
     monkeypatch.setenv("MARKET_DATA_ROOT", str(tmp_path))
-    value = {"发行价格": 0, "发行费用": None, "发行后市净率": None, "机构": "甲|乙\n丙", "其他": {"变量": [1, 2]}}
+    value = {"发行价格": 0, "发行费用": None, "发行后市净率": None, "上市日期": "20040716", "机构": "甲|乙\n丙", "其他": {"变量": [1, 2]}}
     monkeypatch.setattr(company_ifind_service.company_ifind, "section", lambda *a, **k: value)
     tool = next(t for t in create_server()._tool_manager.list_tools() if t.name == "get_company_profile")
     assert set(tool.parameters["properties"]) == {"code", "information_type", "force_refresh", "extra_parameters"}

@@ -374,7 +374,8 @@ def get_company_profile(root: str, code: str, information_type: InformationType,
             cached = company_cache.read_section(root, response["code"], information_type)
             if cached:
                 result["checked_at"] = cached["meta"].get("updated_at")
-        result.setdefault("notes", []).append("该市场保留现有通道，不支持额外的年度、报告期或预测取数日筛选")
+        if mc.market == "HK":
+            result.setdefault("notes", []).append("该市场保留现有通道，不支持额外的年度、报告期或预测取数日筛选")
         return {**response, **result, "status": "success" if result["ok"] else "failed"}
 
     today = date.today()

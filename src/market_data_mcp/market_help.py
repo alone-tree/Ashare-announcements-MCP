@@ -22,7 +22,13 @@ TOOLS = {
     "get_quote_chart": {"parameters": ["code", "adjust", "start_date", "end_date", "period", "log_scale", "field", "events", "keypoints", "drawdown_threshold"],
                         "example": {"code": "600519.SH", "start_date": "2025-01-01"}, "output": "PNG路径"},
     "get_market_data_help": {"parameters": ["tool", "market", "code", "topic"],
-                             "topics": ["tools", "items", "ranges", "refresh", "cache", "export"]},
+                             "parameter_notes": {"tool": "需要查看说明的工具名称",
+                                                 "market": "市场范围",
+                                                 "code": "需要检查本地缓存的带后缀股票代码",
+                                                 "topic": "帮助主题，不是行情科目或财报科目"},
+                             "topics": ["tools", "items", "ranges", "refresh", "cache", "export"],
+                             "topic_notes": {"tools": "工具说明", "items": "科目/字段", "ranges": "覆盖边界",
+                                             "refresh": "刷新规则", "cache": "本地缓存", "export": "导出"}},
 }
 
 
