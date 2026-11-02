@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from market_data_mcp import data_store, financial_items
-from market_data_mcp.financial_contract import DEFAULT_ITEMS, META_KEYS, RATIOS, SEGMENTS, STATEMENTS
+from market_data_mcp.financial_contract import META_KEYS, RATIOS, SEGMENTS, STATEMENTS, default_items as market_default_items
 from market_data_mcp.routing import parse_code
 
 TOOLS = {
@@ -54,7 +54,7 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
         result["tools"] = {tool: TOOLS[tool]} if tool else TOOLS
     if topic in (None, "items"):
         from market_data_mcp.service import VALID_VARS
-        result.update(default_items=DEFAULT_ITEMS, derived_items=RATIOS, statements=STATEMENTS,
+        result.update(default_items=market_default_items(market), derived_items=RATIOS, statements=STATEMENTS,
                       meta_items=list(META_KEYS),
                       segment_items=SEGMENTS, growth=["科目名同比增长率", "科目名环比增长率"],
                       quote_fields=VALID_VARS,

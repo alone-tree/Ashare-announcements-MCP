@@ -8,7 +8,7 @@ from pathlib import Path
 
 from market_data_mcp import data_store, financial_cache, financial_items, service
 from market_data_mcp.financial_contract import (
-    ALIASES, DEFAULT_ITEMS, META_KEYS, RATIOS, SEGMENTS, STATEMENTS, validate_financial_request,
+    ALIASES, DEFAULT_ITEMS, META_KEYS, RATIOS, SEGMENTS, STATEMENTS, default_items, validate_financial_request,
 )
 from market_data_mcp.providers import company_ifind, financial_statements
 
@@ -73,8 +73,9 @@ def _match(rows, query, market):
     return matches
 
 
-def _item_statement(name):
-    matches = [statement for statement in ("balance", "income", "cash_flow") if name in DEFAULT_ITEMS[statement]]
+def _item_statement(name, market="A"):
+    defaults = default_items(market)
+    matches = [statement for statement in ("balance", "income", "cash_flow") if name in defaults[statement]]
     if len(matches) == 1:
         return matches[0]
     if name in ("营业收入", "归母净利润"):
@@ -82,7 +83,7 @@ def _item_statement(name):
     return None
 
 
-def plan_financial_item(name):
+def plan_financial_item(name, market="A"):
     if name in RATIOS:
         return {"name": name, "kind": "ratio", "dependencies": list(RATIOS[name])}
     for suffix, kind in (("同比增长率", "yoy"), ("环比增长率", "qoq")):
@@ -91,11 +92,12 @@ def plan_financial_item(name):
             if not base or base in RATIOS or service._is_non_additive_item({"item_name": base}):
                 raise ValueError("增长率仅支持可加总金额科目")
             return {"name": name, "kind": kind, "dependencies": [base]}
-    return {"name": name, "kind": "raw", "dependencies": [name], "statement": _item_statement(name)}
+    return {"name": name, "kind": "raw", "dependencies": [name], "statement": _item_statement(name, market)}
 
 
 def merge_financial_requirements(plans, selected, all_items, market):
     required = set(selected) & {"balance", "income", "cash_flow"} if all_items else set()
+    defaults = default_items(market)
     for plan in plans:
         for name in plan["dependencies"]:
             if name in SEGMENTS:
@@ -103,7 +105,7 @@ def merge_financial_requirements(plans, selected, all_items, market):
             if name in META_KEYS:
                 required.add("balance" if name == "境外审计意见" else "income")
                 continue
-            found = [s for s in ("balance", "income", "cash_flow") if name in DEFAULT_ITEMS[s]]
+            found = [s for s in ("balance", "income", "cash_flow") if name in defaults[s]]
             if not found and (name in {"营业收入", "归母净利润"} or plan["kind"] == "ratio" and name not in {"负债合计", "资产总计"}):
                 found = ["income"]
             if not found:
@@ -370,7 +372,8 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     code = f"{mc.code}.{mc.suffix}"
     selected = list(dict.fromkeys(statements or STATEMENTS))
     all_items = items is not None and "ALL_ITEMS" in items
-    names = [n for s in selected for n in DEFAULT_ITEMS[s]] if items is None else list(dict.fromkeys(items))
+    defaults = default_items(mc.market)
+    names = [n for s in selected for n in defaults[s]] if items is None else list(dict.fromkeys(items))
     segment_names = [n for n in SEGMENTS if "segments" in selected] if all_items else [n for n in names if n in SEGMENTS]
     meta_names = list(META_KEYS) if all_items and "meta" in selected else [n for n in names if n in META_KEYS]
     if statements is not None and "segments" not in selected:
@@ -381,7 +384,7 @@ def execute_financial_request(root, mc, basis, periods, statements, items, inclu
     plans, failed = [], []
     for name in raw_names:
         try:
-            plans.append(plan_financial_item(name))
+            plans.append(plan_financial_item(name, mc.market))
         except ValueError as exc:
             failed.append({"item": name, "reason": str(exc)})
     required = merge_financial_requirements(plans, selected, all_items, mc.market)

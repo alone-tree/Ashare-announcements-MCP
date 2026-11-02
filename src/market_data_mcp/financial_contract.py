@@ -14,6 +14,27 @@ DEFAULT_ITEMS = {
 }
 SEGMENTS = {"income by product": "product", "income by industry": "industry", "income by region": "district",
             "income by customer": "customer", "purchase by supplier": "supplier"}
+# 港股默认清单：只列东财港股模板近5期实际有值的科目，不为对齐A股凑数。
+# 注：港股利润表有原始科目“毛利”(004007999)，与大陆计算指标“毛利”同名，比率口径未定前不列入默认。
+DEFAULT_ITEMS_HK = {
+    "balance": ["现金及等价物", "应收帐款", "存货", "流动资产合计", "联营公司权益", "物业厂房及设备",
+                "非流动资产合计", "总资产", "短期贷款", "应付帐款", "流动负债合计",
+                "长期贷款", "非流动负债合计", "总负债", "少数股东权益", "净资产", "股东权益",
+                "总权益及总负债"],
+    "income": ["营业额", "营运收入", "销售及分销费用", "行政开支", "经营溢利", "融资成本",
+               "除税前溢利", "除税后溢利", "股东应占溢利", "每股基本盈利"],
+    "cash_flow": ["经营业务现金净额", "投资业务现金净额", "融资前现金净额", "融资业务现金净额",
+                  "现金净额", "期初现金", "期末现金"],
+    "segments": [],
+    "meta": ["报告截止日", "币种"],
+}
+
+
+def default_items(market: str) -> dict:
+    """按市场返回默认科目清单；目前只有港股与大陆分开，其他市场沿用大陆清单。"""
+    return DEFAULT_ITEMS_HK if market == "HK" else DEFAULT_ITEMS
+
+
 RATIOS = {
     "毛利": ("营业收入", "营业成本"),
     "毛利率": ("营业收入", "营业成本"),
