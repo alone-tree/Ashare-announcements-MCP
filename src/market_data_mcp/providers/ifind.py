@@ -356,6 +356,30 @@ def _month_ends(start: str, end: str) -> list[str]:
     return out
 
 
+def fetch_fx(root: str, mc: MarketCode, start: str | None = None,
+             end: str | None = None) -> dict:
+    """汇率HQ原值批次；分段及缓存提交由forex调度，见架构§2.7。"""
+    from market_data_mcp.forex import LIVE_START
+
+    code = f"{mc.code}.{mc.suffix}"
+    start = max(start or LIVE_START, LIVE_START)
+    end = end or date.today().isoformat()
+    result = request_ifind(root, "THS_HQ", code, "close", "", start, end,
+                           required_columns=("time", "close"))
+    if result.errorcode != 0:
+        return {"ok": False, "source": SOURCE, "data": {},
+                "error": f"iFinD THS_HQ请求失败：{result.errmsg}", "notes": None}
+    frame = result.data
+    records = []
+    if frame is not None:
+        for row in frame.to_dict("records"):
+            stamp = str(row["time"])[:10]
+            if start <= stamp <= end:
+                records.append({"date": stamp, "value": _clean_value(row["close"])})
+    return {"ok": True, "source": SOURCE, "data": {"close": _field_batch(records)},
+            "error": None, "notes": None}
+
+
 def fetch_shares(
     root: str,
     mc: MarketCode,

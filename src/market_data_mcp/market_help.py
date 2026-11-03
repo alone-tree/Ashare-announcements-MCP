@@ -1,14 +1,18 @@
 """运行能力与本地缓存帮助；不导入数据提供器，不联网、不登录。"""
 from pathlib import Path
 
-from market_data_mcp import data_store, financial_items
+from market_data_mcp import data_store, financial_items, forex
 from market_data_mcp.financial_contract import META_KEYS, RATIOS, SEGMENTS, STATEMENTS, default_items as market_default_items
-from market_data_mcp.routing import parse_code
+from market_data_mcp.routing import MarketCode, parse_code
 
 TOOLS = {
     "get_quote": {"parameters": ["code", "vars", "adjust", "start_date", "end_date", "period", "export_path"],
                   "example": {"code": "600519.SH", "vars": ["close"], "start_date": "2025-01-01"},
-                  "source": "新浪；美股后复权/成交额与部分股本用iFinD；无失败换源"},
+                  "source": "股票：新浪及既定iFinD字段；汇率：iFinD（含固化历史）；无失败换源",
+                  "forex": {"codes": list(forex.CODES), "vars": ["close"],
+                            "adjust": "raw", "history_end": forex.HISTORY_END,
+                            "live_start": forex.LIVE_START,
+                            "note": "历史空值也视为已覆盖，不请求iFinD；任意vars均只返回close"}},
     "get_financial_data": {"parameters": ["code", "amount_basis", "periods", "statements", "items", "top_n", "include_versions", "force_refresh", "export_path"],
                            "required": ["code", "amount_basis"],
                            "example": {"code": "600519.SH", "amount_basis": "single", "periods": ["2025-09-30"], "items": ["营业收入", "毛利率"]},
@@ -38,11 +42,16 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
     topics = TOOLS["get_market_data_help"]["topics"]
     if topic is not None and topic not in topics:
         return {"ok": False, "error": f"topic须为{topics}"}
-    if market is not None and market not in ("A", "BJ", "HK", "US", "SH", "SZ"):
+    if market is not None and market not in ("A", "BJ", "HK", "US", "SH", "SZ", "FX"):
         return {"ok": False, "error": "未知市场"}
     if code:
         try:
-            mc = parse_code(code)
+            normalized = code.strip().upper()
+            if normalized in forex.CODES:
+                bare, suffix = normalized.rsplit(".", 1)
+                mc = MarketCode("FX", bare, suffix)
+            else:
+                mc = parse_code(code)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         code = f"{mc.code}.{mc.suffix}"
@@ -50,6 +59,39 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
             return {"ok": False, "error": "market与code不一致"}
         market = mc.market
     result = {"ok": True, "market": market, "code": code, "read_only": True}
+    if market == "FX":
+        if tool not in (None, "get_quote", "get_market_data_help"):
+            return {"ok": False, "error": "汇率仅支持get_quote行情入口"}
+        if topic in (None, "tools"):
+            result["tools"] = {"get_quote": TOOLS["get_quote"]}
+        if topic in (None, "items"):
+            result["quote_fields"] = ["close"]
+        if topic in (None, "ranges"):
+            result["ranges"] = {"history_start": forex.HISTORY_START,
+                                "history_end": forex.HISTORY_END, "live_start": forex.LIVE_START,
+                                "note": "更早或首个有效值前返回null，历史空值已覆盖，不补拉"}
+        if topic in (None, "refresh"):
+            result["refresh"] = "固化历史只读；新增日期沿用字段缓存及10分钟终点不足复用"
+        if topic in (None, "export"):
+            result["export"] = "仅导出date/close；超过200行自动CSV，也可指定export_path"
+        if topic in (None, "cache"):
+            result["cache"] = []
+            if code:
+                values = [(day, row[code]) for day, row in forex.read_history().items()]
+                valid = [(day, value) for day, value in values if value is not None]
+                result["cache"].append({"domain": "quote", "module": "close", "storage": "bundled_csv",
+                    "meta": {"code": code, "market": "FX", "field": "close", "source": "ifind",
+                             "date_range": {"start": forex.HISTORY_START, "end": forex.HISTORY_END}},
+                    "nonempty_count": len(valid), "null_count": len(values) - len(valid),
+                    "first_valid_date": valid[0][0] if valid else None})
+                from market_data_mcp import cache as quote_cache
+                cached = quote_cache.read_cache(root, code, "close")
+                if cached:
+                    result["cache"].append({"domain": "quote", "module": "close", "storage": "field_cache",
+                        "meta": cached["meta"],
+                        "nonempty_count": sum(row.get("value") is not None for row in cached["items"])})
+            result["cache_note"] = "截至2026-09-30历史空值也视为已覆盖，不请求iFinD"
+        return result
     if topic in (None, "tools"):
         result["tools"] = {tool: TOOLS[tool]} if tool else TOOLS
     if topic in (None, "items"):

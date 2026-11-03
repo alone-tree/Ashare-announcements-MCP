@@ -18,7 +18,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from market_data_mcp import aggregator, cache, financial_cache, financial_items
+from market_data_mcp import aggregator, cache, financial_cache, financial_items, forex
 from market_data_mcp.providers import financial_statements, ifind, sina, yfinance
 from market_data_mcp.routing import MARKET_NAMES, MarketCode, parse_code
 
@@ -178,8 +178,15 @@ def get_quote(
     """获取日/周/月线行情。返回 {ok, market, code, start, end, adjust, period, vars, source, notes, rows}；
     超长自动导出 / 指定 export_path 时返回元信息不含 rows。
     start_date="all"：起点不约束；end 留空 = 全部数据，end 指定 = 只取 ≤end 的早期数据。"""
+    normalized = (code or "").strip().upper()
+    is_forex = normalized in forex.CODES
     try:
-        mc = parse_code(code)
+        if is_forex:
+            bare, suffix = normalized.rsplit(".", 1)
+            mc = MarketCode("FX", bare, suffix)
+            vars, adjust = ["close"], "raw"
+        else:
+            mc = parse_code(code)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     if adjust not in VALID_ADJUSTS:
@@ -195,7 +202,7 @@ def get_quote(
     if start_date == "all":
         # start=all：起点不约束 → 用哨兵起点触发全量覆盖判定与补拉（sina 全量起点）；
         # end 留空 = 全部数据，end 指定 = 只取 ≤end 的早期数据
-        start = "1990-01-01"
+        start = forex.HISTORY_START if is_forex else "1990-01-01"
         end = end_date
         resp_start = "all"
         resp_end = end or "latest"
@@ -225,8 +232,15 @@ def get_quote(
         need_fields.add("close_hfq")
 
     # 2. 逐字段 ensure（缓存复用）；字段级失败→部分成功：失败字段无数据 + notes 标注，不整单拒绝
-    chains = _field_chains(mc)
-    results = _ensure_fields(root, mc, need_fields, start, end)
+    if is_forex:
+        chains = {}
+        try:
+            results = {"close": forex.ensure_close(root, mc, start, end)}
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": f"汇率读取失败：{exc}"}
+    else:
+        chains = _field_chains(mc)
+        results = _ensure_fields(root, mc, need_fields, start, end)
     failed = {f: r for f, r in results.items() if not r["ok"]}
     ok_fields = [f for f, r in results.items() if r["ok"]]
     if not ok_fields:
@@ -344,6 +358,8 @@ def get_quote(
     # 8. 周/月聚合
     if period != "daily":
         out_rows = _resample(out_rows, period)
+        if is_forex:
+            out_rows = [{"date": row["date"], "close": row.get("close")} for row in out_rows]
         notes.append(f"{period} 线由日线本地聚合（{'W-FRI' if period == 'weekly' else '月度'}）")
 
     if not out_rows:

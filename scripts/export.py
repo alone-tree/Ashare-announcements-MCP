@@ -73,7 +73,7 @@ echo {"tool": "get_quote_chart_batch", "codes": ["600519.SH"]} | python market_d
 ```
 
 CLI 顶层请求字段是 `tool`，与 MCP 工具一一对应；market-data 代码必须带市场后缀
-（600519.SH / 920002.BJ / 00700.HK / AAPL.US）。
+（600519.SH / 920002.BJ / 00700.HK / AAPL.US）；汇率代码和取数边界通过get_market_data_help查询。
 
 ## 依赖安装
 
@@ -117,6 +117,10 @@ def export(target: Path) -> None:
             dest = package_target / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, dest)
+        if name == "market_data_mcp":
+            history = pkg["source"] / "data" / "fx_history.csv"
+            (package_target / "data").mkdir(exist_ok=True)
+            shutil.copy2(history, package_target / "data" / history.name)
     (target / "cache").mkdir(exist_ok=True)
     # 配置模板：用户版带一份 config.example.yaml（真实凭据由用户复制为 config.yaml 后填写；
     # 不覆盖用户已有的 config.yaml）
