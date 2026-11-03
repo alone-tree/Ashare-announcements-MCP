@@ -63,12 +63,14 @@ def _ensure_fields(root: str, mc: MarketCode, fields: set[str],
     """逐字段 ensure（缓存复用：已覆盖字段不请求）。返回 {字段: {ok, items, source, notes}}。"""
     chains = _field_chains(mc)
     batches = {}
-    requested_start, requested_end = start, end
     def once(fetcher):
         def fetch(root, mc, start=None, end=None):
-            if fetcher not in batches:
-                batches[fetcher] = fetcher(root, mc, start=requested_start, end=requested_end)
-            return batches[fetcher]
+            # 透传聚合器计算的取数范围（终点不足时从缓存末日语义衔接），
+            # 按 (fetcher, start, end) 复用同次调用内的批次。
+            key = (fetcher, start, end)
+            if key not in batches:
+                batches[key] = fetcher(root, mc, start=start, end=end)
+            return batches[key]
         return fetch
     results: dict[str, dict] = {}
     for f in fields:

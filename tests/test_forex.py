@@ -81,7 +81,7 @@ def _read_csv(path):
         return reader.fieldnames, list(reader)
 
 
-def _assert_close_cache(root, code, start, end, rows=None):
+def _assert_close_cache(root, code, start, end, rows=None, dates=None):
     folder = Path(root) / "cache" / code
     assert sorted(path.name for path in folder.iterdir()) == ["close.json"]
     saved = cache.read_cache(str(root), code, "close")
@@ -89,7 +89,8 @@ def _assert_close_cache(root, code, start, end, rows=None):
     assert saved["meta"]["field"] == "close"
     assert saved["meta"]["source"] == "ifind"
     assert saved["meta"]["date_range"] == {"start": start, "end": end}
-    assert [row["date"] for row in saved["items"]] == pd.date_range(start, end).strftime("%Y-%m-%d").tolist()
+    expected_dates = dates if dates is not None else pd.date_range(start, end).strftime("%Y-%m-%d").tolist()
+    assert [row["date"] for row in saved["items"]] == expected_dates
     assert all(set(row) == {"date", "value", "source"} and row["source"] == "ifind"
                for row in saved["items"])
     if rows is not None:
@@ -553,3 +554,26 @@ print(json.dumps({'history_rows': len(history), 'rows': result['rows'], 'cache_p
     assert list((tmp_path / "isolated-data").rglob("*.csv")) == []
     assert asset.read_bytes() == original_asset and asset.stat().st_mtime_ns == asset_mtime
     assert Path(forex.HISTORY_PATH).read_bytes() == original_asset
+
+
+def test_stale_end_refetch_bridges_from_cache_end_instead_of_request_start(tmp_path, monkeypatch):
+    """终点不足补拉必须从缓存末日衔接（2026-11-03 用户版实测发现的跳段缺口）。"""
+    calls = _sdk(monkeypatch, dates=("2026-10-08", "2026-10-09"), values=(7.79, 7.78))
+    root = str(tmp_path)
+    first = service.get_quote(root, "USDHKD.FX", start_date="2026-09-25", end_date="2026-09-30")
+    _assert_quote(first)
+    assert calls == []
+    _assert_close_cache(root, "USDHKD.FX", "2026-09-25", "2026-09-30", first["rows"])
+    monkeypatch.setattr(cache, "INCOMPLETE_RETRY_INTERVAL", timedelta(0))
+    first_rows_dates = [row["date"] for row in first["rows"]]
+    second = service.get_quote(root, "USDHKD.FX", start_date="2026-10-08", end_date="2026-10-09")
+    _assert_quote(second)
+    assert len(calls) == 1
+    # 聚合器 fetch_start=缓存末日 2026-09-30；provider 实际请求 clamp 到 2026-10-01
+    assert calls[0][2] == ("USDHKD.FX", "close", "", "2026-10-01", "2026-10-09")
+    saved = _assert_close_cache(root, "USDHKD.FX", "2026-09-25", "2026-10-09",
+                                dates=first_rows_dates + ["2026-10-08", "2026-10-09"],
+                                rows=first["rows"] + [{"date": "2026-10-08", "close": 7.79},
+                                                      {"date": "2026-10-09", "close": 7.78}])
+    assert second["rows"] == [{"date": "2026-10-08", "close": 7.79}, {"date": "2026-10-09", "close": 7.78}]
+    assert [row["date"] for row in saved["items"] if row["date"] >= "2026-10-01"] == ["2026-10-08", "2026-10-09"]
