@@ -253,7 +253,7 @@ def create_server() -> Any:
 
         code: 带市场后缀代码（600519.SH / 920002.BJ / 00700.HK / AAPL.US）。
         vars: 返回字段列表（date 恒保留），可选 open/high/low/close/volume/amount/turnover/
-              outstanding_share/total_market_cap/float_market_cap；不传默认 close。
+              outstanding_share/total_shares/total_market_cap/float_market_cap；不传默认 close。
         adjust: raw=除权价、hfq=后复权、qfq=前复权（本地现算）。
         start_date/end_date: YYYY-MM-DD；空 = 最近 14 个自然日 / 当天。
             start_date 传 "all"：起点不约束——end 留空 = 返回全部数据；end 指定 = 只取 ≤end 的早期数据。

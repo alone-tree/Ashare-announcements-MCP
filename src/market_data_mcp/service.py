@@ -25,7 +25,8 @@ from market_data_mcp.routing import MARKET_NAMES, MarketCode, parse_code
 VALID_ADJUSTS = ("raw", "hfq", "qfq")
 VALID_PERIODS = ("daily", "weekly", "monthly")
 VALID_VARS = ("open", "high", "low", "close", "volume", "amount",
-              "turnover", "outstanding_share", "total_market_cap", "float_market_cap")
+              "turnover", "outstanding_share", "total_shares",
+              "total_market_cap", "float_market_cap")
 
 # 价格/量额原始字段（新浪 raw 宽拉列，A/港含 amount）
 _PRICE_FIELDS = ("open", "high", "low", "close", "volume", "amount")
@@ -131,7 +132,8 @@ def _resample(rows: list[dict], period: str) -> list[dict]:
         groups.setdefault(bucket(r["date"]), []).append(r)
     out = []
     numeric = ("open", "high", "low", "close", "volume", "amount",
-               "turnover", "outstanding_share", "total_market_cap", "float_market_cap")
+               "turnover", "outstanding_share", "total_shares",
+               "total_market_cap", "float_market_cap")
     for b in sorted(groups):
         g = groups[b]
         row: dict = {"date": b}
@@ -209,6 +211,8 @@ def get_quote(
     for v in vars:
         if v == "outstanding_share":
             need_fields.add("floating_shares")
+        elif v == "total_shares":
+            need_fields.add("total_shares")
         elif v in ("total_market_cap", "float_market_cap", "turnover"):
             need_fields.update({"close", "floating_shares", "total_shares"})
             if v == "total_market_cap":
@@ -331,6 +335,8 @@ def get_quote(
         for v in vars:
             if v == "outstanding_share":
                 out[v] = _latest_share(floating_shares, r["date"])
+            elif v == "total_shares":
+                out[v] = _latest_share(total_shares, r["date"])
             elif v in r:
                 out[v] = r.get(v)
         out_rows.append(out)

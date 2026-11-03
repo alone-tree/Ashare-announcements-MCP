@@ -184,7 +184,7 @@ flowchart TD
 | 参数        | 必填 | 默认  | 说明                                                                    |
 | ----------- | ---- | ----- | ----------------------------------------------------------------------- |
 | code        | ✅   | —    | 带后缀代码（见 1.6）                                                    |
-| vars        | —   | close | 返回字段列表，可多选；date 恒保留。可选：open/high/low/close/volume/amount/turnover/outstanding_share/total_market_cap/float_market_cap 等（历史代码曾用 `fields`，作废） |
+| vars        | —   | close | 返回字段列表，可多选；date 恒保留。可选：open/high/low/close/volume/amount/turnover/outstanding_share/total_shares/total_market_cap/float_market_cap 等（历史代码曾用 `fields`，作废） |
 | adjust      | —   | raw   | 复权方式：raw=除权价 / hfq=后复权 / qfq=前复权                          |
 | start_date  | —   | 空    | 日期起点，空 = 最近 14 个自然日                                        |
 | end_date    | —   | 空    | 日期终点，空 = 当天系统日期                                             |
