@@ -539,7 +539,7 @@ again = service.get_quote(str(data_root), 'HKDCNY.FX',
                           start_date='2018-06-18', end_date='2018-06-18')
 assert again['ok'] and again['rows'] == result['rows']
 assert list(data_root.rglob('*.csv')) == []
-assert not (root / 'exported' / 'cache').exists()
+assert list((root / 'exported' / 'cache').iterdir()) == []
 assert asset.read_bytes() == original_asset and asset.stat().st_mtime_ns == asset_mtime
 print(json.dumps({'history_rows': len(history), 'rows': result['rows'], 'cache_path': str(cache_file)}))
 """
