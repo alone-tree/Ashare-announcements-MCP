@@ -12,7 +12,7 @@ TOOLS = {
                   "forex": {"codes": list(forex.CODES), "vars": ["close"],
                             "adjust": "raw", "history_end": forex.HISTORY_END,
                             "live_start": forex.LIVE_START,
-                            "note": "历史空值也视为已覆盖，不请求iFinD；任意vars均只返回close"}},
+                            "note": "CSV是iFinD原始数据；所有日期正常建字段缓存，历史空值不补拉；任意vars只返回close"}},
     "get_financial_data": {"parameters": ["code", "amount_basis", "periods", "statements", "items", "top_n", "include_versions", "force_refresh", "export_path"],
                            "required": ["code", "amount_basis"],
                            "example": {"code": "600519.SH", "amount_basis": "single", "periods": ["2025-09-30"], "items": ["营业收入", "毛利率"]},
@@ -71,26 +71,26 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
                                 "history_end": forex.HISTORY_END, "live_start": forex.LIVE_START,
                                 "note": "更早或首个有效值前返回null，历史空值已覆盖，不补拉"}
         if topic in (None, "refresh"):
-            result["refresh"] = "固化历史只读；新增日期沿用字段缓存及10分钟终点不足复用"
+            result["refresh"] = "全部日期沿用字段缓存及10分钟终点不足复用；CSV只在iFinD取数层作为历史原始数据读取"
         if topic in (None, "export"):
             result["export"] = "仅导出date/close；超过200行自动CSV，也可指定export_path"
-        if topic in (None, "cache"):
-            result["cache"] = []
+        if topic in (None, "ranges", "cache"):
+            result["source_data"] = {"kind": "ifind_raw_history", "path": str(forex.HISTORY_PATH),
+                "date_range": {"start": forex.HISTORY_START, "end": forex.HISTORY_END}}
             if code:
                 values = [(day, row[code]) for day, row in forex.read_history().items()]
                 valid = [(day, value) for day, value in values if value is not None]
-                result["cache"].append({"domain": "quote", "module": "close", "storage": "bundled_csv",
-                    "meta": {"code": code, "market": "FX", "field": "close", "source": "ifind",
-                             "date_range": {"start": forex.HISTORY_START, "end": forex.HISTORY_END}},
-                    "nonempty_count": len(valid), "null_count": len(values) - len(valid),
-                    "first_valid_date": valid[0][0] if valid else None})
+                result["source_data"].update(nonempty_count=len(valid), null_count=len(values) - len(valid),
+                    first_valid_date=valid[0][0] if valid else None)
+        if topic in (None, "cache"):
+            result["cache"] = []
+            if code:
                 from market_data_mcp import cache as quote_cache
                 cached = quote_cache.read_cache(root, code, "close")
                 if cached:
-                    result["cache"].append({"domain": "quote", "module": "close", "storage": "field_cache",
-                        "meta": cached["meta"],
+                    result["cache"].append({"domain": "quote", "module": "close", "meta": cached["meta"],
                         "nonempty_count": sum(row.get("value") is not None for row in cached["items"])})
-            result["cache_note"] = "截至2026-09-30历史空值也视为已覆盖，不请求iFinD"
+            result["cache_note"] = "cache仅显示工具数据目录中的实际字段缓存；CSV是iFinD原始数据，历史空值同样建缓存"
         return result
     if topic in (None, "tools"):
         result["tools"] = {tool: TOOLS[tool]} if tool else TOOLS

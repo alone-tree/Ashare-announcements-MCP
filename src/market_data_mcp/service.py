@@ -35,6 +35,8 @@ _PRICE_FIELDS = ("open", "high", "low", "close", "volume", "amount")
 def _field_chains(mc: MarketCode) -> dict[str, list]:
     """字段 → 来源链。**每字段唯一源（2026-08-09 用户拍板：先不做来源回退，
     单一来源不够再增加；不同源数据可能不完全一致，混放需额外处理，且回退=重复请求浪费）**。"""
+    if mc.market == "FX":
+        return {"close": [ifind.fetch_fx]}
     if mc.market == "US":
         raw_chain = [sina.fetch_raw]
         amount_chain = [ifind.fetch_us_amount]  # 美股 amount=ifind 唯一源
@@ -232,15 +234,8 @@ def get_quote(
         need_fields.add("close_hfq")
 
     # 2. 逐字段 ensure（缓存复用）；字段级失败→部分成功：失败字段无数据 + notes 标注，不整单拒绝
-    if is_forex:
-        chains = {}
-        try:
-            results = {"close": forex.ensure_close(root, mc, start, end)}
-        except (OSError, ValueError) as exc:
-            return {"ok": False, "error": f"汇率读取失败：{exc}"}
-    else:
-        chains = _field_chains(mc)
-        results = _ensure_fields(root, mc, need_fields, start, end)
+    chains = _field_chains(mc)
+    results = _ensure_fields(root, mc, need_fields, start, end)
     failed = {f: r for f, r in results.items() if not r["ok"]}
     ok_fields = [f for f, r in results.items() if r["ok"]]
     if not ok_fields:

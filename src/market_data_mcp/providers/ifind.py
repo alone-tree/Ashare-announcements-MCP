@@ -358,26 +358,44 @@ def _month_ends(start: str, end: str) -> list[str]:
 
 def fetch_fx(root: str, mc: MarketCode, start: str | None = None,
              end: str | None = None) -> dict:
-    """汇率HQ原值批次；分段及缓存提交由forex调度，见架构§2.7。"""
-    from market_data_mcp.forex import LIVE_START
+    """iFinD原始批次：历史CSV替代真实请求，其余数据流不变，见架构§2.7。"""
+    from market_data_mcp import forex
 
     code = f"{mc.code}.{mc.suffix}"
-    start = max(start or LIVE_START, LIVE_START)
+    start = start or forex.HISTORY_START
     end = end or date.today().isoformat()
-    result = request_ifind(root, "THS_HQ", code, "close", "", start, end,
-                           required_columns=("time", "close"))
-    if result.errorcode != 0:
-        return {"ok": False, "source": SOURCE, "data": {},
-                "error": f"iFinD THS_HQ请求失败：{result.errmsg}", "notes": None}
-    frame = result.data
-    records = []
-    if frame is not None:
-        for row in frame.to_dict("records"):
-            stamp = str(row["time"])[:10]
-            if start <= stamp <= end:
-                records.append({"date": stamp, "value": _clean_value(row["close"])})
+    records, notes = [], []
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+        if first > last:
+            raise ValueError("开始日期不能晚于结束日期")
+        historical_end = min(last, date.fromisoformat(forex.HISTORY_END))
+        if first <= historical_end:
+            history = forex.read_history()
+            day = first
+            while day <= historical_end:
+                stamp = day.isoformat()
+                records.append({"date": stamp, "value": history.get(stamp, {}).get(code)})
+                day += timedelta(days=1)
+            notes.append(f"iFinD原始数据截至{forex.HISTORY_END}由随代码CSV提供，含空值；沿用字段缓存流程")
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "source": SOURCE, "data": {}, "error": str(exc), "notes": None}
+    if end > forex.HISTORY_END:
+        live_start = max(start, forex.LIVE_START)
+        result = request_ifind(root, "THS_HQ", code, "close", "", live_start, end,
+                               required_columns=("time", "close"))
+        if result.errorcode != 0:
+            error = f"iFinD THS_HQ请求失败：{result.errmsg}"
+            if not records:
+                return {"ok": False, "source": SOURCE, "data": {}, "error": error, "notes": None}
+            notes.append(error + "；本批次仅包含历史原始数据")
+        elif result.data is not None:
+            for row in result.data.to_dict("records"):
+                stamp = str(row["time"])[:10]
+                if live_start <= stamp <= end:
+                    records.append({"date": stamp, "value": _clean_value(row["close"])})
     return {"ok": True, "source": SOURCE, "data": {"close": _field_batch(records)},
-            "error": None, "notes": None}
+            "error": None, "notes": notes or None}
 
 
 def fetch_shares(

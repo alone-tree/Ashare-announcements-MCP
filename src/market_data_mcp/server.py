@@ -254,7 +254,8 @@ def create_server() -> Any:
         code: 股票带市场后缀（600519.SH / 920002.BJ / 00700.HK / AAPL.US）；
               汇率支持USDCNY.IN、HKDCNY.FX、USDHKD.FX。
               汇率无论传入何种vars和adjust，均仅返回close，有效adjust=raw；
-              截至2026-09-30只读固化历史，早期无值返回null且不补拉；之后取iFinD。
+              汇率同样使用字段缓存；未覆盖时，iFinD取数层从随代码CSV读取截至2026-09-30的
+              历史原始数据，之后真实请求iFinD；早期空值也正常缓存，不反复补拉。
         vars: 返回字段列表（date 恒保留），可选 open/high/low/close/volume/amount/turnover/
               outstanding_share/total_shares/total_market_cap/float_market_cap；不传默认 close。
         adjust: raw=除权价、hfq=后复权、qfq=前复权（本地现算）。
