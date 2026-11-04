@@ -264,8 +264,9 @@ def create_server() -> Any:
         period: daily/weekly/monthly（周/月由日线本地聚合）。
         export_path: 空 = 直接返回数据（超过 200 行自动导出到缓存目录并返回路径）；
                      指定 = 导出 CSV 并返回元信息。
-        返回 rows 为数据本体；notes 说明降级/聚合/估算（市值为股本×收盘估算值；
-        美股 amount 来自 iFinD；后复权美股为分红再投口径）。
+        返回 rows 为数据本体；notes 说明降级/聚合/估算（A/B/北交所总市值取 iFinD 直取，
+        港美股总市值与各市场流通市值为股本×收盘估算值；美股 amount 来自 iFinD；
+        后复权美股为分红再投口径）。
         """
         return _wrap(get_quote_service)(
             _data_root(), code, vars=vars, adjust=adjust,

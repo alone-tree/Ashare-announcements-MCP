@@ -152,7 +152,8 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
                                    "periods": payload.get("periods", {} ) if file.stem == "report_probe" else
                                        sorted(payload.get("periods", {})) if "periods" in payload else
                                        [r["report_date"] for r in payload.get("reports", [])]})
-        for field in ("open", "high", "low", "close", "volume", "amount", "close_hfq", "total_shares", "floating_shares"):
+        for field in ("open", "high", "low", "close", "volume", "amount", "close_hfq",
+                      "total_shares", "floating_shares", "total_market_cap"):
             from market_data_mcp import cache as quote_cache
             value = quote_cache.read_cache(root, code, field)
             if value:

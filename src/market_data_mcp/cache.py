@@ -47,6 +47,7 @@ DATA_FILES = {
     "amount": "amount.json",
     "total_shares": "total_shares.json",
     "floating_shares": "floating_shares.json",
+    "total_market_cap": "total_market_cap.json",
 }
 
 # 行情原始字段（新浪宽拉列）

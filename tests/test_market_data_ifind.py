@@ -174,13 +174,12 @@ class TestFetchUsAmount:
 
 class TestFetchShares:
     def test_a_share_writes_total_shares_only(self, tmp_path, monkeypatch):
-        """A 股股本：只写 total_shares（floating_shares 唯一归属=新浪，避免双写）。"""
+        """A 股股本：THS_HQ 取 totalShares，只写 total_shares（floating_shares 唯一归属=新浪）。"""
         monkeypatch.setattr(ifind.ths, "THS_iFinDLogin", lambda a, p: 0)
         df = pd.DataFrame({"time": ["2026-08-06", "2026-08-07"],
                            "thscode": ["600519.SH"] * 2,
-                           "total_shares": [1250081601.0, 1250081601.0],
-                           "floating_shares": [1250081601.0, 1250081601.0]})
-        monkeypatch.setattr(ifind.ths, "THS_DS", lambda *a, **k: _r(df))
+                           "totalShares": [1250081601.0, 1250081601.0]})
+        monkeypatch.setattr(ifind.ths, "THS_HQ", lambda *a, **k: _r(df))
         root = str(tmp_path)
         r = ifind.fetch_shares(root, parse_code("600519.SH"), start="2026-08-01")
         assert r["ok"] is True

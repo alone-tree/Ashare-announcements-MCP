@@ -52,6 +52,8 @@ def _field_chains(mc: MarketCode) -> dict[str, list]:
     if mc.market in ("A", "BJ"):
         # A/北交所流通股本唯一源 = 新浪 outstanding_share（全历史逐日）
         chains["floating_shares"] = [sina.fetch_raw]
+        # A/北交所总市值唯一源 = iFinD 直取（2026-11-04 定；港美股仍本地计算）
+        chains["total_market_cap"] = [ifind.fetch_market_value]
     else:
         # 港美股流通股本唯一源 = iFinD
         chains["floating_shares"] = [ifind.fetch_shares]
@@ -115,6 +117,23 @@ def _latest_share(share_series: dict[str, float | None], d: str) -> float | None
         if share_series.get(sd) is not None:
             last = share_series[sd]
     return last
+
+
+def _monthly_value(series: dict[str, float | None], d: str) -> float | None:
+    """月频采样取值：当日 → 当月月末采样点 → ≤d 最近点。
+
+    早期段为 BD 日历月末单点，值代表"该月最后交易日"；骨架是交易日，
+    因此同月日期回落到当月月末点，再回落到更早的最近点。
+    """
+    if d in series:
+        return series[d]  # 当日有点：有值取值，显式无值保持空
+    dt = date.fromisoformat(d)
+    nxt = dt.replace(day=28) + timedelta(days=4)
+    month_end = (nxt - timedelta(days=nxt.day)).isoformat()
+    v = series.get(month_end)
+    if v is not None:
+        return v
+    return _latest_share(series, d)
 
 
 def _resample(rows: list[dict], period: str) -> list[dict]:
@@ -224,12 +243,15 @@ def get_quote(
             need_fields.add("floating_shares")
         elif v == "total_shares":
             need_fields.add("total_shares")
-        elif v in ("total_market_cap", "float_market_cap", "turnover"):
-            need_fields.update({"close", "floating_shares", "total_shares"})
-            if v == "total_market_cap":
-                need_fields.add("total_shares")
-            if v == "turnover":
-                need_fields.add("volume")  # 换手率 = volume ÷ 流通股本
+        elif v == "total_market_cap":
+            if mc.market in ("A", "BJ"):
+                need_fields.add("total_market_cap")  # A/北交所直取 iFinD
+            else:
+                need_fields.update({"close", "total_shares"})  # 港美股现算
+        elif v == "float_market_cap":
+            need_fields.update({"close", "floating_shares"})
+        elif v == "turnover":
+            need_fields.update({"volume", "floating_shares"})  # 换手率 = volume ÷ 流通股本
         elif v in _PRICE_FIELDS:
             need_fields.add(v)
     if adjust in ("hfq", "qfq"):
@@ -319,9 +341,11 @@ def get_quote(
             else:
                 notes.append("后复权数据缺失，前复权计算不完整")
 
-    # 6. 派生：股本/市值/换手率（基于不复权 close —— 市值 = 股本 × 当日不复权收盘）
+    # 6. 派生：市值/换手率。A/B 股总市值直取 iFinD 字段；港美股与流通市值仍按股本 × 不复权收盘现算
     total_shares = by_field.get("total_shares", {})
     floating_shares = by_field.get("floating_shares", {})
+    mcap_direct = "total_market_cap" in chains
+    direct_mcap = by_field.get("total_market_cap", {})
     need_mcap = "total_market_cap" in vars or "float_market_cap" in vars
     need_turnover = "turnover" in vars
     if need_mcap or need_turnover:
@@ -329,14 +353,21 @@ def get_quote(
             rc = r.get("_raw_close")
             ts = _latest_share(total_shares, r["date"])
             fs = _latest_share(floating_shares, r["date"])
-            if need_mcap and "total_market_cap" in vars and ts is not None and rc is not None:
-                r["total_market_cap"] = ts * rc
-            if need_mcap and "float_market_cap" in vars and fs is not None and rc is not None:
+            if "total_market_cap" in vars:
+                if mcap_direct:
+                    v = _monthly_value(direct_mcap, r["date"])
+                    if v is not None:
+                        r["total_market_cap"] = v
+                elif ts is not None and rc is not None:
+                    r["total_market_cap"] = ts * rc
+            if "float_market_cap" in vars and fs is not None and rc is not None:
                 r["float_market_cap"] = fs * rc
             if need_turnover and fs and r.get("volume") is not None:
                 r["turnover"] = r["volume"] / fs
-        if need_mcap:
-            notes.append("总市值/流通市值为估算值（股本 × 不复权收盘价）")
+        if "float_market_cap" in vars:
+            notes.append("流通市值为估算值（流通股本 × 不复权收盘价）")
+        if "total_market_cap" in vars and not mcap_direct:
+            notes.append("总市值为估算值（总股本 × 不复权收盘价）")
 
     # 7. vars 映射输出（outstanding_share ← floating_shares；_raw_close 不输出）
     out_rows = []

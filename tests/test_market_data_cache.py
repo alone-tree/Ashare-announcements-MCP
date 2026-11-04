@@ -14,10 +14,10 @@ def _read_raw(root: str, code: str, field: str):
 
 class TestCacheFiles:
     def test_field_files(self):
-        """9 个字段级 json（2026-08-09 用户拍板）。"""
+        """字段级 json（2026-08-09 拍板；2026-11-04 增 total_market_cap）。"""
         assert set(cache.DATA_FILES) == {
             "open", "high", "low", "close", "close_hfq",
-            "volume", "amount", "total_shares", "floating_shares",
+            "volume", "amount", "total_shares", "floating_shares", "total_market_cap",
         }
 
     def test_write_read_roundtrip(self, tmp_path):

@@ -47,6 +47,7 @@ def _default_data():
         "amount": (_field_items(n, base=10000.0), "sina"),
         "floating_shares": (_field_items(n, base=1000000.0), "sina"),
         "total_shares": (_field_items(n, base=1000000.0, source="ifind"), "ifind"),
+        "total_market_cap": (_field_items(n, base=12300000.0, source="ifind"), "ifind"),
         "close_hfq": (_field_items(n, base=55.0), "sina"),
     }
 
@@ -78,9 +79,20 @@ class TestGetQuote:
         assert row["close"] == 11.0
         assert row["turnover"] == pytest.approx(1000.0 / 1000000.0)  # volume/流通股本
         assert row["outstanding_share"] == 1000000.0
-        assert row["total_market_cap"] == 11.0 * 1000000.0
-        assert row["float_market_cap"] == 11.0 * 1000000.0
-        assert any("估算" in n for n in r["notes"])
+        assert row["total_market_cap"] == 12300000.0  # A股直取 iFinD，不按股本×收盘现算
+        assert row["float_market_cap"] == 11.0 * 1000000.0  # 流通市值仍现算
+        assert any("流通市值为估算值" in n for n in r["notes"])
+        assert not any("总市值为估算值" in n for n in r["notes"])
+
+    def test_us_market_cap_still_calculated(self, tmp_path, monkeypatch):
+        """港美股总市值仍按股本×收盘现算，不请求 A 股的 iFinD 直取字段。"""
+        fake = _FakeEnsure(_default_data())
+        monkeypatch.setattr(service, "aggregator", type("A", (), {"ensure": fake})())
+        r = service.get_quote(str(tmp_path), "AAPL.US", vars=["close", "total_market_cap"],
+                              start_date="2026-08-06", end_date="2026-08-07")
+        assert r["rows"][0]["total_market_cap"] == 11.0 * 1000000.0
+        assert any("总市值为估算值" in n for n in r["notes"])
+        assert "total_market_cap" not in fake.calls
 
     def test_hfq_ohl_restore(self, tmp_path, monkeypatch):
         data = _default_data()
