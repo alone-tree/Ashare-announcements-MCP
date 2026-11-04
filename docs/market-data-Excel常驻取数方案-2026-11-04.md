@@ -127,6 +127,14 @@ Excel 与 SDK 均属于 iFinD 通道，不改变各字段原定数据源。零�
 
 ## 八、官方参考
 
+### 2026-11-04 插件禁用状态复核后的实施补充
+
+用户指出插件掉落后，只读核对确认 Excel 的 `Resiliency/DisabledItems` 中确有 iFinD DLL 与 ProgID。备份后仅恢复这一条禁用记录，正常关闭并冷启动复测，原失败样本恢复正确返回。此次正常冷启动失败已有实际原因证据，不能继续泛称插件正常启用时的冷启动不稳定；历史失败记录仍保留。
+
+在已确认的独立运行层范围内补充禁用状态检查：取数前读取本用户的 Excel 禁用项目，发现 iFinD 项则明确报告插件被禁用，不把函数加载项的零值作为正常结果。运行模块只检测，不自动删除禁用记录，不覆盖用户主动禁用的选择，不清理其他加载项。
+
+随后验证恢复插件后的隐藏冷启动及与普通测试工作簿共存；仍不接入 MCP/CLI、SDK 分流或业务缓存。
+
 - [Excel 命令行开关 `/x`](https://support.microsoft.com/zh-cn/office/lifecycle/command-line-switches-for-microsoft-office-products)：独立进程启动。
 - [Application.Visible](https://learn.microsoft.com/en-us/office/vba/api/excel.application.visible)：Excel 应用实例可见性。
 - [Range.ClearContents](https://learn.microsoft.com/en-us/office/vba/api/excel.range.clearcontents)：清除公式与值，保留格式。
