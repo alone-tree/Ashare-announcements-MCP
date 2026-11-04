@@ -192,11 +192,27 @@ def _excel_executable() -> str:
     raise RuntimeError("未找到桌面版 Excel 安装路径")
 
 
+def _check_ifind_disabled():
+    """Connect=True 不能排除 Excel 硬禁用；只检测，不更改用户的禁用选择。"""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"SOFTWARE\Microsoft\Office\16.0\Excel\Resiliency\DisabledItems") as key:
+            for index in range(winreg.QueryInfoKey(key)[1]):
+                _, data, _ = winreg.EnumValue(key, index)
+                if isinstance(data, bytes) and "thsxlsslug" in data.decode("utf-16le", errors="ignore").lower():
+                    raise RuntimeError("iFinD 插件已被 Excel 禁用；请先在禁用项目中恢复启用，不能将此状态下的零值当作行情数据")
+    except FileNotFoundError:
+        pass
+
+
 def _ensure_functions(app):
     """COM 插件已连接仍可能缺少 UDF；显式只读加载官方 ThsFunc.xla。"""
     import pythoncom
     import winreg
 
+    _check_ifind_disabled()
     plugin = app.COMAddIns.Item("ThsXlsSlug.ExcelAddin")
     if not plugin.Connect:
         plugin.Connect = True

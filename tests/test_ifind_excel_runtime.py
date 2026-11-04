@@ -3,6 +3,7 @@
 import importlib.util
 import shutil
 import subprocess
+from contextlib import nullcontext
 
 import pytest
 from openpyxl import load_workbook
@@ -68,3 +69,26 @@ def test_whole_worker_deadline_becomes_timeout(monkeypatch):
     monkeypatch.setattr(ifind_excel.subprocess, "run", blocked)
     with pytest.raises(TimeoutError, match="Excel 保持原状"):
         ifind_excel.status(timeout=0.1)
+
+
+def test_disabled_ifind_is_detected_before_com_access(monkeypatch):
+    import winreg
+
+    data = b"\x02\x00\x00\x00" + "C:\\iFinD\\x64\\ThsXlsSlug_x64.dll\0thsxlsslug.exceladdin".encode("utf-16le")
+    monkeypatch.setattr(winreg, "OpenKey", lambda *args: nullcontext(object()))
+    monkeypatch.setattr(winreg, "QueryInfoKey", lambda key: (0, 1, 0))
+    monkeypatch.setattr(winreg, "EnumValue", lambda key, index: ("disabled", data, winreg.REG_BINARY))
+    # None 也可触发明确禁用错误：不能先访问 Connect 并把 True 当作就绪。
+    with pytest.raises(RuntimeError, match="iFinD 插件已被 Excel 禁用"):
+        ifind_excel._ensure_functions(None)
+
+
+def test_unrelated_disabled_items_are_left_alone(monkeypatch):
+    import winreg
+
+    monkeypatch.setattr(winreg, "OpenKey", lambda *args: nullcontext(object()))
+    monkeypatch.setattr(winreg, "QueryInfoKey", lambda key: (0, 1, 0))
+    monkeypatch.setattr(winreg, "EnumValue", lambda key, index: (
+        "unrelated", "other-addin.dll".encode("utf-16le"), winreg.REG_BINARY))
+    monkeypatch.setattr(winreg, "DeleteValue", lambda *args: pytest.fail("检查不能删除禁用项"))
+    ifind_excel._check_ifind_disabled()
