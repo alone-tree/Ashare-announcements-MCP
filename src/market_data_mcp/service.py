@@ -108,32 +108,15 @@ def _default_start(end: str) -> str:
     return (date.fromisoformat(end) - timedelta(days=13)).isoformat()
 
 
-def _latest_share(share_series: dict[str, float | None], d: str) -> float | None:
-    """前置填充：取 ≤ d 的最近股本点。"""
+def _asof_value(series: dict[str, float | None], d: str) -> float | None:
+    """股本与市值的前值填充，依据架构设计 §2.4“前值填充规则”。"""
     last = None
-    for sd in sorted(share_series):
+    for sd in sorted(series):
         if sd > d:
             break
-        if share_series.get(sd) is not None:
-            last = share_series[sd]
+        if series.get(sd) is not None:
+            last = series[sd]
     return last
-
-
-def _monthly_value(series: dict[str, float | None], d: str) -> float | None:
-    """月频采样取值：当日 → 当月月末采样点 → ≤d 最近点。
-
-    早期段为 BD 日历月末单点，值代表"该月最后交易日"；骨架是交易日，
-    因此同月日期回落到当月月末点，再回落到更早的最近点。
-    """
-    if d in series:
-        return series[d]  # 当日有点：有值取值，显式无值保持空
-    dt = date.fromisoformat(d)
-    nxt = dt.replace(day=28) + timedelta(days=4)
-    month_end = (nxt - timedelta(days=nxt.day)).isoformat()
-    v = series.get(month_end)
-    if v is not None:
-        return v
-    return _latest_share(series, d)
 
 
 def _resample(rows: list[dict], period: str) -> list[dict]:
@@ -351,11 +334,11 @@ def get_quote(
     if need_mcap or need_turnover:
         for r in rows:
             rc = r.get("_raw_close")
-            ts = _latest_share(total_shares, r["date"])
-            fs = _latest_share(floating_shares, r["date"])
+            ts = _asof_value(total_shares, r["date"])
+            fs = _asof_value(floating_shares, r["date"])
             if "total_market_cap" in vars:
                 if mcap_direct:
-                    v = _monthly_value(direct_mcap, r["date"])
+                    v = _asof_value(direct_mcap, r["date"])
                     if v is not None:
                         r["total_market_cap"] = v
                 elif ts is not None and rc is not None:
@@ -376,9 +359,9 @@ def get_quote(
         out: dict = {"date": r["date"]}
         for v in vars:
             if v == "outstanding_share":
-                out[v] = _latest_share(floating_shares, r["date"])
+                out[v] = _asof_value(floating_shares, r["date"])
             elif v == "total_shares":
-                out[v] = _latest_share(total_shares, r["date"])
+                out[v] = _asof_value(total_shares, r["date"])
             elif v in r:
                 out[v] = r.get(v)
         out_rows.append(out)

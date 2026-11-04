@@ -10,7 +10,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from market_data_mcp import service
+from market_data_mcp import cache, service
 
 
 def _field_items(n=2, start="2026-08-06", base=10.0, source="sina"):
@@ -93,6 +93,50 @@ class TestGetQuote:
         assert r["rows"][0]["total_market_cap"] == 11.0 * 1000000.0
         assert any("总市值为估算值" in n for n in r["notes"])
         assert "total_market_cap" not in fake.calls
+
+    def test_sparse_share_and_market_cap_cache_use_previous_values(self, tmp_path, monkeypatch):
+        """真实字段缓存经 get_quote 组装：只用历史有效点，不将未来月末点回填。"""
+        dates = ["2020-07-30", "2020-07-31", "2020-08-03", "2020-08-27",
+                 "2020-08-28", "2020-08-31", "2020-09-01"]
+        samples = [("2020-07-01", None), ("2020-07-31", 100),
+                   ("2020-08-03", None), ("2020-08-28", 0),
+                   ("2020-08-31", 120), ("2020-09-30", 140)]
+        root, code = str(tmp_path), "600519.SH"
+        original = {}
+        for field, multiplier, source in [("total_shares", 1, "ifind"),
+                                          ("floating_shares", 0.5, "sina"),
+                                          ("total_market_cap", 10, "ifind")]:
+            records = [{"date": d, "value": v * multiplier if v is not None else None,
+                        "source": source} for d, v in samples]
+            cache.write_cache(root, code, field, meta={"code": code, "market": "A",
+                "field": field, "source": source,
+                "date_range": {"start": samples[0][0], "end": samples[-1][0]}}, items=records)
+            original[field] = (tmp_path / "cache" / code / cache.DATA_FILES[field]).read_bytes()
+        cache.write_cache(root, code, "close", meta={"code": code, "market": "A",
+            "field": "close", "source": "sina",
+            "date_range": {"start": dates[0], "end": dates[-1]}},
+            items=[{"date": d, "value": 2, "source": "sina"} for d in dates])
+
+        def unexpected_fetch(*args, **kwargs):
+            pytest.fail("缓存已覆盖请求，不应请求上游")
+
+        monkeypatch.setattr(service.sina, "fetch_raw", unexpected_fetch)
+        monkeypatch.setattr(service.ifind, "fetch_shares", unexpected_fetch)
+        monkeypatch.setattr(service.ifind, "fetch_market_value", unexpected_fetch)
+        result = service.get_quote(root, code,
+            vars=["close", "total_shares", "outstanding_share", "total_market_cap", "float_market_cap"],
+            start_date=dates[0], end_date=dates[-1])
+
+        assert result["ok"] is True
+        assert [row["date"] for row in result["rows"]] == dates
+        expected = [None, 100, 100, 100, 0, 120, 120]
+        for row, value in zip(result["rows"], expected):
+            assert row["total_shares"] == value
+            assert row["outstanding_share"] == (value * 0.5 if value is not None else None)
+            assert row.get("total_market_cap") == (value * 10 if value is not None else None)
+            assert row.get("float_market_cap") == value
+        for field, content in original.items():
+            assert (tmp_path / "cache" / code / cache.DATA_FILES[field]).read_bytes() == content
 
     def test_hfq_ohl_restore(self, tmp_path, monkeypatch):
         data = _default_data()
