@@ -8,7 +8,11 @@ from market_data_mcp.routing import MarketCode, parse_code
 TOOLS = {
     "get_quote": {"parameters": ["code", "vars", "adjust", "start_date", "end_date", "period", "export_path"],
                   "example": {"code": "600519.SH", "vars": ["close"], "start_date": "2025-01-01"},
-                  "source": "股票：新浪及既定iFinD字段；汇率：iFinD（含固化历史）；无失败换源",
+                  "source": "SH/SZ/BJ股票：iFinD Excel；港美：既有新浪/iFinD；汇率：iFinD含固化历史；无失败换源",
+                  "mainland": {"fields": ["open", "high", "low", "close", "avg_price", "volume", "amount", "turnover",
+                      "company_total_shares", "security_total_shares", "company_total_market_cap", "security_total_market_cap"],
+                      "aliases": {"total_shares": "company_total_shares", "total_market_cap": "company_total_market_cap"},
+                      "note": "公司/证券四字段同批缓存，无默认层级；无公告建档前置；流通字段不支持；换手率为比值；日期列有成交日"},
                   "forex": {"codes": list(forex.CODES), "vars": ["close"],
                             "adjust": "raw", "history_end": forex.HISTORY_END,
                             "live_start": forex.LIVE_START,
@@ -33,6 +37,7 @@ TOOLS = {
                              "topics": ["tools", "items", "ranges", "refresh", "cache", "export"],
                              "topic_notes": {"tools": "工具说明", "items": "科目/字段", "ranges": "覆盖边界",
                                              "refresh": "刷新规则", "cache": "本地缓存", "export": "导出"}},
+    "close_ifind_excel": {"parameters": [], "example": {}, "output": "关闭本运行包专用Excel，不影响其他工作簿"},
 }
 
 
@@ -96,10 +101,12 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
         result["tools"] = {tool: TOOLS[tool]} if tool else TOOLS
     if topic in (None, "items"):
         from market_data_mcp.service import VALID_VARS
+        from market_data_mcp.quote_excel import PUBLIC_FIELDS
         result.update(default_items=market_default_items(market), derived_items=RATIOS, statements=STATEMENTS,
                       meta_items=list(META_KEYS),
                       segment_items=SEGMENTS, growth=["科目名同比增长率", "科目名环比增长率"],
                       quote_fields=VALID_VARS,
+                      mainland_quote_fields=PUBLIC_FIELDS,
                       ratio_unit="比值（0.25表示25%）",
                       financial_units={"amount": "原币基础单位", "per_share": "原币/股", "shares": "股",
                                        "ratio": "比值（0.25表示25%）", "text": "文本"},
@@ -152,9 +159,8 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
                                    "periods": payload.get("periods", {} ) if file.stem == "report_probe" else
                                        sorted(payload.get("periods", {})) if "periods" in payload else
                                        [r["report_date"] for r in payload.get("reports", [])]})
-        for field in ("open", "high", "low", "close", "volume", "amount", "close_hfq",
-                      "total_shares", "floating_shares", "total_market_cap"):
-            from market_data_mcp import cache as quote_cache
+        from market_data_mcp import cache as quote_cache
+        for field in quote_cache.DATA_FILES:
             value = quote_cache.read_cache(root, code, field)
             if value:
                 cached.append({"domain": "quote", "module": field, "meta": value["meta"],

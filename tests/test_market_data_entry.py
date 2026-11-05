@@ -75,6 +75,14 @@ class TestCli:
 
 
 class TestServer:
+    def test_package_entry_starts_its_own_server(self, monkeypatch):
+        import runpy
+        from market_data_mcp import server
+        calls = []
+        monkeypatch.setattr(server, "main", lambda: calls.append("market-data"))
+        runpy.run_module("market_data_mcp", run_name="__main__")
+        assert calls == ["market-data"]
+
     def test_tool_registered_and_strict_schema(self):
         from market_data_mcp.server import create_server
         mcp = create_server()
@@ -82,6 +90,7 @@ class TestServer:
         assert [t.name for t in tools] == [
             "get_quote", "get_financial_data", "get_market_data_help", "get_company_profile",
             "get_quote_chart",
+            "close_ifind_excel",
         ]
         quote_schema = tools[0].parameters
         assert quote_schema.get("additionalProperties") is False

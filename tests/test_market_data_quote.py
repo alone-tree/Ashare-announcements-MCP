@@ -52,7 +52,13 @@ def _default_data():
     }
 
 
-class TestGetQuote:
+class TestLegacyGetQuote:
+    """保留旧通道及共用加工回归；内地Excel公共入口另在test_quote_excel验证。"""
+
+    @pytest.fixture(autouse=True)
+    def legacy_entry(self, monkeypatch):
+        monkeypatch.setattr(service, "get_quote", service._get_legacy_quote)
+
     def test_basic_close(self, tmp_path, monkeypatch):
         fake = _FakeEnsure(_default_data())
         monkeypatch.setattr(service, "aggregator", type("A", (), {"ensure": fake})())

@@ -1,7 +1,7 @@
-"""支持 python -m ashare_announcements_mcp。"""
+"""支持 python -m market_data_mcp，启动独立数据服务。"""
 
-from ashare_announcements_mcp.server import mcp
+from market_data_mcp.server import main
 
 
 if __name__ == "__main__":
-    mcp.run()
+    main()

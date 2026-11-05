@@ -41,6 +41,8 @@ PACKAGES = {
             "yfinance>=1.5,<2\n"
             "pyyaml>=6.0,<7\n"
             "matplotlib>=3.7,<4\n"
+            "pywin32; sys_platform == 'win32'\n"
+            "pywinauto; sys_platform == 'win32'\n"
         ),
     },
 }
@@ -52,7 +54,7 @@ USER_README = """# 投资数据 MCP（用户版）：公告阅读 + market-data
 | MCP | 包 | 入口 | 能力 |
 |---|---|---|---|
 | A股公告阅读 | `ashare_announcements_mcp` | `ashare_announcements_mcp/server.py` | A/H/B 股公告（东财）+ 美股公告（SEC EDGAR）+ 互动问答；建档/查询/阅读/检索 |
-| market-data | `market_data_mcp` | `market_data_mcp/server.py` | 三市场行情（新浪单源 + 美股 iFinD 后复权/成交额）、股本、市值估算；财报/比率/概况；行情绘图 get_quote_chart（K线/折线 PNG，事件标注/高低点，落盘 `cache/_charts/`） |
+| market-data | `market_data_mcp` | `market_data_mcp/server.py` | 内地Excel整组行情及公司/证券总股本市值；港美保留既有通道；财报/概况；行情绘图及专用Excel关闭 |
 
 ## MCP 注册（stdio）
 
@@ -83,6 +85,9 @@ python -m pip install -r requirements.txt
 
 market-data 的 iFinD 通道（美股后复权/成交额/股本）需要 iFinDPy 官方 SDK：
 按官方安装包在 venv site-packages 写入 `iFinDPy.pth` 指向 SDK 目录（本机已装）。
+内地行情使用Windows桌面Excel及已启用、自动登录的iFinD插件；证券基础资料仍使用SDK。
+专用空白工作簿随market-data包保存，取数后常驻；close_ifind_excel可单独关闭。
+数据与公告MCP独立，数据查询不依赖公告建档。
 
 ## 用户配置（config.yaml）
 
@@ -121,6 +126,13 @@ def export(target: Path) -> None:
             history = pkg["source"] / "data" / "fx_history.csv"
             (package_target / "data").mkdir(exist_ok=True)
             shutil.copy2(history, package_target / "data" / history.name)
+            workbook = pkg["source"] / "data" / "ifind_workspace.xlsx"
+            destination = package_target / "data" / workbook.name
+            if not destination.exists() or workbook.read_bytes() != destination.read_bytes():
+                try:
+                    shutil.copy2(workbook, destination)
+                except PermissionError as exc:
+                    raise RuntimeError("专用工作簿正在使用，请先关闭目标用户版Excel后再导出") from exc
     (target / "cache").mkdir(exist_ok=True)
     # 配置模板：用户版带一份 config.example.yaml（真实凭据由用户复制为 config.yaml 后填写；
     # 不覆盖用户已有的 config.yaml）

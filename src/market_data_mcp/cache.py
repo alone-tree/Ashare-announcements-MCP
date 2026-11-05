@@ -48,6 +48,9 @@ DATA_FILES = {
     "total_shares": "total_shares.json",
     "floating_shares": "floating_shares.json",
     "total_market_cap": "total_market_cap.json",
+    **{field: f"{field}.json" for field in (
+        "open_hfq", "high_hfq", "low_hfq", "avg_price", "avg_price_hfq", "turnover",
+        "company_total_shares", "security_total_shares", "company_total_market_cap", "security_total_market_cap")},
 }
 
 # 行情原始字段（新浪宽拉列）

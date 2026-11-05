@@ -43,7 +43,7 @@
 
 CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。入口为`establish_company`、`query_batch`、`read_batch`、`search_batch`、`query_a_share_interactions_batch`、`query_transcripts_batch`、`search_transcripts_batch`，与MCP共用业务实现。顶层分发字段固定为`tool`，建档子动作固定为`action`。
 
-### market-data MCP（5 个工具）
+### market-data MCP（6 个工具）
 
 | 工具 | 要点 |
 |---|---|
@@ -52,6 +52,7 @@ CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。�
 | `get_market_data_help` | 市场数据工具的能力、口径、边界及公司本地缓存帮助；详见架构§4 |
 | `get_company_profile` | 概况/IPO/年度分红/预测/历史十大股东；时间参数与市场范围见架构§5 |
 | `get_quote_chart` | K线/折线绘图；复用get_quote，CLI为get_quote_chart_batch；见架构§2.6 |
+| `close_ifind_excel` | 关闭本运行包专用Excel；行为见`docs/行为-内地Excel行情.md` |
 
 market-data关键约束为字段独立来源、强制市场后缀路由、行情单源无回退。不得按代码位数猜市场或混接来源；具体来源与口径只在架构维护。
 

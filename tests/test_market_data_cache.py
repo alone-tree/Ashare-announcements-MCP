@@ -18,6 +18,8 @@ class TestCacheFiles:
         assert set(cache.DATA_FILES) == {
             "open", "high", "low", "close", "close_hfq",
             "volume", "amount", "total_shares", "floating_shares", "total_market_cap",
+            "open_hfq", "high_hfq", "low_hfq", "avg_price", "avg_price_hfq", "turnover",
+            "company_total_shares", "security_total_shares", "company_total_market_cap", "security_total_market_cap",
         }
 
     def test_write_read_roundtrip(self, tmp_path):

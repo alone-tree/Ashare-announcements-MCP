@@ -119,7 +119,7 @@ def _asof_value(series: dict[str, float | None], d: str) -> float | None:
     return last
 
 
-def _resample(rows: list[dict], period: str) -> list[dict]:
+def _resample(rows: list[dict], period: str, *, sum_fields=("volume", "amount")) -> list[dict]:
     """周/月线由日线本地聚合（open=周期首日、high=最高、low=最低、close=末日、
     volume/amount=累计，其余取末日；weekly 用 W-FRI、monthly 用 ME）。"""
     if period == "daily" or not rows:
@@ -137,9 +137,7 @@ def _resample(rows: list[dict], period: str) -> list[dict]:
     for r in rows:
         groups.setdefault(bucket(r["date"]), []).append(r)
     out = []
-    numeric = ("open", "high", "low", "close", "volume", "amount",
-               "turnover", "outstanding_share", "total_shares",
-               "total_market_cap", "float_market_cap")
+    numeric = tuple(dict.fromkeys(k for row in rows for k in row if k != "date"))
     for b in sorted(groups):
         g = groups[b]
         row: dict = {"date": b}
@@ -153,8 +151,13 @@ def _resample(rows: list[dict], period: str) -> list[dict]:
                 row[k] = min(vals) if vals else None
             elif k == "close":
                 row[k] = g[-1].get(k)
-            elif k in ("volume", "amount"):
+            elif k in sum_fields:
                 row[k] = sum(vals) if vals else None
+            elif k == "avg_price":
+                weighted = [(x.get(k), x.get("volume")) for x in g if
+                    isinstance(x.get(k), (int, float)) and isinstance(x.get("volume"), (int, float))]
+                volume = sum(v for _, v in weighted)
+                row[k] = sum(p * v for p, v in weighted) / volume if volume else None
             else:
                 row[k] = g[-1].get(k)
         out.append(row)
@@ -171,7 +174,21 @@ def _export_csv(path: str, rows: list[dict], cols: list[str]) -> None:
         w.writerows(rows)
 
 
-def get_quote(
+def get_quote(root: str, code: str, vars: list[str] | None = None, adjust: str = "raw",
+              start_date: str | None = None, end_date: str | None = None,
+              period: str = "daily", export_path: str | None = None) -> dict:
+    """内地股票使用Excel；港美和汇率保持既有独立通道。"""
+    try:
+        mc = parse_code(code)
+    except (ValueError, AttributeError):
+        mc = None
+    if mc and mc.market in ("A", "BJ"):
+        from market_data_mcp import quote_excel
+        return quote_excel.get_quote(root, mc, vars, adjust, start_date, end_date, period, export_path)
+    return _get_legacy_quote(root, code, vars, adjust, start_date, end_date, period, export_path)
+
+
+def _get_legacy_quote(
     root: str,
     code: str,
     vars: list[str] | None = None,

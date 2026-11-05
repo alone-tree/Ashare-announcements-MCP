@@ -256,17 +256,19 @@ def create_server() -> Any:
               汇率无论传入何种vars和adjust，均仅返回close，有效adjust=raw；
               汇率同样使用字段缓存；未覆盖时，iFinD取数层从随代码CSV读取截至2026-09-30的
               历史原始数据，之后真实请求iFinD；早期空值也正常缓存，不反复补拉。
-        vars: 返回字段列表（date 恒保留），可选 open/high/low/close/volume/amount/turnover/
-              outstanding_share/total_shares/total_market_cap/float_market_cap；不传默认 close。
+        vars: 不传默认close。内地Excel支持open/high/low/close/avg_price/volume/amount/turnover，
+              及company_total_shares/security_total_shares/company_total_market_cap/security_total_market_cap；
+              total_shares/total_market_cap兼容指向公司字段。港美保留outstanding_share/float_market_cap等既有字段。
         adjust: raw=除权价、hfq=后复权、qfq=前复权（本地现算）。
         start_date/end_date: YYYY-MM-DD；空 = 最近 14 个自然日 / 当天。
             start_date 传 "all"：起点不约束——end 留空 = 返回全部数据；end 指定 = 只取 ≤end 的早期数据。
         period: daily/weekly/monthly（周/月由日线本地聚合）。
         export_path: 空 = 直接返回数据（超过 200 行自动导出到缓存目录并返回路径）；
                      指定 = 导出 CSV 并返回元信息。
-        返回 rows 为数据本体；notes 说明降级/聚合/估算（A/B/北交所总市值取 iFinD 直取，
-        港美股总市值与各市场流通市值为股本×收盘估算值；美股 amount 来自 iFinD；
-        后复权美股为分红再投口径）。
+        内地SH/SZ/BJ使用Excel整组取数、字段缓存，无失败换源；股票无需公告建档。
+        公司/证券四字段同批获取，输出只选请求字段；换手率返回比值。
+        日期仅列有成交日；字段币种见units（B股均价/成交额人民币，价格原报价币种）。
+        港美保留既有来源及估算说明；超过200行自动CSV。
         """
         return _wrap(get_quote_service)(
             _data_root(), code, vars=vars, adjust=adjust,
@@ -384,6 +386,12 @@ def create_server() -> Any:
             end_date=end_date, period=period, log_scale=log_scale, field=field,
             events=events, keypoints=keypoints, drawdown_threshold=drawdown_threshold,
         )
+
+    @mcp.tool()
+    def close_ifind_excel() -> dict[str, Any]:
+        """关闭当前运行包的专用iFinD Excel；保留其他用户工作簿，未打开则不启动。"""
+        from market_data_mcp.ifind_excel import close_excel
+        return _wrap(close_excel)()
 
     return mcp
 

@@ -7,6 +7,21 @@ from market_data_mcp import data_store
 from market_data_mcp.providers import company_ifind
 
 
+def get_quote_security(root, mc):
+    """数据MCP自身的最小行情资料；不读取公告档案，不补取整份工商/IPO。"""
+    code = f"{mc.code}.{mc.suffix}"
+    fields = {"交易所": "ths_listing_exchange_stock",
+              "股份类型": "ths_stock_varieties_stock", "上市日期": "ths_ipo_date_stock"}
+    cached = data_store.read(root, code, "company_data", "security", "ifind")
+    if cached and data_store.fresh(cached.get("checked_at")) and set(fields) <= set(cached.get("data", {})):
+        return cached["data"]
+    value = company_ifind.basic(root, mc, fields)
+    data_store.write(root, code, "company_data", "security", {
+        "meta": {"schema_version": 2, "source": "ifind"}, "data": value,
+        "checked_at": datetime.now(timezone.utc).isoformat()})
+    return value
+
+
 def get_section(root, mc, section, periods, years, as_of_date, force):
     code = f"{mc.code}.{mc.suffix}"
     payload = data_store.read(root, code, "company_data", section, "ifind") or {

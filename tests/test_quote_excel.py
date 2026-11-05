@@ -1,0 +1,180 @@
+"""内地公共入口的业务回归：整包、复权、缓存隔离、增量和字段失败。"""
+import json
+from datetime import date, timedelta
+
+import pytest
+
+from market_data_mcp import cache, company_ifind_service, data_store, quote_excel, service
+from market_data_mcp.providers import excel
+from market_data_mcp.routing import parse_code
+
+
+@pytest.fixture
+def source(monkeypatch):
+    calls = []
+    monkeypatch.setattr(company_ifind_service, "get_quote_security", lambda root, mc: {
+        "股份类型": "B股" if mc.code == "200725" else "A股", "交易所": "深交所", "上市日期": "20200101"})
+
+    def fetch(root, mc, start, end, security):
+        calls.append((mc, start, end, security))
+        days = [(date.fromisoformat(start) + timedelta(days=i)).isoformat()
+                for i in range((date.fromisoformat(end) - date.fromisoformat(start)).days + 1)]
+        data = {}
+        for field in excel.FIELDS:
+            records = []
+            for i, day in enumerate(days):
+                value = {"amount": 0 if date.fromisoformat(day).weekday() >= 5 else 1000,
+                    "turnover": 2.5, "company_total_shares": 10000, "security_total_shares": 6000,
+                    "company_total_market_cap": 100000, "security_total_market_cap": 60000}.get(field)
+                if value is None:
+                    value = 10 + date.fromisoformat(day).day
+                    if field.endswith("_hfq"):
+                        value *= 5
+                records.append({"date": day, "value": value, "source": excel.SOURCE})
+            data[field] = records
+        return {"ok": True, "source": excel.SOURCE, "data": data, "notes": []}
+
+    monkeypatch.setattr(excel, "fetch_quote", fetch)
+    return calls
+
+
+def test_public_entry_one_batch_all_fields_and_cache_hit(tmp_path, monkeypatch, source):
+    root = str(tmp_path)
+    result = service.get_quote(root, "300308.SZ", vars=["close"], adjust="qfq",
+        start_date="2026-10-30", end_date="2026-11-02")
+    assert result["ok"] and result["source"] == "ifind_excel"
+    assert len(source) == 1
+    assert [r["date"] for r in result["rows"]] == ["2026-10-30", "2026-11-02"]
+    assert result["rows"][-1]["close"] == 12
+    for field in excel.FIELDS:
+        assert cache.read_cache(root, "300308.SZ", field)["meta"]["source"] == excel.SOURCE
+    monkeypatch.setattr(company_ifind_service, "get_quote_security", lambda *a: pytest.fail("命中缓存不取证券资料"))
+    again = service.get_quote(root, "300308.SZ", vars=["security_total_shares", "company_total_market_cap", "turnover"],
+        start_date="2026-10-30", end_date="2026-11-02")
+    assert len(source) == 1 and again["rows"][0]["security_total_shares"] == 6000
+    assert again["rows"][0]["turnover"] == 0.025
+
+
+def test_old_source_never_satisfies_excel_cache(tmp_path, source):
+    root = str(tmp_path)
+    cache.write_cache(root, "300308.SZ", "close", meta={"source": "sina",
+        "date_range": {"start": "2020-01-01", "end": "2030-01-01"}},
+        items=[{"date": "2026-11-03", "value": 999, "source": "sina"}])
+    result = service.get_quote(root, "300308.SZ", start_date="2026-11-03", end_date="2026-11-04")
+    assert result["rows"][0]["close"] == 13 and len(source) == 1
+    assert all(row["source"] == excel.SOURCE for row in cache.read_cache(root, "300308.SZ", "close")["items"])
+
+
+def test_incremental_only_once_from_previous_end(tmp_path, source):
+    root = str(tmp_path)
+    service.get_quote(root, "300308.SZ", start_date="2026-11-02", end_date="2026-11-03")
+    for field in excel.FIELDS:
+        path = tmp_path / "cache" / "300308.SZ" / cache.DATA_FILES[field]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["meta"]["updated_at"] = "2000-01-01T00:00:00"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    result = service.get_quote(root, "300308.SZ", vars=["open", "close", "amount", "company_total_shares"],
+        start_date="2026-11-02", end_date="2026-11-05")
+    assert len(source) == 2 and source[-1][1:3] == ("2026-11-03", "2026-11-05")
+    assert [r["date"] for r in result["rows"]] == ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"]
+
+
+def test_all_history_reuses_listing_start_cache(tmp_path, source):
+    # 只截取上市日附近，避免测试生成无意义长历史。
+    root = str(tmp_path)
+    result = service.get_quote(root, "300308.SZ", start_date="all", end_date="2020-01-03")
+    assert result["ok"] and source[0][1] == "2020-01-01"
+    service.get_quote(root, "300308.SZ", start_date="all", end_date="2020-01-03")
+    assert len(source) == 1
+
+
+@pytest.mark.parametrize("code,indicator", [("300308.SZ", "ths_total_ashare_stock"),
+    ("200725.SZ", "ths_total_bshare_stock"), ("920002.BJ", "ths_total_ashare_stock")])
+def test_formula_matrix_share_type_and_layout(code, indicator):
+    fields, matrix = excel.formulas(code, ["2026-11-03", "2026-11-04"], "B股" if code == "200725.SZ" else "A股")
+    assert len(matrix) == 2 and len(matrix[0]) == len(fields) == 16
+    assert indicator in matrix[0][fields.index("security_total_shares")]
+    assert all('"2026-11-03"' in f for f in matrix[0])
+    assert '"ths_market_value_stock"' in matrix[0][fields.index("company_total_market_cap")]
+    assert '"ths_mv_sec_oriented_stock"' in matrix[0][fields.index("security_total_market_cap")]
+
+
+def test_missing_classification_does_not_guess():
+    fields, matrix = excel.formulas("200725.SZ", ["2026-11-04"], None)
+    assert "security_total_shares" not in fields and "close" in fields
+
+
+def test_failure_never_falls_back_to_legacy_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(company_ifind_service, "get_quote_security", lambda *a: {"股份类型": "A股"})
+    monkeypatch.setattr(excel, "fetch_quote", lambda *a: {"ok": False, "error": "插件不可用"})
+    monkeypatch.setattr(service.sina, "fetch_raw", lambda *a, **k: pytest.fail("不应回退新浪"))
+    result = service.get_quote(str(tmp_path), "300308.SZ", start_date="2026-11-03", end_date="2026-11-04")
+    assert not result["ok"] and "插件不可用" in result["error"]
+
+
+@pytest.mark.parametrize("kwargs", [{"vars": ["outstanding_share"]}, {"vars": ["float_market_cap"]},
+    {"vars": []}, {"start_date": "bad"}, {"start_date": "2026-11-05", "end_date": "2026-11-04"}])
+def test_invalid_input_never_fetches(tmp_path, monkeypatch, kwargs):
+    monkeypatch.setattr(excel, "fetch_quote", lambda *a: pytest.fail("非法参数不应取数"))
+    assert not service.get_quote(str(tmp_path), "300308.SZ", **kwargs)["ok"]
+
+
+def test_minimal_security_only_three_fields_and_cache(tmp_path, monkeypatch):
+    calls = []
+    def basic(root, mc, fields):
+        calls.append(fields)
+        return {"交易所": "深交所", "股份类型": "B股", "上市日期": "19970610"}
+    monkeypatch.setattr(company_ifind_service.company_ifind, "basic", basic)
+    mc = parse_code("200725.SZ")
+    assert company_ifind_service.get_quote_security(str(tmp_path), mc)["股份类型"] == "B股"
+    company_ifind_service.get_quote_security(str(tmp_path), mc)
+    assert len(calls) == 1 and len(calls[0]) == 3
+    assert not (tmp_path / "cache" / "companies.json").exists()
+
+
+def test_one_year_exports_only_requested_column(tmp_path, source):
+    result = service.get_quote(str(tmp_path), "300308.SZ", vars=["close"], adjust="qfq",
+        start_date="2025-11-05", end_date="2026-11-05")
+    assert result["auto_exported"] and result["total_items"] > 200 and len(source) == 1
+    assert open(result["path"], encoding="utf-8-sig").readline().strip() == "date,close"
+
+
+def test_matrix_error_column_does_not_become_successful_empty_cache(tmp_path, monkeypatch):
+    columns, _ = excel.formulas("300308.SZ", ["2026-11-04"], "A股")
+    values = [[100 if f == "amount" else 10 for f in columns]]
+    bad = columns.index("security_total_market_cap")
+    values[0][bad] = None
+    monkeypatch.setattr(excel.ifind_excel, "fetch_matrix", lambda *a, **k: {
+        "values": values, "errors": [{"row": 0, "column": bad, "error": "参数错误"}]})
+    result = excel.fetch_quote(str(tmp_path), parse_code("300308.SZ"),
+        "2026-11-04", "2026-11-04", {"股份类型": "A股"})
+    assert "close" in result["data"] and "security_total_market_cap" not in result["data"]
+    assert "参数错误" in result["notes"][0]
+
+
+def test_weekly_amount_volume_turnover_and_company_fields(tmp_path, source):
+    result = service.get_quote(str(tmp_path), "300308.SZ",
+        vars=["close", "volume", "amount", "turnover", "company_total_shares", "security_total_market_cap"],
+        start_date="2026-11-02", end_date="2026-11-05", period="weekly")
+    row = result["rows"][0]
+    assert row["amount"] == 4000 and row["turnover"] == 0.1
+    assert row["close"] == 15 and row["company_total_shares"] == 10000
+    assert row["security_total_market_cap"] == 60000
+
+
+def test_zero_calendar_tail_does_not_freeze_today_forever(tmp_path, monkeypatch, source):
+    original = excel.fetch_quote
+    def missing_tail(*args):
+        result = original(*args)
+        result["data"]["amount"][-1]["value"] = 0
+        return result
+    monkeypatch.setattr(excel, "fetch_quote", missing_tail)
+    root = str(tmp_path)
+    service.get_quote(root, "300308.SZ", start_date="2026-11-03", end_date="2026-11-05")
+    for field in excel.FIELDS:
+        path = tmp_path / "cache" / "300308.SZ" / cache.DATA_FILES[field]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["meta"]["updated_at"] = "2000-01-01T00:00:00"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    service.get_quote(root, "300308.SZ", start_date="2026-11-03", end_date="2026-11-05")
+    assert len(source) == 2 and source[-1][1] == "2026-11-04"

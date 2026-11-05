@@ -164,6 +164,14 @@ ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 }
 
 
+def close_ifind_excel(request: dict[str, Any]) -> dict[str, Any]:
+    from market_data_mcp.ifind_excel import close_excel
+    return {"tool": "close_ifind_excel", "ok": True, **close_excel()}
+
+
+ACTIONS["close_ifind_excel"] = close_ifind_excel
+
+
 def dispatch(request: dict[str, Any]) -> dict[str, Any]:
     tool = str(request.get("tool") or "")
     handler = ACTIONS.get(tool)
@@ -175,6 +183,7 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
         "get_financial_data_batch": {"tool", "codes", "amount_basis", "statements", "periods", "items", "top_n", "include_versions", "force_refresh", "export_path"},
         "get_market_data_help": {"tool", "arguments"},
         "get_company_profile_batch": {"tool", "codes", "information_type", "extra_parameters", "force_refresh"},
+        "close_ifind_excel": {"tool"},
     }
     if tool in parameters and set(request) - parameters[tool]:
         raise ValueError(f"未知参数：{sorted(set(request) - parameters[tool])}")

@@ -204,13 +204,13 @@ def test_get_quote_start_all_semantics():
 
     md_svc._ensure_fields = fake_ensure
     try:
-        r = md_svc.get_quote("tmp", "600519.SH", vars=["close"], start_date="all")
+        r = md_svc.get_quote("tmp", "00700.HK", vars=["close"], start_date="all")
         assert r["ok"]
         assert r["start"] == "all"
         assert captured["start"] == "1990-01-01"
         assert captured["end"] is None
         # end 指定时
-        r2 = md_svc.get_quote("tmp", "600519.SH", vars=["close"],
+        r2 = md_svc.get_quote("tmp", "00700.HK", vars=["close"],
                               start_date="all", end_date="2025-06-30")
         assert r2["ok"]
         assert r2["end"] == "2025-06-30"
@@ -237,7 +237,7 @@ def test_get_quote_start_all_early_data(fake_root, monkeypatch):
 
     md_svc._ensure_fields = fake_ensure
     try:
-        r = md_svc.get_quote("tmp", "600519.SH", vars=["close"],
+        r = md_svc.get_quote("tmp", "00700.HK", vars=["close"],
                              start_date="all", end_date="2025-12-31")
         assert r["ok"]
         rows = r.get("rows") or []
