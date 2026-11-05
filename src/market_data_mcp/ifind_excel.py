@@ -78,6 +78,19 @@ def fetch_formulas(formulas: list[str], *, visible: bool | None = None,
     return _call("fetch", formulas=list(formulas), visible=visible, timeout=timeout)
 
 
+def fetch_matrix(formulas: list[list[str]], *, visible: bool | None = None,
+                 timeout: float = 600) -> dict:
+    """日期×字段的完整公式矩阵一次写入、整块读取；错误单元格单独报告。"""
+    if not formulas or not isinstance(formulas[0], list) or not formulas[0]:
+        raise ValueError("需要非空的二维 iFinD 公式矩阵")
+    width = len(formulas[0])
+    if any(not isinstance(row, list) or len(row) != width or
+           any(not isinstance(f, str) or not f.lower().startswith(
+               ("=@thsifind(", "=thsifind(")) for f in row) for row in formulas):
+        raise ValueError("公式矩阵必须为等宽的普通 thsiFinD 公式行")
+    return _call("fetch", matrix=formulas, visible=visible, timeout=timeout)
+
+
 def get_market_value(code: str, start: str, end: str, *,
                      visible: bool | None = None, timeout: float = 120) -> dict:
     """用已实测模板按日历日查询总市值，不读写业务缓存、不回退 SDK。"""
@@ -326,12 +339,14 @@ def _execute(request: dict, deadline: float) -> dict:
                 "startup_personal_readonly": startup_prompts}
     if operation != "fetch":
         raise ValueError(f"未知内部操作：{operation}")
-    formulas = request["formulas"]
-    region = sheet.Range(f"A1:A{len(formulas)}")
+    matrix_mode = "matrix" in request
+    formulas = request["matrix"] if matrix_mode else [[f] for f in request["formulas"]]
+    height, width = len(formulas), len(formulas[0])
+    region = sheet.Range(sheet.Cells(1, 1), sheet.Cells(height, width))
     metrics = {}
     try:
         stamp = time.perf_counter()
-        region.Formula2 = tuple((formula,) for formula in formulas)
+        region.Formula2 = tuple(tuple(row) for row in formulas)
         metrics["formula_write_seconds"] = time.perf_counter() - stamp
         polls = 0
         while True:
@@ -343,19 +358,25 @@ def _execute(request: dict, deadline: float) -> dict:
             try:
                 stamp = time.perf_counter()
                 raw = region.Value2
-                values = [raw] if len(formulas) == 1 else [row[0] for row in raw]
+                values = [[raw]] if height == width == 1 else [list(row) for row in raw]
                 metrics["read_seconds"] = time.perf_counter() - stamp
                 loading = False
-                for index, value in enumerate(values, 1):
-                    if isinstance(value, int) and value < -2000000000:
-                        value = str(sheet.Cells(index, 1).Text)
-                    if isinstance(value, str):
-                        if any(word in value for word in LOADING):
+                errors = []
+                for row_index, row in enumerate(values):
+                    for col_index, value in enumerate(row):
+                        if isinstance(value, int) and value < -2000000000:
+                            value = str(sheet.Cells(row_index + 1, col_index + 1).Text)
+                        if isinstance(value, str) and any(word in value for word in LOADING):
                             loading = True
-                        else:
-                            raise RuntimeError(f"iFinD 单元格 A{index} 返回：{value}")
-                    elif value is not None and not isinstance(value, (int, float)):
-                        raise RuntimeError(f"iFinD 单元格 A{index} 类型异常：{type(value).__name__}")
+                            continue
+                        invalid = isinstance(value, str) or (value is not None and
+                            (not isinstance(value, (int, float)) or not math.isfinite(value)))
+                        if invalid:
+                            message = f"iFinD 单元格({row_index + 1},{col_index + 1})返回：{value}"
+                            if not matrix_mode:
+                                raise RuntimeError(message)
+                            errors.append({"row": row_index, "column": col_index, "error": message})
+                            row[col_index] = None
                 if not loading and app.CalculationState == 0:
                     break
             except pythoncom.com_error:
@@ -363,7 +384,11 @@ def _execute(request: dict, deadline: float) -> dict:
         metrics["polls"] = polls
     finally:
         sheet.Cells.ClearContents()
-    return {**_snapshot(app, book, pid), "reused": reused, "values": values, "metrics": metrics}
+    result = {**_snapshot(app, book, pid), "reused": reused,
+              "values": values if matrix_mode else [row[0] for row in values], "metrics": metrics}
+    if matrix_mode:
+        result["errors"] = errors
+    return result
 
 
 def _worker(request: dict) -> dict:

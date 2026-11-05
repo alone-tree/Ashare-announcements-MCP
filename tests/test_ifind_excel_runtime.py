@@ -60,6 +60,20 @@ def test_invalid_input_never_launches_excel(monkeypatch):
         ifind_excel.fetch_formulas([])
     with pytest.raises(ValueError):
         ifind_excel.fetch_formulas(["=SUM(1,2)"])
+    for matrix in ([], [[]], [["=SUM(1,2)"]], [["=@thsiFinD(1)"], []]):
+        with pytest.raises(ValueError):
+            ifind_excel.fetch_matrix(matrix)
+
+
+def test_matrix_is_one_worker_request_with_rows_and_columns(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ifind_excel, "_call", lambda operation, **kw: calls.append(
+        (operation, kw)) or {"values": [[10, None], [0, 20]], "errors": []})
+    formulas = [[f'=@thsiFinD("field{col}","300308.SZ","2026-11-0{day}")'
+                 for col in (1, 2)] for day in (3, 4)]
+    result = ifind_excel.fetch_matrix(formulas, visible=False)
+    assert len(calls) == 1 and calls[0][1]["matrix"] == formulas
+    assert result["values"] == [[10, None], [0, 20]]
 
 
 def test_whole_worker_deadline_becomes_timeout(monkeypatch):
