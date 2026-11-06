@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import secrets
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -162,6 +163,12 @@ def _resample(rows: list[dict], period: str, *, sum_fields=("volume", "amount"))
                 row[k] = g[-1].get(k)
         out.append(row)
     return out
+
+
+def _auto_export_name(code: str, adjust: str, period: str, vars: list[str]) -> str:
+    """自动导出文件名：vars标签+时间戳+随机ID，避免不同请求互相覆盖（方案见 docs/内地行情开市日过滤与后复权收盘切换方案-2026-11-06.md）。"""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{code}_{adjust}_{period}_{'-'.join(vars)}_{stamp}_{secrets.token_hex(2)}.csv"
 
 
 def _export_csv(path: str, rows: list[dict], cols: list[str]) -> None:
@@ -413,7 +420,7 @@ def _get_legacy_quote(
                 "date_range": date_range, "source": source, "notes": notes or None}
     if len(out_rows) > 200:
         auto_path = os.path.join(root, "cache", "_auto_export",
-                                 f"{mc.code}.{mc.suffix}_{adjust}_{period}_{start or 'all'}_{end or 'latest'}.csv")
+                                 _auto_export_name(f"{mc.code}.{mc.suffix}", adjust, period, vars))
         _export_csv(auto_path, out_rows, cols)
         return {"ok": True, "market": mc.market, "code": f"{mc.code}.{mc.suffix}",
                 "start": resp_start, "end": resp_end, "adjust": adjust, "period": period,
