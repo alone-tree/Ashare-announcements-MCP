@@ -23,12 +23,16 @@ def source(monkeypatch):
         for field in excel.FIELDS:
             records = []
             for i, day in enumerate(days):
-                value = {"amount": 0 if date.fromisoformat(day).weekday() >= 5 else 1000,
+                weekday = date.fromisoformat(day).weekday()
+                value = {"amount": 0 if weekday >= 5 else 1000,
                     "turnover": 2.5, "company_total_shares": 10000, "security_total_shares": 6000,
                     "company_total_market_cap": 100000, "security_total_market_cap": 60000}.get(field)
                 if value is None:
                     value = 10 + date.fromisoformat(day).day
-                    if field.endswith("_hfq"):
+                    if field == "close_no_forward":
+                        # 0=周末节假日休市；停牌日不模拟为0（依据 docs/内地行情开市日过滤与后复权收盘切换方案-2026-11-06.md）。
+                        value = 0 if weekday >= 5 else value * 5
+                    elif field.endswith("_hfq"):
                         value *= 5
                 records.append({"date": day, "value": value, "source": excel.SOURCE})
             data[field] = records
@@ -166,7 +170,7 @@ def test_zero_calendar_tail_does_not_freeze_today_forever(tmp_path, monkeypatch,
     original = excel.fetch_quote
     def missing_tail(*args):
         result = original(*args)
-        result["data"]["amount"][-1]["value"] = 0
+        result["data"]["close_no_forward"][-1]["value"] = 0
         return result
     monkeypatch.setattr(excel, "fetch_quote", missing_tail)
     root = str(tmp_path)
@@ -178,3 +182,55 @@ def test_zero_calendar_tail_does_not_freeze_today_forever(tmp_path, monkeypatch,
         path.write_text(json.dumps(payload), encoding="utf-8")
     service.get_quote(root, "300308.SZ", start_date="2026-11-03", end_date="2026-11-05")
     assert len(source) == 2 and source[-1][1] == "2026-11-04"
+
+
+def test_formula_close_no_forward_replaces_close_hfq_and_raw_close_kept():
+    fields, matrix = excel.formulas("300308.SZ", ["2026-11-04"], "A股")
+    assert "close_no_forward" in fields and "close_hfq" not in fields
+    no_forward = matrix[0][fields.index("close_no_forward")]
+    assert '"close_no_forward"' in no_forward and ",107)" in no_forward
+    raw_close = matrix[0][fields.index("close")]
+    assert '"ths_close_price_stock"' in raw_close and ",100," in raw_close
+
+
+def test_suspension_days_kept_and_market_closed_dropped(tmp_path, monkeypatch):
+    """方案-2026-11-06：no_fwd>0 的停牌日保留且量额换手为0；no_fwd=0 的周末剔除。"""
+    monkeypatch.setattr(company_ifind_service, "get_quote_security",
+        lambda root, mc: {"股份类型": "A股", "上市日期": "20200101"})
+
+    def fetch(root, mc, start, end, security):
+        days = [(date.fromisoformat(start) + timedelta(days=i)).isoformat()
+                for i in range((date.fromisoformat(end) - date.fromisoformat(start)).days + 1)]
+        data = {}
+        for field in excel.FIELDS:
+            records = []
+            for day in days:
+                d = date.fromisoformat(day)
+                weekend = d.weekday() >= 5
+                suspended = day == "2026-11-05"
+                price = 10 + d.day
+                value = {"amount": 0 if weekend or suspended else 1000,
+                    "turnover": 0 if weekend or suspended else 2.5,
+                    "company_total_shares": 10000, "security_total_shares": 6000,
+                    "company_total_market_cap": 100000, "security_total_market_cap": 60000}.get(field)
+                if value is None:
+                    if field == "close_no_forward":
+                        value = 0 if weekend else price * 5
+                    elif field.endswith("_hfq"):
+                        value = price * 5
+                    else:
+                        value = price
+                records.append({"date": day, "value": value, "source": excel.SOURCE})
+            data[field] = records
+        return {"ok": True, "source": excel.SOURCE, "data": data, "notes": []}
+
+    monkeypatch.setattr(excel, "fetch_quote", fetch)
+    result = service.get_quote(str(tmp_path), "300308.SZ",
+        vars=["close", "volume", "amount", "turnover"],
+        start_date="2026-11-02", end_date="2026-11-08", adjust="qfq")
+    dates = [r["date"] for r in result["rows"]]
+    assert dates == ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06"]
+    susp = result["rows"][3]
+    assert susp["date"] == "2026-11-05"
+    assert susp["close"] == pytest.approx(15.0)
+    assert susp["volume"] == 0 and susp["amount"] == 0 and susp["turnover"] == 0.0

@@ -14,9 +14,9 @@ def _read_raw(root: str, code: str, field: str):
 
 class TestCacheFiles:
     def test_field_files(self):
-        """字段级 json（2026-08-09 拍板；2026-11-04 增 total_market_cap）。"""
+        """字段级 json（2026-08-09 拍板；2026-11-04 增 total_market_cap；2026-11-06 增 close_no_forward）。"""
         assert set(cache.DATA_FILES) == {
-            "open", "high", "low", "close", "close_hfq",
+            "open", "high", "low", "close", "close_hfq", "close_no_forward",
             "volume", "amount", "total_shares", "floating_shares", "total_market_cap",
             "open_hfq", "high_hfq", "low_hfq", "avg_price", "avg_price_hfq", "turnover",
             "company_total_shares", "security_total_shares", "company_total_market_cap", "security_total_market_cap",

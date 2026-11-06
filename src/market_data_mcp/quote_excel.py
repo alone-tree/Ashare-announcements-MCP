@@ -10,6 +10,11 @@ PUBLIC_FIELDS = tuple(excel.PRICE_CODES) + ("volume", "amount", "turnover",
     "company_total_shares", "security_total_shares", "company_total_market_cap", "security_total_market_cap")
 
 
+def _hfq_key(field):
+    """后复权缓存键：close 走 close_no_forward 独立字段（方案见 docs/内地行情开市日过滤与后复权收盘切换方案-2026-11-06.md），其余价类仍为 *_hfq。"""
+    return "close_no_forward" if field == "close" else f"{field}_hfq"
+
+
 def _cached(root, code, field):
     payload = cache.read_cache(root, code, field)
     if payload and payload.get("meta", {}).get("source") == excel.SOURCE:
@@ -21,13 +26,13 @@ def ensure_fields(root, mc, required, start, end, *, all_history=False):
     """一次检查、一次整包补取；绝不因其他字段再次执行同区间Excel。"""
     code = f"{mc.code}.{mc.suffix}"
     current = {f: _cached(root, code, f) for f in required}
-    amount = current.get("amount")
-    traded = [r["date"] for r in (amount or {}).get("items", []) if
-              isinstance(r.get("value"), (int, float)) and r["value"] > 0]
-    # 日历尾部可能是周末零值或尚未更新的当日；不能因此宣称永久覆盖。
-    last_trade = max(traded) if traded else None
+    opened = current.get("close_no_forward")
+    open_days = [r["date"] for r in (opened or {}).get("items", []) if
+                 isinstance(r.get("value"), (int, float)) and r["value"] > 0]
+    # 日历尾部可能是休市日或尚未更新的当日；不能因此宣称永久覆盖。
+    last_open = max(open_days) if open_days else None
     yesterday = (date.today() - timedelta(days=1)).isoformat()
-    watermark = min(last_trade, yesterday) if last_trade else None
+    watermark = min(last_open, yesterday) if last_open else None
     def coverage_meta(payload):
         meta = payload["meta"]
         end_date = meta["date_range"]["end"]
@@ -80,15 +85,16 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
     except (ValueError, TypeError) as exc:
         return {"ok": False, "error": f"日期参数错误：{exc}"}
     fields = {ALIASES.get(f, f) for f in selected}
-    # 日期识别和成交量共用量额/均价，不凭日历或价格连续相同判断休市。
-    required = {"amount", "avg_price"}
+    # 依据 docs/内地行情开市日过滤与后复权收盘切换方案-2026-11-06.md：开市日以 close_no_forward>0 识别（0=周末节假日休市）；
+    # 公司停牌及全天零成交日保留，量额换手为0；成交量仍由成交额÷均价派生。
+    required = {"amount", "avg_price", "close_no_forward"}
     for field in fields:
         if field in excel.PRICE_CODES and adjust != "raw":
-            required.add(f"{field}_hfq")
+            required.add(_hfq_key(field))
         elif field != "volume":
             required.add(field)
     if adjust == "qfq" and fields & set(excel.PRICE_CODES):
-        required.update({"close", "close_hfq"})
+        required.update({"close", "close_no_forward"})
         if "avg_price" in fields:
             required.update({"avg_price", "avg_price_hfq"})
     cached, notes = ensure_fields(root, mc, required, start, end, all_history=start_date == "all")
@@ -98,23 +104,24 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
     series = {f: {r["date"]: r["value"] for r in payload["items"] if r.get("source") == excel.SOURCE}
               for f, payload in cached.items() if payload}
     days = sorted({d for values in series.values() for d in values if start <= d <= end})
-    active = [d for d in days if isinstance(series.get("amount", {}).get(d), (int, float))
-              and series["amount"][d] > 0]
+    active = [d for d in days if isinstance(series.get("close_no_forward", {}).get(d), (int, float))
+              and series["close_no_forward"][d] > 0]
     missing = sorted(f for f in required if not cached.get(f))
     if missing:
         notes.append("缺少行情字段：" + "、".join(missing))
     if not series:
         return {"ok": False, "error": "；".join(notes) or "Excel未返回可用数据"}
-    notes.append("日期仅列有成交日；日历日原值保留在缓存，周末及全天无成交日不进入周月聚合")
+    notes.append("日期列出全部市场开市日（close_no_forward大于0）；公司停牌及全天零成交日保留，量额换手为0")
     scales = {}
     if adjust == "qfq":
         for field in ("close", "avg_price"):
+            hfq_key = _hfq_key(field)
             anchors = [d for d in active if isinstance(series.get(field, {}).get(d), (int, float))
-                and isinstance(series.get(f"{field}_hfq", {}).get(d), (int, float))
-                and series[f"{field}_hfq"][d] != 0]
+                and isinstance(series.get(hfq_key, {}).get(d), (int, float))
+                and series[hfq_key][d] != 0]
             if anchors:
                 d = anchors[-1]
-                scales[field] = series[field][d] / series[f"{field}_hfq"][d]
+                scales[field] = series[field][d] / series[hfq_key][d]
         if fields & set(excel.PRICE_CODES) and "close" not in scales:
             notes.append("缺少同日原始/后复权收盘价，无法确定前复权基点")
     rows = []
@@ -125,7 +132,7 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
         for field in fields:
             if field in ("volume", "amount"):
                 continue
-            key = f"{field}_hfq" if field in excel.PRICE_CODES and adjust != "raw" else field
+            key = _hfq_key(field) if field in excel.PRICE_CODES and adjust != "raw" else field
             value = series.get(key, {}).get(day)
             if field in excel.PRICE_CODES and adjust == "qfq":
                 scale = scales.get("avg_price" if field == "avg_price" else "close")
@@ -142,9 +149,9 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
         rows.append(row)
     if period != "daily":
         rows = _resample(rows, period, sum_fields=("volume", "amount", "turnover"))
-        notes.append(f"{period}线由有成交日日线聚合；量额及换手率累计，股本市值取期末")
+        notes.append(f"{period}线由开市日日线聚合；量额及换手率累计，股本市值取期末")
     output = [{"date": r["date"], **{f: r.get(ALIASES.get(f, f)) for f in selected}} for r in rows]
-    # 只有成交额/均价供日期识别时，不能将其他全空的请求字段标为成功。
+    # 日期骨架来自 close_no_forward；只有它可用而请求字段全空时，不能将请求字段标为成功。
     available = any(r.get(f) is not None for r in output for f in selected)
     incomplete = bool(missing) or any(r.get(f) is None for r in output for f in selected) or any(
         "失败" in n or "返回：" in n for n in notes)

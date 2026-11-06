@@ -8,7 +8,8 @@ SOURCE = "ifind_excel"
 PRICE_CODES = {"open": "ths_open_price_stock", "high": "ths_high_price_stock",
                "low": "ths_low_stock", "close": "ths_close_price_stock",
                "avg_price": "ths_avg_price_stock"}
-FIELDS = tuple(PRICE_CODES) + tuple(f"{f}_hfq" for f in PRICE_CODES) + (
+FIELDS = tuple(PRICE_CODES) + tuple(
+    "close_no_forward" if f == "close" else f"{f}_hfq" for f in PRICE_CODES) + (
     "amount", "turnover", "company_total_shares", "security_total_shares",
     "company_total_market_cap", "security_total_market_cap")
 
@@ -19,7 +20,11 @@ def formulas(code, days, share_type):
     for field, indicator in PRICE_CODES.items():
         specs[field] = (indicator, 100, "") if field != "avg_price" else (indicator, 100)
     for field, indicator in PRICE_CODES.items():
-        specs[f"{field}_hfq"] = (indicator, 107, "") if field != "avg_price" else (indicator, 107)
+        if field == "close":
+            # 依据 docs/内地行情开市日过滤与后复权收盘切换方案-2026-11-06.md：后复权收盘改用用户提供的 close_no_forward 原式。
+            specs["close_no_forward"] = ("close_no_forward", 107)
+        else:
+            specs[f"{field}_hfq"] = (indicator, 107, "") if field != "avg_price" else (indicator, 107)
     specs.update({"amount": ("ths_amt_stock",), "turnover": ("ths_turnover_ratio_stock",),
         "company_total_shares": ("ths_total_shares_stock",),
         "company_total_market_cap": ("ths_market_value_stock",),

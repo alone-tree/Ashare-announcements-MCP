@@ -50,6 +50,7 @@ DATA_FILES = {
     "total_market_cap": "total_market_cap.json",
     **{field: f"{field}.json" for field in (
         "open_hfq", "high_hfq", "low_hfq", "avg_price", "avg_price_hfq", "turnover",
+        "close_no_forward",
         "company_total_shares", "security_total_shares", "company_total_market_cap", "security_total_market_cap")},
 }
 
