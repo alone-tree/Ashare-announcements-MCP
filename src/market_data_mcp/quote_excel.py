@@ -38,8 +38,21 @@ def ensure_fields(root, mc, required, start, end, *, all_history=False):
         end_date = meta["date_range"]["end"]
         return {**meta, "date_range": {**meta["date_range"],
             "end": min(end_date, watermark) if watermark else None}}
-    missing = [f for f, payload in current.items() if not payload or not cache.coverage(
-        coverage_meta(payload), None if all_history else start, end)]
+    missing = []
+    expected_start = None
+    if all_history:
+        # start=all 覆盖前提：骨架字段缓存起点不晚于上市日（方案见 docs/内地行情开市日过滤与后复权收盘切换方案-2026-11-06.md）。
+        # 上市日读本地security记录，不在此处触发SDK；其他字段不做起点校验（上游历史边界各自不同，如B股成交额）。
+        from market_data_mcp import data_store
+        record = data_store.read(root, code, "company_data", "security", "ifind")
+        ipo = str((record or {}).get("data", {}).get("上市日期") or "")
+        if len(ipo) == 8 and ipo.isdigit():
+            expected_start = f"{ipo[:4]}-{ipo[4:6]}-{ipo[6:]}"
+    for f, payload in current.items():
+        cov_start = expected_start if (all_history and f == "close_no_forward") else (
+            None if all_history else start)
+        if not payload or not cache.coverage(coverage_meta(payload), cov_start, end):
+            missing.append(f)
     notes = []
     if missing:
         security = {}
@@ -50,6 +63,11 @@ def ensure_fields(root, mc, required, start, end, *, all_history=False):
         pull_start = min(((coverage_meta(current[f])["date_range"]["end"] or start)
             if current[f] and (all_history or current[f]["meta"]["date_range"]["start"] <= start) else start)
             for f in missing)
+        if all_history and "close_no_forward" in missing:
+            nf_start = (current.get("close_no_forward") or {}).get("meta", {}).get(
+                "date_range", {}).get("start")
+            if nf_start and expected_start and nf_start > expected_start:
+                pull_start = min(pull_start, expected_start)
         if all_history and pull_start == "1990-01-01":
             ipo = str(security.get("上市日期") or "")
             if len(ipo) == 8 and ipo.isdigit():
@@ -66,7 +84,7 @@ def ensure_fields(root, mc, required, start, end, *, all_history=False):
 
 def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
               period="daily", export_path=None):
-    from market_data_mcp.service import _default_start, _export_csv, _resample
+    from market_data_mcp.service import _auto_export_name, _default_start, _export_csv, _resample
 
     code = f"{mc.code}.{mc.suffix}"
     selected = ["close"] if vars is None else vars
@@ -171,7 +189,8 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
     if output:
         result["date_range"] = {"start": output[0]["date"], "end": output[-1]["date"]}
     if export_path or len(output) > 200:
-        target = export_path or os.path.join(root, "cache", "_auto_export", f"{code}_{adjust}_{period}_{start}_{end}.csv")
+        target = export_path or os.path.join(root, "cache", "_auto_export",
+            _auto_export_name(code, adjust, period, selected))
         _export_csv(target, output, ["date"] + selected)
         result.update(path=target, total_items=len(output))
         if not export_path:

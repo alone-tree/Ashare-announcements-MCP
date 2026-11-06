@@ -1,5 +1,6 @@
 """内地公共入口的业务回归：整包、复权、缓存隔离、增量和字段失败。"""
 import json
+import re
 from datetime import date, timedelta
 
 import pytest
@@ -92,6 +93,19 @@ def test_all_history_reuses_listing_start_cache(tmp_path, source):
     assert len(source) == 1
 
 
+def test_all_history_backfills_partial_skeleton_cache(tmp_path, source):
+    """方案-2026-11-06：骨架缓存起点晚于上市日时，start=all 从上市日补缺口而非静默缩水。"""
+    root = str(tmp_path)
+    data_store.write(root, "300308.SZ", "company_data", "security", {
+        "meta": {"schema_version": 2, "source": "ifind"},
+        "data": {"股份类型": "A股", "交易所": "深交所", "上市日期": "20200101"},
+        "checked_at": "2026-11-06T00:00:00+00:00"})
+    service.get_quote(root, "300308.SZ", start_date="2026-11-03", end_date="2026-11-04")
+    result = service.get_quote(root, "300308.SZ", start_date="all", end_date="2020-01-05")
+    assert source[-1][1:3] == ("2020-01-01", "2020-01-05")
+    assert result["ok"] and result["date_range"]["start"] == "2020-01-01"
+
+
 @pytest.mark.parametrize("code,indicator", [("300308.SZ", "ths_total_ashare_stock"),
     ("200725.SZ", "ths_total_bshare_stock"), ("920002.BJ", "ths_total_ashare_stock")])
 def test_formula_matrix_share_type_and_layout(code, indicator):
@@ -141,6 +155,16 @@ def test_one_year_exports_only_requested_column(tmp_path, source):
         start_date="2025-11-05", end_date="2026-11-05")
     assert result["auto_exported"] and result["total_items"] > 200 and len(source) == 1
     assert open(result["path"], encoding="utf-8-sig").readline().strip() == "date,close"
+    name = result["path"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    assert "_close_" in name and re.search(r"_\d{8}-\d{6}_[0-9a-f]{4}\.csv$", name)
+
+
+def test_auto_export_names_never_collide(tmp_path, source):
+    first = service.get_quote(str(tmp_path), "300308.SZ", vars=["close"], adjust="qfq",
+        start_date="2025-11-05", end_date="2026-11-05")
+    second = service.get_quote(str(tmp_path), "300308.SZ", vars=["close"], adjust="qfq",
+        start_date="2025-11-05", end_date="2026-11-05")
+    assert first["path"] != second["path"]
 
 
 def test_matrix_error_column_does_not_become_successful_empty_cache(tmp_path, monkeypatch):
