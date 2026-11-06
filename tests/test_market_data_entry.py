@@ -90,6 +90,7 @@ class TestServer:
         assert [t.name for t in tools] == [
             "get_quote", "get_financial_data", "get_market_data_help", "get_company_profile",
             "get_quote_chart",
+            "search_securities",
             "close_ifind_excel",
         ]
         quote_schema = tools[0].parameters

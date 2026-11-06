@@ -38,6 +38,9 @@ TOOLS = {
                              "topic_notes": {"tools": "工具说明", "items": "科目/字段", "ranges": "覆盖边界",
                                              "refresh": "刷新规则", "cache": "本地缓存", "export": "导出"}},
     "close_ifind_excel": {"parameters": [], "example": {}, "output": "关闭本运行包专用Excel，不影响其他工作簿"},
+    "search_securities": {"parameters": ["keyword"], "required": ["keyword"],
+                          "example": {"keyword": "旭创"}, "source": "东方财富公开证券搜索，独立直连，无需建档或付费账号",
+                          "output": "原始候选、证券类型及standard_code；无法转换时standard_code为空，不表示同一家公司"},
 }
 
 

@@ -3,7 +3,7 @@
 
 从 stdin 读取一个 JSON 请求，stdout 只输出一个 JSON 响应。
 tool 支持：get_quote_batch / get_financial_data_batch / get_market_data_help /
-get_company_profile_batch / get_quote_chart_batch。
+get_company_profile_batch / get_quote_chart_batch / search_securities / close_ifind_excel。
 顶层请求字段是 `tool`（与公告 MCP CLI 一致），响应字段也是 `tool`。
 数据根目录：MARKET_DATA_ROOT 环境变量（默认当前目录）。
 """
@@ -19,7 +19,7 @@ from typing import Any, Callable
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from market_data_mcp import chart_service, company_service, financial_service, market_help, service
+from market_data_mcp import chart_service, company_service, financial_service, market_help, security_search, service
 
 
 def _data_root() -> str:
@@ -155,12 +155,17 @@ def get_quote_chart_batch(request: dict[str, Any]) -> dict[str, Any]:
     return _batch_response("get_quote_chart_batch", items, "results")
 
 
+def search_securities(request: dict[str, Any]) -> dict[str, Any]:
+    return {**security_search.search_securities(request.get("keyword")), "tool": "search_securities"}
+
+
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "get_quote_batch": get_quote_batch,
     "get_financial_data_batch": get_financial_data_batch,
     "get_market_data_help": get_market_data_help,
     "get_company_profile_batch": get_company_profile_batch,
     "get_quote_chart_batch": get_quote_chart_batch,
+    "search_securities": search_securities,
 }
 
 
@@ -184,6 +189,7 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
         "get_market_data_help": {"tool", "arguments"},
         "get_company_profile_batch": {"tool", "codes", "information_type", "extra_parameters", "force_refresh"},
         "close_ifind_excel": {"tool"},
+        "search_securities": {"tool", "keyword"},
     }
     if tool in parameters and set(request) - parameters[tool]:
         raise ValueError(f"未知参数：{sorted(set(request) - parameters[tool])}")

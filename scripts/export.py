@@ -54,7 +54,7 @@ USER_README = """# 投资数据 MCP（用户版）：公告阅读 + market-data
 | MCP | 包 | 入口 | 能力 |
 |---|---|---|---|
 | A股公告阅读 | `ashare_announcements_mcp` | `ashare_announcements_mcp/server.py` | A/H/B 股公告（东财）+ 美股公告（SEC EDGAR）+ 互动问答；建档/查询/阅读/检索 |
-| market-data | `market_data_mcp` | `market_data_mcp/server.py` | 内地Excel整组行情及公司/证券总股本市值；港美保留既有通道；财报/概况；行情绘图及专用Excel关闭 |
+| market-data | `market_data_mcp` | `market_data_mcp/server.py` | 独立证券搜索；内地Excel整组行情及公司/证券总股本市值；港美保留既有通道；财报/概况；行情绘图及专用Excel关闭 |
 
 ## MCP 注册（stdio）
 
@@ -68,13 +68,15 @@ market-data 建议显式设置环境变量 `MARKET_DATA_ROOT` 为本目录绝对
 
 ```bat
 echo {"tool": "query_batch", "stock_codes": ["600519"]} | python ashare_announcements_mcp\\cli.py
+echo {"tool": "search_securities", "keyword": "旭创"} | python market_data_mcp\\cli.py
 echo {"tool": "get_quote_batch", "codes": ["600519.SH"], "vars": ["close"]} | python market_data_mcp\\cli.py
 echo {"tool": "get_financial_data_batch", "codes": ["600519.SH"], "amount_basis": "single", "items": ["营业收入", "毛利率"]} | python market_data_mcp\\cli.py
 echo {"tool": "get_market_data_help", "arguments": {"topic": "tools"}} | python market_data_mcp\\cli.py
 echo {"tool": "get_quote_chart_batch", "codes": ["600519.SH"]} | python market_data_mcp\\cli.py
 ```
 
-CLI 顶层请求字段是 `tool`，与 MCP 工具一一对应；market-data 代码必须带市场后缀
+CLI 顶层请求字段是 `tool`，与 MCP 工具一一对应；search_securities可按关键词查找候选，
+其余market-data取数入口的股票代码必须带市场后缀
 （600519.SH / 920002.BJ / 00700.HK / AAPL.US）；汇率代码和取数边界通过get_market_data_help查询。
 
 ## 依赖安装

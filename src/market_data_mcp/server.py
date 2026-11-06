@@ -6,6 +6,7 @@
 - get_financial_data: 财报、营收结构及本地计算指标
 - get_market_data_help: 纯本地能力及缓存帮助
 - get_company_profile: 公司概况/IPO/分红/盈利预测/股东
+- search_securities: 名称或代码搜索证券候选，提供带市场后缀的标准代码
 - get_quote_chart: 行情绘图（K线/折线 PNG，事件标注/高低点；引擎 chart_service.py，
   原 market-data-chart MCP，2026-10-19 并入）
 
@@ -39,7 +40,7 @@ try:
 except Exception:  # 兼容 mcp 版本差异
     pass
 
-from market_data_mcp import chart_service, company_service
+from market_data_mcp import chart_service, company_service, security_search
 from market_data_mcp.financial_service import get_financial_data as get_financial_data_service
 from market_data_mcp.market_help import get_market_data_help as get_market_data_help_service
 from market_data_mcp.service import get_quote as get_quote_service
@@ -389,6 +390,15 @@ def create_server() -> Any:
             end_date=end_date, period=period, log_scale=log_scale, field=field,
             events=events, keypoints=keypoints, drawdown_threshold=drawdown_threshold,
         )
+
+    @mcp.tool()
+    def search_securities(keyword: str) -> dict[str, Any]:
+        """按公司名称、简称、简称片段或代码搜索证券候选，无需建档或付费账号。
+
+        standard_code为可直接传给市场数据工具的带后缀股票代码；无法转换的候选留空。
+        保留上游候选及证券类型，可能包含非股票；搜索命中不代表同一家公司。
+        """
+        return _wrap(security_search.search_securities)(keyword)
 
     @mcp.tool()
     def close_ifind_excel() -> dict[str, Any]:
