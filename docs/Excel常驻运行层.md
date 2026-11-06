@@ -11,7 +11,7 @@
 
 本模块不依赖 `iFinDPy`、MCP、CLI、provider、业务缓存或 SDK 登录。路径由模块自身的 `__file__` 计算，不根据 cwd 或 `MARKET_DATA_ROOT` 定位。普通 Python 工作进程负责 COM 调用；Excel 保持常驻。相同完整工作簿路径使用 Windows 命名互斥锁，不同目录分别管理。
 
-导出脚本现已声明Windows COM依赖并携带空白专用工作簿，本轮未实际导出用户版。
+导出脚本声明Windows COM依赖并携带空白专用工作簿；实际导出与验收的有日期记录见[决策记录](决策记录.md)。
 
 ## Python 调用
 

@@ -26,7 +26,7 @@ get_quote参数签名、raw/hfq/qfq、daily/weekly/monthly、最近14自然日�
 
 ## 2. 最小证券资料
 
-company_ifind_service.get_quote_security只用已验证SDK原式取得交易所、股份类型、上市日期。记录位于数据根cache/{标准代码}/company_data/security.json，使用data_store的schema_version=2、source=ifind及30天刷新规则。不实施完整工商/IPO重分组，不增加公开公司查询工具。
+company_ifind_service.get_quote_security只用已验证SDK原式取得交易所、股份类型、上市日期。记录位于数据根cache/{标准代码}/company_data/security.json，使用data_store的schema_version=2、source=ifind及30天刷新规则。不实施完整工商/IPO重分组。公开证券搜索是独立入口，见[总架构§9](market-data架构设计.md#9-证券搜索工具-search_securities)。
 
 行情缓存覆盖时不请求证券资料或启动Excel。需要取数且资料不存在或过期时才请求SDK；资料失败不阻断无需分类的价格，未知股份类型不默认A股，证券总股本明确缺失。缺少分类时价格单位标明未确认，不按数字前缀推断。
 
@@ -46,7 +46,7 @@ company_ifind_service.get_quote_security只用已验证SDK原式取得交易所�
 
 后复权OHL和均价读取107参数原式列，后复权收盘读取close_no_forward原式列（与107收盘逐位一致，2026-11-06实测见[支持情况§16](../字段与数据源支持情况.md)）。前复权在请求范围末端有成交日中选择同日有效原始/后复权收盘价作锚：前复权价格=后复权价格×锚定原始收盘价÷锚定后复权收盘价；均价使用自身同日原始/后复权均价比例，避免B股币种混用。缺基点不给伪造价格，基础缓存不因输出复权类型改变。
 
-股本、市值、量额及换手率不随价格复权。周/月由有成交日加工：OHLC常规聚合，量额和每日换手率累计，股本市值取期末，均价按日均价与不复权成交量加权。不调用其他源填充日期。
+股本、市值、量额及换手率不随价格复权。周/月由上述开市日行加工：OHLC常规聚合，量额和每日换手率累计，股本市值取期末，均价按日均价与不复权成交量加权。不调用其他源填充日期。
 
 结果含code/market/start/end/adjust/period/vars/source、ok/status、notes及逐字段units，source=ifind_excel。超过200行自动CSV；显式export_path也只返回文件及元信息。只输出所选列，MCP/CLI共用实现，绘图调用同一入口。
 
