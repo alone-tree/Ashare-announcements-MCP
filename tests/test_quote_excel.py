@@ -262,3 +262,151 @@ def test_suspension_days_kept_and_market_closed_dropped(tmp_path, monkeypatch):
     assert susp["date"] == "2026-11-05"
     assert susp["close"] == pytest.approx(15.0)
     assert susp["volume"] == 0 and susp["amount"] == 0 and susp["turnover"] == 0.0
+
+
+def test_hk_formula_matrix_thirteen_columns():
+    fields, matrix = excel.formulas("0700.HK", ["2026-11-04"], None, "HK")
+    assert len(matrix[0]) == len(fields) == 13
+    assert '"ths_open_price_hks"' in matrix[0][fields.index("open")]
+    assert '"ths_high_d_hks"' in matrix[0][fields.index("high")]
+    assert '"ths_low_d_hks"' in matrix[0][fields.index("low")]
+    assert '"ths_close_price_hks"' in matrix[0][fields.index("close")]
+    assert ',101,"")' in matrix[0][fields.index("avg_price_hfq")]
+    assert ',107)' in matrix[0][fields.index("close_no_forward")]
+    assert '"ths_sec_total_shares_hks"' in matrix[0][fields.index("security_total_shares")]
+    assert '"ths_corp_total_shares_hks"' in matrix[0][fields.index("company_total_shares")]
+    mv = matrix[0][fields.index("company_total_market_cap")]
+    assert '"ths_market_value_hks"' in mv and '"HKD"' in mv
+    sec_mv = matrix[0][fields.index("security_total_market_cap")]
+    assert '"ths_totalcapitalforsecurities_hk"' in sec_mv and '"HKD"' in sec_mv
+
+
+def test_hk_block_zero_fault_closes_excel_and_retries(tmp_path, monkeypatch):
+    columns, _ = excel.formulas("0700.HK", ["2026-11-04"], None, "HK")
+    calls = {"n": 0, "closed": 0, "visible": []}
+
+    def fake_fetch(matrix, *, visible=None, text_ok=False, timeout=600):
+        calls["n"] += 1
+        calls["visible"].append(visible)
+        if calls["n"] == 1:
+            return {"values": [[0] * len(columns)], "errors": []}
+        return {"values": [[10] * len(columns)], "errors": []}
+
+    def fake_close(*a, **k):
+        calls["closed"] += 1
+        return {}
+
+    monkeypatch.setattr(excel.ifind_excel, "fetch_matrix", fake_fetch)
+    monkeypatch.setattr(excel.ifind_excel, "close_excel", fake_close)
+    result = excel.fetch_quote(str(tmp_path), parse_code("00700.HK"),
+        "2026-11-04", "2026-11-04", {})
+    assert calls == {"n": 2, "closed": 1, "visible": [True, True]}
+    assert result["ok"] and result["data"]["close"][0]["value"] == 10
+
+
+def test_a_share_row_zero_fault_closes_excel_and_retries(tmp_path, monkeypatch):
+    columns, _ = excel.formulas("300308.SZ", ["2026-11-04", "2026-11-05"], "A股", "A")
+    normal = [10] * len(columns)
+    bad = [10] * len(columns)
+    for f in ("open", "high", "low", "close", "close_no_forward"):
+        bad[columns.index(f)] = 0
+    calls = {"n": 0, "closed": 0}
+
+    def fake_fetch(matrix, *, visible=None, text_ok=False, timeout=600):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"values": [normal[:], bad[:]], "errors": []}
+        return {"values": [normal[:], normal[:]], "errors": []}
+
+    def fake_close(*a, **k):
+        calls["closed"] += 1
+        return {}
+
+    monkeypatch.setattr(excel.ifind_excel, "fetch_matrix", fake_fetch)
+    monkeypatch.setattr(excel.ifind_excel, "close_excel", fake_close)
+    result = excel.fetch_quote(str(tmp_path), parse_code("300308.SZ"),
+        "2026-11-04", "2026-11-05", {"股份类型": "A股", "上市日期": "20200101"})
+    assert calls == {"n": 2, "closed": 1}
+    assert result["ok"] and result["data"]["close"][1]["value"] == 10
+
+
+def test_hk_listing_date_via_excel_text_mode(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_fetch_formulas(formulas, *, text_ok=False, visible=None, timeout=120):
+        calls["formulas"] = formulas
+        calls["text_ok"] = text_ok
+        return {"values": [["2004-06-16"]], "metrics": {}}
+
+    from market_data_mcp import ifind_excel as ifind_excel_module
+    monkeypatch.setattr(ifind_excel_module, "fetch_formulas", fake_fetch_formulas)
+    mc = parse_code("00700.HK")
+    data = company_ifind_service.get_quote_security(str(tmp_path), mc)
+    assert data == {"上市日期": "20040616"}
+    assert calls["text_ok"] is True
+    assert "ths_ipo_date_hks" in calls["formulas"][0] and '"0700.HK"' in calls["formulas"][0]
+    again = company_ifind_service.get_quote_security(str(tmp_path), mc)
+    assert again == {"上市日期": "20040616"} and len(calls["formulas"]) == 1
+
+
+def test_hk_routes_to_excel_and_hkd_units(tmp_path, monkeypatch):
+    monkeypatch.setattr(company_ifind_service, "get_quote_security",
+        lambda root, mc: {"上市日期": "20040616"})
+    captured = {}
+
+    def fetch(root, mc, start, end, security):
+        captured["market"] = mc.market
+        captured["ipo"] = (security or {}).get("上市日期")
+        days = ["2026-11-04", "2026-11-05"]
+        data = {field: [{"date": d, "value": 10 + i, "source": excel.SOURCE}
+                        for i, d in enumerate(days)] for field in excel.FIELDS}
+        return {"ok": True, "source": excel.SOURCE, "data": data, "notes": []}
+
+    monkeypatch.setattr(excel, "fetch_quote", fetch)
+    result = service.get_quote(str(tmp_path), "00700.HK", vars=["close", "amount"],
+        start_date="2026-11-04", end_date="2026-11-05")
+    assert captured["market"] == "HK" and captured["ipo"] == "20040616"
+    assert result["ok"] and result["source"] == excel.SOURCE
+    assert result["units"]["close"] == "港元" and result["units"]["amount"] == "港元"
+
+
+def test_a_share_suspension_row_survives_factor_restore(tmp_path, monkeypatch):
+    """13列后停牌行保留：hfq close=cnf直取、OHL=raw×F(t)、hfq量=额÷后复权均价。"""
+    monkeypatch.setattr(company_ifind_service, "get_quote_security",
+        lambda root, mc: {"股份类型": "A股", "上市日期": "20200101"})
+    days = ["2026-11-04", "2026-11-05", "2026-11-06"]
+    price = {"2026-11-04": 10, "2026-11-05": 15, "2026-11-06": 20}
+
+    def fetch(root, mc, start, end, security):
+        data = {}
+        for field in excel.FIELDS:
+            records = []
+            for d in days:
+                p = price[d]
+                suspended = d == "2026-11-05"
+                base = {"amount": 0 if suspended else 1000,
+                        "turnover": 0 if suspended else 2.5,
+                        "company_total_shares": 10000, "security_total_shares": 6000,
+                        "company_total_market_cap": 100000,
+                        "security_total_market_cap": 60000}.get(field)
+                if base is None:
+                    if field == "close_no_forward":
+                        base = p * 5
+                    elif field == "avg_price_hfq":
+                        base = p * 5
+                    elif field.endswith("_hfq"):
+                        base = p * 5
+                    else:
+                        base = p
+                records.append({"date": d, "value": base, "source": excel.SOURCE})
+            data[field] = records
+        return {"ok": True, "source": excel.SOURCE, "data": data, "notes": []}
+
+    monkeypatch.setattr(excel, "fetch_quote", fetch)
+    result = service.get_quote(str(tmp_path), "300308.SZ",
+        vars=["open", "close", "volume"], adjust="hfq",
+        start_date="2026-11-04", end_date="2026-11-06")
+    rows = result["rows"]
+    assert [r["close"] for r in rows] == [50.0, 75.0, 100.0]
+    assert rows[1]["open"] == 75.0 and rows[1]["volume"] == 0.0
+    assert rows[0]["volume"] == 20.0  # hfq量=额÷后复权均价（脑图口径）

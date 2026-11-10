@@ -257,20 +257,21 @@ def create_server() -> Any:
               汇率无论传入何种vars和adjust，均仅返回close，有效adjust=raw；
               汇率同样使用字段缓存；未覆盖时，iFinD取数层从随代码CSV读取截至2026-09-30的
               历史原始数据，之后真实请求iFinD；早期空值也正常缓存，不反复补拉。
-        vars: 不传默认close。内地Excel支持open/high/low/close/avg_price/volume/amount/turnover，
+        vars: 不传默认close。SH/SZ/BJ/HK的Excel通道支持open/high/low/close/avg_price/volume/amount/turnover，
               及company_total_shares/security_total_shares/company_total_market_cap/security_total_market_cap；
-              total_shares/total_market_cap兼容指向公司字段。港美保留outstanding_share/float_market_cap等既有字段。
+              total_shares/total_market_cap兼容指向公司字段。美股保留outstanding_share/float_market_cap等既有字段；
+              港股Excel通道不支持outstanding_share/float_market_cap（换手率已覆盖流通盘需求）。
         adjust: raw=除权价、hfq=后复权、qfq=前复权（本地现算）。
         start_date/end_date: YYYY-MM-DD；空 = 最近 14 个自然日 / 当天。
             start_date 传 "all"：起点不约束——end 留空 = 返回全部数据；end 指定 = 只取 ≤end 的早期数据。
         period: daily/weekly/monthly（周/月由日线本地聚合）。
         export_path: 空 = 直接返回数据（超过 200 行自动导出到缓存目录并返回路径）；
                      指定 = 导出 CSV 并返回元信息。
-        内地SH/SZ/BJ使用Excel整组取数、字段缓存，无失败换源；股票无需公告建档。
+        SH/SZ/BJ/HK使用Excel整组取数、字段缓存，无失败换源；股票无需公告建档。
         公司/证券四字段同批获取，输出只选请求字段；换手率返回比值。
-        日期默认过滤周末节假日等非交易日（close_no_forward=0判定）；公司停牌仍展示，
-        其成交额、成交量、换手率为0。字段币种见units（B股均价/成交额人民币，价格原报价币种）。
-        港美保留既有来源及估算说明；超过200行自动CSV。
+        日期剔除周六周日，节假日等非交易日以close_no_forward=0判定过滤；公司停牌仍展示，
+        其成交额、成交量、换手率为0。字段币种见units（内地B股均价/成交额人民币、价格原报价币种；港股全港元）。
+        美股保留既有来源及估算说明；超过200行自动CSV。
         首次获取行情数据冷启动耗时较久（新代码全史需Excel启动+整包取数，数十秒到一两分钟），
         超时报错后原参数再次调用即可——服务端通常已完成并落盘缓存，重调命中缓存立即返回。
         """

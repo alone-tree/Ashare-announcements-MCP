@@ -109,7 +109,7 @@ def get_market_data_help(root, tool=None, market=None, code=None, topic=None):
                       meta_items=list(META_KEYS),
                       segment_items=SEGMENTS, growth=["科目名同比增长率", "科目名环比增长率"],
                       quote_fields=VALID_VARS,
-                      mainland_quote_fields=PUBLIC_FIELDS,
+                      excel_quote_fields=PUBLIC_FIELDS,
                       ratio_unit="比值（0.25表示25%）",
                       financial_units={"amount": "原币基础单位", "per_share": "原币/股", "shares": "股",
                                        "ratio": "比值（0.25表示25%）", "text": "文本"},
