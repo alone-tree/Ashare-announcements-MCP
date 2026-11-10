@@ -1,7 +1,8 @@
 """公司信息按section、时间范围独立检查与提交。"""
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import time
 
 from market_data_mcp import data_store
 from market_data_mcp.providers import company_ifind
@@ -21,11 +22,28 @@ def get_quote_security(root, mc):
             return cached["data"]
         from market_data_mcp import ifind_excel, routing
         formula = '=@thsiFinD("ths_ipo_date_hks","{}")'.format(routing.to_ifind(mc))
-        result = ifind_excel.fetch_formulas([formula], text_ok=True)
-        raw = result["values"][0][0]
-        digits = str(raw).replace("-", "").strip()
-        if len(digits) != 8 or not digits.isdigit():
-            raise RuntimeError(f"港股上市日期返回异常：{raw!r}")
+        digits = ""
+        result = None
+        # 未登录时静态字段单公式立即返回状态码'2'；行情矩阵会挂起等待iFinD自动登录。
+        # 失败后先跑一次最小行情矩阵预热（触发登录等待），再关Excel重开重取上市日期。
+        for attempt in range(3):
+            if attempt:
+                time.sleep(5)
+                try:
+                    warm_day = (date.today() - timedelta(days=7)).isoformat()
+                    warm = ('=@thsiFinD("ths_close_price_hks","{}","{}",100,"")'.format(
+                        routing.to_ifind(mc), warm_day),)
+                    ifind_excel.fetch_matrix([list(warm)], visible=True, timeout=300)
+                except Exception:
+                    pass  # 预热仅触发登录，结果不校验
+            result = ifind_excel.fetch_formulas([formula], text_ok=True)
+            digits = str(result["values"][0][0]).replace("-", "").strip()
+            if len(digits) == 8 and digits.isdigit():
+                break
+            if attempt < 2:
+                ifind_excel.close_excel(timeout=120)
+        else:
+            raise RuntimeError(f"港股上市日期返回异常：{result['values'][0][0]!r}")
         value = {"上市日期": digits}
         data_store.write(root, code, "company_data", "security", {
             "meta": {"schema_version": 2, "source": source}, "data": value,

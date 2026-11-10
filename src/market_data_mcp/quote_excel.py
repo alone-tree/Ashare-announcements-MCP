@@ -38,30 +38,45 @@ def ensure_fields(root, mc, required, start, end, *, all_history=False):
         end_date = meta["date_range"]["end"]
         return {**meta, "date_range": {**meta["date_range"],
             "end": min(end_date, watermark) if watermark else None}}
+    security = {}
+    notes: list[str] = []
     missing = []
     expected_start = None
     if all_history:
         # start=all 覆盖前提：骨架字段缓存起点不晚于上市日。上市日读本地security记录
-        # （A股source=ifind SDK、港股source=ifind_excel），不在此处触发SDK；
-        # 其他字段不做起点校验（上游历史边界各自不同，如B股成交额）。
+        # （A股source=ifind SDK、港股source=ifind_excel）；记录缺失时先取最小证券资料，
+        # 否则骨架缺失会让start=all静默缩水为已缓存区间。
         from market_data_mcp import data_store
         source_tag = "ifind_excel" if mc.market == "HK" else "ifind"
         record = data_store.read(root, code, "company_data", "security", source_tag)
         ipo = str((record or {}).get("data", {}).get("上市日期") or "")
         if len(ipo) == 8 and ipo.isdigit():
             expected_start = f"{ipo[:4]}-{ipo[4:6]}-{ipo[6:]}"
+        else:
+            try:
+                security = company_ifind_service.get_quote_security(root, mc)
+            except Exception as exc:
+                security = {}
+                # start=all 缺上市日期会静默缩水为已缓存区间，宁可直接报错让调用方重试。
+                raise RuntimeError(f"start=all无法确定上市日期：{exc}；"
+                                   "可调用close_ifind_excel重置Excel后重试") from exc
+            ipo = str(security.get("上市日期") or "")
+            if len(ipo) == 8 and ipo.isdigit():
+                expected_start = f"{ipo[:4]}-{ipo[4:6]}-{ipo[6:]}"
+            else:
+                raise RuntimeError("start=all无法确定上市日期（最小证券资料返回异常）；"
+                                   "可调用close_ifind_excel重置Excel后重试")
     for f, payload in current.items():
         cov_start = expected_start if (all_history and f == "close_no_forward") else (
             None if all_history else start)
         if not payload or not cache.coverage(coverage_meta(payload), cov_start, end):
             missing.append(f)
-    notes = []
     if missing:
-        security = {}
-        try:
-            security = company_ifind_service.get_quote_security(root, mc)
-        except Exception as exc:
-            notes.append(f"最小证券资料获取失败：{exc}；不影响无需股份分类的价格字段")
+        if not security:
+            try:
+                security = company_ifind_service.get_quote_security(root, mc)
+            except Exception as exc:
+                notes.append(f"最小证券资料获取失败：{exc}；不影响无需股份分类的价格字段")
         pull_start = min(((coverage_meta(current[f])["date_range"]["end"] or start)
             if current[f] and (all_history or current[f]["meta"]["date_range"]["start"] <= start) else start)
             for f in missing)
@@ -80,6 +95,12 @@ def ensure_fields(root, mc, required, start, end, *, all_history=False):
             notes.extend(result.get("notes") or [])
             if not result.get("ok"):
                 notes.append(f"Excel取数失败：{result.get('error')}；未切换其他通道")
+            elif mc.market == "HK" and all_history and not expected_start:
+                # 行情矩阵已触发iFinD登录链路，此时补取上市日期成功率高；写缓存供下次start=all骨架使用。
+                try:
+                    company_ifind_service.get_quote_security(root, mc)
+                except Exception:
+                    pass  # 补缓存失败不影响本次结果；下次再补
     results = {f: _cached(root, code, f) for f in required}
     return results, notes
 
