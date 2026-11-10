@@ -109,16 +109,19 @@ def test_all_history_backfills_partial_skeleton_cache(tmp_path, source):
 @pytest.mark.parametrize("code,indicator", [("300308.SZ", "ths_total_ashare_stock"),
     ("200725.SZ", "ths_total_bshare_stock"), ("920002.BJ", "ths_total_ashare_stock")])
 def test_formula_matrix_share_type_and_layout(code, indicator):
-    fields, matrix = excel.formulas(code, ["2026-11-03", "2026-11-04"], "B股" if code == "200725.SZ" else "A股")
-    assert len(matrix) == 2 and len(matrix[0]) == len(fields) == 16
+    market = {"300308.SZ": "A", "200725.SZ": "A", "920002.BJ": "BJ"}[code]
+    fields, matrix = excel.formulas(code, ["2026-11-03", "2026-11-04"],
+        "B股" if code == "200725.SZ" else "A股", market)
+    assert len(matrix) == 2 and len(matrix[0]) == len(fields) == 13
+    assert not {"open_hfq", "high_hfq", "low_hfq"} & set(fields)
     assert indicator in matrix[0][fields.index("security_total_shares")]
-    assert all('"2026-11-03"' in f for f in matrix[0])
+    assert '"2026-11-03"' in matrix[0][fields.index("open")]
     assert '"ths_market_value_stock"' in matrix[0][fields.index("company_total_market_cap")]
     assert '"ths_mv_sec_oriented_stock"' in matrix[0][fields.index("security_total_market_cap")]
 
 
 def test_missing_classification_does_not_guess():
-    fields, matrix = excel.formulas("200725.SZ", ["2026-11-04"], None)
+    fields, matrix = excel.formulas("200725.SZ", ["2026-11-04"], None, "A")
     assert "security_total_shares" not in fields and "close" in fields
 
 
@@ -168,7 +171,7 @@ def test_auto_export_names_never_collide(tmp_path, source):
 
 
 def test_matrix_error_column_does_not_become_successful_empty_cache(tmp_path, monkeypatch):
-    columns, _ = excel.formulas("300308.SZ", ["2026-11-04"], "A股")
+    columns, _ = excel.formulas("300308.SZ", ["2026-11-04"], "A股", "A")
     values = [[100 if f == "amount" else 10 for f in columns]]
     bad = columns.index("security_total_market_cap")
     values[0][bad] = None
@@ -209,8 +212,9 @@ def test_zero_calendar_tail_does_not_freeze_today_forever(tmp_path, monkeypatch,
 
 
 def test_formula_close_no_forward_replaces_close_hfq_and_raw_close_kept():
-    fields, matrix = excel.formulas("300308.SZ", ["2026-11-04"], "A股")
+    fields, matrix = excel.formulas("300308.SZ", ["2026-11-04"], "A股", "A")
     assert "close_no_forward" in fields and "close_hfq" not in fields
+    assert "avg_price_hfq" in fields and "open_hfq" not in fields
     no_forward = matrix[0][fields.index("close_no_forward")]
     assert '"close_no_forward"' in no_forward and ",107)" in no_forward
     raw_close = matrix[0][fields.index("close")]

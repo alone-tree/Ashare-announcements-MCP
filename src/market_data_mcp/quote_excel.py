@@ -41,10 +41,12 @@ def ensure_fields(root, mc, required, start, end, *, all_history=False):
     missing = []
     expected_start = None
     if all_history:
-        # start=all 覆盖前提：骨架字段缓存起点不晚于上市日（方案见 docs/内地行情开市日过滤与后复权收盘切换方案-2026-11-06.md）。
-        # 上市日读本地security记录，不在此处触发SDK；其他字段不做起点校验（上游历史边界各自不同，如B股成交额）。
+        # start=all 覆盖前提：骨架字段缓存起点不晚于上市日。上市日读本地security记录
+        # （A股source=ifind SDK、港股source=ifind_excel），不在此处触发SDK；
+        # 其他字段不做起点校验（上游历史边界各自不同，如B股成交额）。
         from market_data_mcp import data_store
-        record = data_store.read(root, code, "company_data", "security", "ifind")
+        source_tag = "ifind_excel" if mc.market == "HK" else "ifind"
+        record = data_store.read(root, code, "company_data", "security", source_tag)
         ipo = str((record or {}).get("data", {}).get("上市日期") or "")
         if len(ipo) == 8 and ipo.isdigit():
             expected_start = f"{ipo[:4]}-{ipo[4:6]}-{ipo[6:]}"
@@ -90,7 +92,7 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
     selected = ["close"] if vars is None else vars
     if not isinstance(selected, list) or not selected or any(not isinstance(v, str) for v in selected) or any(
             v not in PUBLIC_FIELDS and v not in ALIASES for v in selected):
-        return {"ok": False, "error": f"内地Excel行情支持字段：{list(PUBLIC_FIELDS)}；流通股本及流通市值已移出"}
+        return {"ok": False, "error": f"Excel行情支持字段：{list(PUBLIC_FIELDS)}；流通股本及流通市值已移出"}
     selected = list(dict.fromkeys(selected))
     if adjust not in ("raw", "hfq", "qfq") or period not in ("daily", "weekly", "monthly"):
         return {"ok": False, "error": "adjust支持raw/hfq/qfq；period支持daily/weekly/monthly"}
@@ -103,12 +105,14 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
     except (ValueError, TypeError) as exc:
         return {"ok": False, "error": f"日期参数错误：{exc}"}
     fields = {ALIASES.get(f, f) for f in selected}
-    # 依据 docs/内地行情开市日过滤与后复权收盘切换方案-2026-11-06.md：开市日以 close_no_forward>0 识别（0=周末节假日休市）；
-    # 公司停牌及全天零成交日保留，量额换手为0；成交量仍由成交额÷均价派生。
+    # 开市日以 close_no_forward>0 识别（0=周末节假日休市；港股节假日同理）；
+    # 公司停牌及全天零成交日保留，量额换手为0；成交量=成交额÷对应口径均价。
     required = {"amount", "avg_price", "close_no_forward"}
+    if adjust != "raw":
+        required.add("avg_price_hfq")  # hfq/qfq成交量=额÷对应口径均价（脑图口径），恒需后复权均价
     for field in fields:
-        if field in excel.PRICE_CODES and adjust != "raw":
-            required.add(_hfq_key(field))
+        if field == "avg_price" and adjust != "raw":
+            required.add("avg_price_hfq")
         elif field != "volume":
             required.add(field)
     if adjust == "qfq" and fields & set(excel.PRICE_CODES):
@@ -144,14 +148,33 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
             notes.append("缺少同日原始/后复权收盘价，无法确定前复权基点")
     rows = []
     for day in active:
-        amount, avg = series.get("amount", {}).get(day), series.get("avg_price", {}).get(day)
+        amount = series.get("amount", {}).get(day)
+        avg_raw = series.get("avg_price", {}).get(day)
+        avg_hfq = series.get("avg_price_hfq", {}).get(day)
+        close_raw = series.get("close", {}).get(day)
+        close_hfq = series.get("close_no_forward", {}).get(day)
+        # 开高低后复权=除权×F(t)（F=收后复权÷收）；active行cnf>0，分母必有效。
+        factor = (close_hfq / close_raw
+                  if isinstance(close_hfq, (int, float)) and close_hfq
+                  and isinstance(close_raw, (int, float)) and close_raw else None)
+        avg_for_volume = {"raw": avg_raw, "hfq": avg_hfq}.get(
+            adjust, avg_raw * scales["avg_price"] if "avg_price" in scales else None)
         row = {"date": day, "amount": amount,
-               "volume": amount / avg if isinstance(avg, (int, float)) and avg != 0 else None}
+               "volume": amount / avg_for_volume
+               if isinstance(amount, (int, float)) and isinstance(avg_for_volume, (int, float))
+               and avg_for_volume != 0 else None}
         for field in fields:
             if field in ("volume", "amount"):
                 continue
-            key = _hfq_key(field) if field in excel.PRICE_CODES and adjust != "raw" else field
-            value = series.get(key, {}).get(day)
+            raw = series.get(field, {}).get(day)
+            if field == "close" and adjust != "raw":
+                value = close_hfq  # 后复权收盘直取cnf，保持与缓存逐位一致
+            elif field == "avg_price" and adjust != "raw":
+                value = avg_hfq
+            elif field in excel.PRICE_CODES and adjust != "raw":
+                value = raw * factor if raw is not None and factor is not None else None
+            else:
+                value = raw
             if field in excel.PRICE_CODES and adjust == "qfq":
                 scale = scales.get("avg_price" if field == "avg_price" else "close")
                 value = value * scale if value is not None and scale is not None else None
@@ -173,16 +196,22 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
     available = any(r.get(f) is not None for r in output for f in selected)
     incomplete = bool(missing) or any(r.get(f) is None for r in output for f in selected) or any(
         "失败" in n or "返回：" in n for n in notes)
-    kind = _share_type(root, code)
-    price_unit = "美元" if mc.suffix == "SH" and kind == "B股" else "港元" if (
-        mc.suffix == "SZ" and kind == "B股") else "元" if kind == "A股" or mc.suffix == "BJ" else "原币（股份类型未确认）"
+    kind = _share_type(root, mc)
+    if mc.market == "HK":
+        price_unit, amount_unit = "港元", "港元"
+    else:
+        price_unit = ("美元" if mc.suffix == "SH" and kind == "B股"
+                      else "港元" if mc.suffix == "SZ" and kind == "B股"
+                      else "元" if kind in ("A股",) or mc.suffix == "BJ"
+                      else "原币（股份类型未确认）")
+        amount_unit = "元"
     ok = available or (not active and not missing)
     result = {"ok": ok,
         "status": "failed" if not ok else "partial_success" if incomplete else "success",
         "code": code, "market": mc.market, "start": start_date if start_date == "all" else start,
         "end": end, "adjust": adjust, "period": period, "vars": selected, "source": excel.SOURCE, "notes": notes,
         "units": {f: "ratio" if ALIASES.get(f, f) == "turnover" else "股" if f == "volume" or "shares" in f
-                  else "元" if "market_cap" in f or f in ("amount", "avg_price") else
+                  else amount_unit if "market_cap" in f or f in ("amount", "avg_price") else
                   price_unit for f in selected}}
     if not result["ok"]:
         result["error"] = "；".join(notes)
@@ -200,7 +229,8 @@ def get_quote(root, mc, vars=None, adjust="raw", start_date=None, end_date=None,
     return result
 
 
-def _share_type(root, code):
+def _share_type(root, mc):
     from market_data_mcp import data_store
-    record = data_store.read(root, code, "company_data", "security", "ifind")
+    source = "ifind_excel" if mc.market == "HK" else "ifind"
+    record = data_store.read(root, f"{mc.code}.{mc.suffix}", "company_data", "security", source)
     return (record or {}).get("data", {}).get("股份类型")

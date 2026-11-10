@@ -8,8 +8,29 @@ from market_data_mcp.providers import company_ifind
 
 
 def get_quote_security(root, mc):
-    """数据MCP自身的最小行情资料；不读取公告档案，不补取整份工商/IPO。"""
+    """数据MCP自身的最小行情资料；不读取公告档案，不补取整份工商/IPO。
+
+    A/B/北交所走iFinD SDK三字段；港股仅上市日期，走Excel单公式（文本模式），
+    缓存source=ifind_excel，"YYYY-MM-DD"规范化为8位数字。
+    """
     code = f"{mc.code}.{mc.suffix}"
+    if mc.market == "HK":
+        source = "ifind_excel"
+        cached = data_store.read(root, code, "company_data", "security", source)
+        if cached and data_store.fresh(cached.get("checked_at")) and "上市日期" in cached.get("data", {}):
+            return cached["data"]
+        from market_data_mcp import ifind_excel, routing
+        formula = '=@thsiFinD("ths_ipo_date_hks","{}")'.format(routing.to_ifind(mc))
+        result = ifind_excel.fetch_formulas([formula], text_ok=True)
+        raw = result["values"][0][0]
+        digits = str(raw).replace("-", "").strip()
+        if len(digits) != 8 or not digits.isdigit():
+            raise RuntimeError(f"港股上市日期返回异常：{raw!r}")
+        value = {"上市日期": digits}
+        data_store.write(root, code, "company_data", "security", {
+            "meta": {"schema_version": 2, "source": source}, "data": value,
+            "checked_at": datetime.now(timezone.utc).isoformat()})
+        return value
     fields = {"交易所": "ths_listing_exchange_stock",
               "股份类型": "ths_stock_varieties_stock", "上市日期": "ths_ipo_date_stock"}
     cached = data_store.read(root, code, "company_data", "security", "ifind")

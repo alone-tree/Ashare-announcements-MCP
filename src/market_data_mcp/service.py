@@ -184,12 +184,12 @@ def _export_csv(path: str, rows: list[dict], cols: list[str]) -> None:
 def get_quote(root: str, code: str, vars: list[str] | None = None, adjust: str = "raw",
               start_date: str | None = None, end_date: str | None = None,
               period: str = "daily", export_path: str | None = None) -> dict:
-    """内地股票使用Excel；港美和汇率保持既有独立通道。"""
+    """Excel行情：内地（SH/SZ/BJ）与港股同构13列；美股和汇率保持既有独立通道。"""
     try:
         mc = parse_code(code)
     except (ValueError, AttributeError):
         mc = None
-    if mc and mc.market in ("A", "BJ"):
+    if mc and mc.market in ("A", "BJ", "HK"):
         from market_data_mcp import quote_excel
         return quote_excel.get_quote(root, mc, vars, adjust, start_date, end_date, period, export_path)
     return _get_legacy_quote(root, code, vars, adjust, start_date, end_date, period, export_path)
