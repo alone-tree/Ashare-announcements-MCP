@@ -21,6 +21,116 @@ WORKBOOK = Path(__file__).resolve().parent / "data" / "ifind_workspace.xlsx"
 SHEET = "data"
 FORMULA = '=@thsiFinD("ths_mv_back_test_stock","{code}","{date}")'
 LOADING = ("抓取", "提取", "请求数据", "重新计算", "#GETTING_DATA", "#BUSY!")
+ROWS_PER_BATCH = 2500  # 单批行数上限：3万式单批曾间歇整批全0，2500行（约3.25万式）为故障隔离粒度
+
+
+def fetch_formulas(formulas: list[str], *, visible: bool | None = None,
+                   timeout: float = 120, text_ok: bool = False) -> dict:
+    """一列普通 iFinD 公式批写批读；返回原始值，前后清空 data 页。
+
+    visible=None 保持复用实例的状态，新实例默认可见。这里只接受调用方
+    已确认的 thsiFinD 公式，不生成指标参数或计算派生值。
+    遇错误单元格直接报错（严格语义）；text_ok=True 时文本值原样返回
+    （如港股上市日期"YYYY-MM-DD"）。
+    """
+    if not formulas or not all(isinstance(f, str) and
+                               f.lower().startswith(("=@thsifind(", "=thsifind("))
+                               for f in formulas):
+        raise ValueError("需要非空的普通 thsiFinD 公式列表")
+    single = [[f] for f in formulas]
+    values: list = []
+    metrics: dict = {}
+    result: dict = {}
+    for start in range(0, len(single), ROWS_PER_BATCH):
+        chunk = single[start:start + ROWS_PER_BATCH]
+        result = _fetch_one_strict([row[0] for row in chunk], visible=visible,
+                                   timeout=timeout, text_ok=text_ok)
+        values.extend(result["values"])
+        for key in ("formula_write_seconds", "read_seconds", "polls"):
+            metrics[key] = metrics.get(key, 0) + (result.get("metrics") or {}).get(key, 0)
+        metrics["batches"] = metrics.get("batches", 0) + 1
+    return {**result, "values": values, "metrics": metrics}
+
+
+def fetch_matrix(formulas: list[list[str]], *, visible: bool | None = None,
+                 timeout: float = 600, text_ok: bool = False) -> dict:
+    """日期×字段的完整公式矩阵批写批读；错误单元格单独报告。
+
+    按行分块（每批ROWS_PER_BATCH行）执行后合并。iFinD 对同公式有缓存，
+    取数失败的重试必须关闭 Excel 重开，不能仅重输公式；COM 忙（写入被拒）
+    在本层按1/3/5秒等待重试，此类重写安全：写入被拒时公式未提交。
+    """
+    if not formulas or not isinstance(formulas[0], list) or not formulas[0]:
+        raise ValueError("需要非空的二维 iFinD 公式矩阵")
+    width = len(formulas[0])
+    if any(not isinstance(row, list) or len(row) != width or
+           any(not isinstance(f, str) or not f.lower().startswith(
+               ("=@thsifind(", "=thsifind(")) for f in row) for row in formulas):
+        raise ValueError("公式矩阵必须为等宽的普通 thsiFinD 公式行")
+    return _fetch_batched(formulas, visible=visible, timeout=timeout, text_ok=text_ok)
+
+
+def _com_busy(error: Exception) -> bool:
+    text = str(error)
+    return "com_error" in text or "-2147418111" in text or "拒绝" in text
+
+
+def _fetch_one(matrix: list[list[str]], *, visible: bool | None,
+               timeout: float, text_ok: bool) -> dict:
+    last: Exception | None = None
+    for wait in (0, 1, 3, 5):
+        if wait:
+            time.sleep(wait)
+        try:
+            return _call("fetch", matrix=matrix, visible=visible,
+                         timeout=timeout, text_ok=text_ok)
+        except TimeoutError as error:
+            raise TimeoutError(
+                f"{error}；Excel 保持原状，可调用close_ifind_excel重置专用工作簿后重试") from None
+        except RuntimeError as error:
+            last = error
+            if not _com_busy(error):
+                break
+    raise RuntimeError(f"{last}；可调用close_ifind_excel重置专用工作簿后重试")
+
+
+def _fetch_batched(matrix: list[list[str]], *, visible: bool | None,
+                   timeout: float, text_ok: bool) -> dict:
+    values: list[list] = []
+    errors: list[dict] = []
+    metrics: dict = {}
+    offset = 0
+    for start in range(0, len(matrix), ROWS_PER_BATCH):
+        result = _fetch_one(matrix[start:start + ROWS_PER_BATCH], visible=visible,
+                            timeout=timeout, text_ok=text_ok)
+        values.extend(result["values"])
+        for item in result.get("errors") or []:
+            errors.append({**item, "row": item["row"] + offset})
+        offset += len(matrix[start:start + ROWS_PER_BATCH])
+        for key in ("formula_write_seconds", "read_seconds", "polls"):
+            metrics[key] = metrics.get(key, 0) + (result.get("metrics") or {}).get(key, 0)
+        metrics["batches"] = metrics.get("batches", 0) + 1
+    return {**result, "values": values, "errors": errors, "metrics": metrics}
+
+
+def _fetch_one_strict(formulas: list[str], *, visible: bool | None,
+                      timeout: float, text_ok: bool) -> dict:
+    """fetch_formulas 单列严格路径：错误单元格直接报错（保持历史行为）。"""
+    last: Exception | None = None
+    for wait in (0, 1, 3, 5):
+        if wait:
+            time.sleep(wait)
+        try:
+            return _call("fetch", formulas=formulas, visible=visible,
+                         timeout=timeout, text_ok=text_ok)
+        except TimeoutError as error:
+            raise TimeoutError(
+                f"{error}；Excel 保持原状，可调用close_ifind_excel重置专用工作簿后重试") from None
+        except RuntimeError as error:
+            last = error
+            if not _com_busy(error):
+                break
+    raise RuntimeError(f"{last}；可调用close_ifind_excel重置专用工作簿后重试")
 
 
 def _call(operation: str, *, timeout: float, **arguments) -> dict:
@@ -287,6 +397,7 @@ def _execute(request: dict, deadline: float) -> dict:
     import pythoncom
 
     operation = request["operation"]
+    text_ok = bool(request.get("text_ok"))
     connected = _find_workbook()
     reused = connected is not None
     startup_prompts = 0
@@ -365,13 +476,27 @@ def _execute(request: dict, deadline: float) -> dict:
                 for row_index, row in enumerate(values):
                     for col_index, value in enumerate(row):
                         if isinstance(value, int) and value < -2000000000:
-                            value = str(sheet.Cells(row_index + 1, col_index + 1).Text)
+                            message = (f"iFinD 单元格({row_index + 1},{col_index + 1})返回："
+                                       f"{sheet.Cells(row_index + 1, col_index + 1).Text}")
+                            if not matrix_mode:
+                                raise RuntimeError(message)
+                            errors.append({"row": row_index, "column": col_index, "error": message})
+                            row[col_index] = None
+                            continue
                         if isinstance(value, str) and any(word in value for word in LOADING):
                             loading = True
                             continue
-                        invalid = isinstance(value, str) or (value is not None and
-                            (not isinstance(value, (int, float)) or not math.isfinite(value)))
-                        if invalid:
+                        if isinstance(value, str):
+                            if text_ok:
+                                continue  # 文本数据原样保留（如港股上市日期、营收名称）
+                            message = f"iFinD 单元格({row_index + 1},{col_index + 1})返回：{value}"
+                            if not matrix_mode:
+                                raise RuntimeError(message)
+                            errors.append({"row": row_index, "column": col_index, "error": message})
+                            row[col_index] = None
+                            continue
+                        if value is not None and (not isinstance(value, (int, float))
+                                                  or not math.isfinite(value)):
                             message = f"iFinD 单元格({row_index + 1},{col_index + 1})返回：{value}"
                             if not matrix_mode:
                                 raise RuntimeError(message)
