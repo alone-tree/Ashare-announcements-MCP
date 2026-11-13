@@ -53,7 +53,7 @@ CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。�
 | `get_company_profile` | 概况/IPO/年度分红/预测/历史十大股东；时间参数与市场范围见架构§5 |
 | `search_securities` | 按名称或代码搜索证券候选及标准代码；见架构§9 |
 | `get_quote_chart` | K线/折线绘图；复用get_quote，CLI为get_quote_chart_batch；见架构§2.6 |
-| `close_ifind_excel` | 关闭本运行包专用Excel；行为见`docs/行为-内地Excel行情.md` |
+| `close_ifind_excel` | 关闭本运行包专用Excel；行为见`docs/行为-Excel行情.md` |
 
 market-data关键约束为字段独立来源、强制市场后缀路由、行情单源无回退。不得按代码位数猜市场或混接来源；具体来源与口径只在架构维护。
 
