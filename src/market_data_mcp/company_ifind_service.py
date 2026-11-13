@@ -43,7 +43,7 @@ def get_quote_security(root, mc):
             if attempt < 2:
                 ifind_excel.close_excel(timeout=120)
         else:
-            raise RuntimeError(f"港股上市日期返回异常：{result['values'][0][0]!r}")
+            raise RuntimeError(f"港股上市日期返回异常：{result['values'][0]!r}")
         value = {"上市日期": digits}
         data_store.write(root, code, "company_data", "security", {
             "meta": {"schema_version": 2, "source": source}, "data": value,
