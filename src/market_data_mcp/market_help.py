@@ -8,7 +8,7 @@ from market_data_mcp.routing import MarketCode, parse_code
 TOOLS = {
     "get_quote": {"parameters": ["code", "vars", "adjust", "start_date", "end_date", "period", "export_path"],
                   "example": {"code": "600519.SH", "vars": ["close"], "start_date": "2025-01-01"},
-                  "source": "SH/SZ/BJ股票：iFinD Excel；港美：既有新浪/iFinD；汇率：iFinD含固化历史；无失败换源",
+                  "source": "SH/SZ/BJ/HK股票：iFinD Excel；美股：既有新浪/iFinD；汇率：iFinD含固化历史；无失败换源",
                   "mainland": {"fields": ["open", "high", "low", "close", "avg_price", "volume", "amount", "turnover",
                       "company_total_shares", "security_total_shares", "company_total_market_cap", "security_total_market_cap"],
                       "aliases": {"total_shares": "company_total_shares", "total_market_cap": "company_total_market_cap"},
