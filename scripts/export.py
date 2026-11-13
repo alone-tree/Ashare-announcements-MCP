@@ -54,7 +54,7 @@ USER_README = """# 投资数据 MCP（用户版）：公告阅读 + market-data
 | MCP | 包 | 入口 | 能力 |
 |---|---|---|---|
 | A股公告阅读 | `ashare_announcements_mcp` | `ashare_announcements_mcp/server.py` | A/H/B 股公告（东财）+ 美股公告（SEC EDGAR）+ 互动问答；建档/查询/阅读/检索 |
-| market-data | `market_data_mcp` | `market_data_mcp/server.py` | 独立证券搜索；内地Excel整组行情及公司/证券总股本市值；港美保留既有通道；财报/概况；行情绘图及专用Excel关闭 |
+| market-data | `market_data_mcp` | `market_data_mcp/server.py` | 独立证券搜索；内地与港股Excel整组行情及公司/证券总股本市值；美股保留既有通道；财报/概况；行情绘图及专用Excel关闭 |
 
 ## MCP 注册（stdio）
 
@@ -87,7 +87,7 @@ python -m pip install -r requirements.txt
 
 market-data 的 iFinD 通道（美股后复权/成交额/股本）需要 iFinDPy 官方 SDK：
 按官方安装包在 venv site-packages 写入 `iFinDPy.pth` 指向 SDK 目录（本机已装）。
-内地行情使用Windows桌面Excel及已启用、自动登录的iFinD插件；证券基础资料仍使用SDK。
+内地与港股行情使用Windows桌面Excel及已启用、自动登录的iFinD插件；证券基础资料内地走SDK、港股走Excel公式。
 专用空白工作簿随market-data包保存，取数后常驻；close_ifind_excel可单独关闭。
 数据与公告MCP独立，数据查询不依赖公告建档。
 
