@@ -76,6 +76,22 @@ def test_matrix_is_one_worker_request_with_rows_and_columns(monkeypatch):
     assert result["values"] == [[10, None], [0, 20]]
 
 
+def test_single_column_text_values_remain_flat(monkeypatch):
+    calls = []
+
+    def worker(operation, **kwargs):
+        calls.append((operation, kwargs))
+        return {"values": ["2004-06-16"], "metrics": {}}
+
+    monkeypatch.setattr(ifind_excel, "_call", worker)
+    formula = '=@thsiFinD("ths_ipo_date_hks","0700.HK")'
+    result = ifind_excel.fetch_formulas([formula], text_ok=True)
+    assert result["values"] == ["2004-06-16"]
+    assert calls[0][1]["formulas"] == [formula]
+    assert calls[0][1]["text_ok"] is True
+    assert len(calls) == 1
+
+
 def test_whole_worker_deadline_becomes_timeout(monkeypatch):
     def blocked(command, **kwargs):
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])

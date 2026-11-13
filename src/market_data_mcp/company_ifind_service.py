@@ -24,8 +24,8 @@ def get_quote_security(root, mc):
         formula = '=@thsiFinD("ths_ipo_date_hks","{}")'.format(routing.to_ifind(mc))
         digits = ""
         result = None
-        # 未登录时静态字段单公式立即返回状态码'2'；行情矩阵会挂起等待iFinD自动登录。
-        # 失败后先跑一次最小行情矩阵预热（触发登录等待），再关Excel重开重取上市日期。
+        # 单列接口返回一维values；日期必须整项读取，不能截取字符串首字符。
+        # 保留既有异常重试与预热流程，不把无效日期文本推断为登录状态码。
         for attempt in range(3):
             if attempt:
                 time.sleep(5)
@@ -37,7 +37,7 @@ def get_quote_security(root, mc):
                 except Exception:
                     pass  # 预热仅触发登录，结果不校验
             result = ifind_excel.fetch_formulas([formula], text_ok=True)
-            digits = str(result["values"][0][0]).replace("-", "").strip()
+            digits = str(result["values"][0]).replace("-", "").strip()
             if len(digits) == 8 and digits.isdigit():
                 break
             if attempt < 2:

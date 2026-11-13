@@ -336,17 +336,42 @@ def test_hk_listing_date_via_excel_text_mode(tmp_path, monkeypatch):
     def fake_fetch_formulas(formulas, *, text_ok=False, visible=None, timeout=120):
         calls["formulas"] = formulas
         calls["text_ok"] = text_ok
-        return {"values": [["2004-06-16"]], "metrics": {}}
+        calls["count"] = calls.get("count", 0) + 1
+        return {"values": ["2004-06-16"], "metrics": {}}
 
     from market_data_mcp import ifind_excel as ifind_excel_module
     monkeypatch.setattr(ifind_excel_module, "fetch_formulas", fake_fetch_formulas)
+    monkeypatch.setattr(ifind_excel_module, "close_excel",
+        lambda **kwargs: pytest.fail("有效的一维日期返回不应触发关闭重试"))
     mc = parse_code("00700.HK")
     data = company_ifind_service.get_quote_security(str(tmp_path), mc)
     assert data == {"上市日期": "20040616"}
     assert calls["text_ok"] is True
     assert "ths_ipo_date_hks" in calls["formulas"][0] and '"0700.HK"' in calls["formulas"][0]
     again = company_ifind_service.get_quote_security(str(tmp_path), mc)
-    assert again == {"上市日期": "20040616"} and len(calls["formulas"]) == 1
+    assert again == {"上市日期": "20040616"} and calls["count"] == 1
+
+
+def test_hk_invalid_listing_date_reports_complete_text(tmp_path, monkeypatch):
+    from market_data_mcp import ifind_excel
+
+    calls = {"fetch": 0, "closed": 0}
+
+    def fetch(formulas, **kwargs):
+        calls["fetch"] += 1
+        return {"values": ["invalid-date"]}
+
+    def close(**kwargs):
+        calls["closed"] += 1
+
+    monkeypatch.setattr(ifind_excel, "fetch_formulas", fetch)
+    monkeypatch.setattr(ifind_excel, "fetch_matrix", lambda *args, **kwargs: {})
+    monkeypatch.setattr(ifind_excel, "close_excel", close)
+    monkeypatch.setattr(company_ifind_service.time, "sleep", lambda seconds: None)
+    with pytest.raises(RuntimeError, match="港股上市日期返回异常：'invalid-date'"):
+        company_ifind_service.get_quote_security(str(tmp_path), parse_code("00700.HK"))
+    assert calls == {"fetch": 3, "closed": 2}
+    assert not data_store.read(str(tmp_path), "00700.HK", "company_data", "security", "ifind_excel")
 
 
 def test_hk_routes_to_excel_and_hkd_units(tmp_path, monkeypatch):
