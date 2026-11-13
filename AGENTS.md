@@ -57,6 +57,8 @@ CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。�
 
 market-data关键约束为字段独立来源、强制市场后缀路由、行情单源无回退。不得按代码位数猜市场或混接来源；具体来源与口径只在架构维护。
 
+iFinD Excel手册的指标码、参数原文及页码可直接检索[公式索引](reference/ifind-Excel公式索引说明-20181218.md)，无需每次全文读取PDF；版本与覆盖边界见索引说明，当前实测仍查支持情况。
+
 ## 三、公告侧关键约束
 
 - check忠实返回候选，不替AI归组或补查；establish只使用调用方明确提供的代码，不自动补全另一市场，不使用`-R`/`-WR`人民币柜台代码。
