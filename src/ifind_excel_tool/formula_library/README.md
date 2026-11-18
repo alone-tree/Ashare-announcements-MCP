@@ -27,6 +27,19 @@ verified_with_caveat 表示公式正确但有限制条件，返回数据时必�
 保留定义/算法/参数原文/参数枚举/来源/单位/ui_path，verification 固定为 unverified。
 只作查漏与候选推测，不直接当可用公式。
 
+## 数据来源等级（2026-11-18 踩坑后定）
+
+权威来源只有两类：用户从 iFinD 插件界面提供并确认的描述与值；真实 Excel 取数且人工确认过的结果。
+
+不可靠来源：catalog.jsonl（来自 excel_description.dat，信息可能旧/错/笼统）、2018手册、历史仓库、AI 自己填的 path/name/source/unit。**严禁用不可靠来源核对或覆盖已验证库**。
+
+具体教训：
+- 不得拿 catalog 的 source/unit 覆盖已有记录。曾把用户实测的港元数据「港元」改成 catalog 的「元」，把对值改错。原文为空就留空，不从其他市场推断。
+- 枚举只认用户贴的参数说明或实测确认的，不从相似指标搬。曾把 ths_close_price_stock 的105/106/101/102 误塞给 close_no_forward（插件只有100/107/108）。
+- path/name 以用户从插件界面贴的为准，不自己按理解填，不从历史仓库路径映射推测。
+- 无 example_value 的记录不得标 verified，只能 verified_with_caveat。
+- 修正须经 update_verified.py 并记录到 correction-log.jsonl；修正只改用户确认过的字段。
+
 ## 转入规则
 
 未验证公式经推测、实测后，满足全部条件才转入已验证库：

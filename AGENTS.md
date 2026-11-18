@@ -47,7 +47,7 @@ CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。�
 
 ### ifind_excel_tool（纯 CLI，非 MCP）
 
-入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`，仅 `lookup`（查已验证公式）、`run`（数值公式矩阵）、`text`（文本公式）三个命令。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。已验证公式库 `formula_library/verified-formulas.jsonl`（40条），全量索引 `catalog.jsonl`（30281条，脚本生成）。库字段、转入规则、随用随开发流程见[包说明](../src/ifind_excel_tool/README.md)与[库说明](../src/ifind_excel_tool/formula_library/README.md)。
+入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`，仅 `lookup`（查已验证公式）、`run`（数值公式矩阵）、`text`（文本公式）三个命令。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。已验证公式库 `formula_library/verified-formulas.jsonl`（当前2条，仅用户亲自确认的公式；2026-11-18 清除了38条未经人工核验的记录），全量索引 `catalog.jsonl`（30281条，脚本生成）。库字段、转入规则、随用随开发流程见[包说明](../src/ifind_excel_tool/README.md)与[库说明](../src/ifind_excel_tool/formula_library/README.md)。
 
 ### market-data MCP（7 个工具）
 
@@ -91,6 +91,7 @@ iFinD Excel手册的指标码、参数原文及页码可直接检索[公式索�
 6. **重写/大改任何文档前必须先备份**（时间戳目录 `docs/backup-YYYYMMDD-HHMM/`）。
 7. 未经用户明确要求，不部署、不导出、不推送。**本地 commit 不用等提醒：每组改动完成并验证后直接 `git commit` 作为保存点；仍未要求不 push**。（规则变动过程见 `docs/决策记录.md` 2026-10-19）
 8. 临时探针放 `.codex-temp/`，不得混入生产模块。
+9. **ifind_excel_tool 公式库只认两类权威来源**：用户从 iFinD 插件界面提供并确认的描述与值、真实 Excel 取数且人工确认过的结果。`excel_description.dat`/`catalog.jsonl`、2018手册、历史仓库、AI 自己填的 path/name/source/unit 都不是权威，**严禁用这些来源去核对或覆盖已验证库**（2026-11-18 踩坑：拿 catalog 把港元数据"元"覆盖了用户实测的"港元"，还塞入了不在插件里的枚举）。path/name 一律以用户贴的插件界面原文为准，不自己按理解填。无示例值的记录不得标 `verified`，只能 `verified_with_caveat`。宁可库里少几条，不能有一条错的。
 
 ## 七、开发方式
 
