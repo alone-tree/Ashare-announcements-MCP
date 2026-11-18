@@ -5,3 +5,4 @@
 {"action":"extract-general-notes","at":"2026-11-18","reason":"新增general-notes.jsonl通用注释库（序号ID、按path前缀生效）；把港股代码规则与美股后缀规则从各条notes抽出，单条notes只留专属备注；lookup命中时按path前缀带出general_notes。","extracted_hk_rows":8,"extracted_us_rows":11,"general_ids":[1,2]}
 {"action":"add-general-note","at":"2026-11-18","reason":"用户确认A股复权基点是整个A股行情通用规则，通常留空表示从上市以来复权；新增id3通用注释，scope按A股日行情路径；从收盘价单条notes抽走重复的复权基点差异描述，保留106错值专属备注。","general_id":3,"cleaned_rows":1}
 {"action":"add","at":"2026-11-18","reason":"用户提供指数日行情12条原文并实测通过；结算价另用商品指数000201.CZC测出真值1479.468；持仓量与持仓变化由catalog查码并用商品指数实测确认后入库（非用户亲供）；新增通用注释id4说明商品指数专属字段的代码要求。","added":["前收盘价","开盘价","最高价","最低价","收盘价","收盘价（不前推）","结算价（商品指数）","涨跌幅","成交量","成交金额","换手率","振幅","持仓量（商品指数）","持仓变化（商品指数）"],"general_id":4}
+{"action":"add-general-note","at":"2026-11-18","reason":"用户提供桌面常用指数基本信息.xlsx，转为同目录csv（utf-8-sig）保留全部8列38条；新增通用注释id5按指数全部指标scope指向该csv，查指数取代码用。","general_id":5,"csv_rows":38}
