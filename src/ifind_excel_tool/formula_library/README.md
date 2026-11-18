@@ -16,10 +16,22 @@
 | example / example_value | 示例公式与实测值 |
 | verification | verified 或 verified_with_caveat |
 | verified_at / evidence | 验证日期与证据出处 |
-| notes | 口径限制、错值反例、别名关系 |
+| notes | 仅本条专属备注（口径限制、错值反例）；通用规则不放这里，见 general-notes.jsonl |
 | reading_mode | matrix（数值）或 text（文本，走 text_ok=True） |
 
 verified_with_caveat 表示公式正确但有限制条件，返回数据时必须带出 notes 提示。
+
+## general-notes.jsonl（通用注释库）
+
+每条是一条对一类公式生效的通用规则，跨多条公式复用，不在各条 notes 重复。
+
+| 字段 | 含义 |
+|---|---|
+| id | 序号，简单递增 |
+| scope | 生效范围，按公式 path 前缀匹配；公式 path 以 scope 开头即生效 |
+| note | 规则正文 |
+
+lookup 命中公式时，按该公式 path 找出所有前缀匹配的通用注释，作为每条 hit 的 general_notes 一起返回（含 id 与 note）；单条 notes 只放本条专属备注。
 
 ## catalog.jsonl（全量索引）
 

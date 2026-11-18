@@ -35,13 +35,17 @@ def lookup(req: dict) -> dict:
     if not kw:
         return {"ok": False, "error": "keyword 不能为空"}
     verified = _load("verified-formulas.jsonl")
+    general = _load("general-notes.jsonl")
     hits = []
     for r in verified:
         haystack = " ".join([r["path"], r["name"], r["indicator"],
                              " ".join(r.get("aliases") or []), r.get("definition", "")])
         if all(k in haystack for k in kw.split()):
-            hits.append({k: r[k] for k in ("path", "name", "indicator", "formula_template",
-                                            "parameters", "unit", "verification", "notes")})
+            item = {k: r[k] for k in ("path", "name", "indicator", "formula_template",
+                                       "parameters", "unit", "verification", "notes")}
+            item["general_notes"] = [{"id": g["id"], "note": g["note"]}
+                                     for g in general if r["path"].startswith(g["scope"])]
+            hits.append(item)
     return {"ok": True, "keyword": kw, "source": "verified", "hits": hits[:limit],
             "total": len(hits)}
 
