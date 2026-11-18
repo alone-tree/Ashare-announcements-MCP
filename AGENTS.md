@@ -6,7 +6,7 @@
 
 ## 一、项目是什么
 
-个人投资研究工具，仓库内含**两个并列的 MCP**：
+个人投资研究工具，仓库内含**两个并列的 MCP**（公告、market-data）与**一个并列的纯 CLI 取数工作台**（ifind_excel_tool，2026-11-18 新增，与二者无 import 依赖）。
 
 | | 公告 MCP | market-data MCP |
 |---|---|---|
@@ -16,6 +16,8 @@
 | 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（行为）+ `字段与数据源支持情况.md`（客观能力）+ `docs/决策记录.md`（变动历史） |
 
 绘图属于market-data，入口为`get_quote_chart`与`get_quote_chart_batch`；完整行为与视觉约束仅见架构§2.6。
+
+`ifind_excel_tool` 是公式库驱动的 iFinD Excel 取数工作台，纯 CLI、随用随开发：AI 先查公式库拿已验证写法，再写一次性脚本调 `engine.py` 取数；高频场景才沉淀为 `recipes/`。方案见[建设方案](docs/iFinD公式验证库建设方案-2026-11-18.md)，库字段与用法见[包说明](../src/ifind_excel_tool/README.md)。它与 market-data 平级、零 import 依赖；market-data 保留美股/证券搜索/绘图等独有能力，两边暂并行，后续再定合并或独立。
 
 克制、数据准确真实、维护简单；不为假设中的需求增加抽象或字段。个人工具，不追求大而全。
 
@@ -42,6 +44,10 @@
 | `search_transcripts` | 已缓存电话会议正文检索；见PROJECT |
 
 CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。入口为`establish_company`、`query_batch`、`read_batch`、`search_batch`、`query_a_share_interactions_batch`、`query_transcripts_batch`、`search_transcripts_batch`，与MCP共用业务实现。顶层分发字段固定为`tool`，建档子动作固定为`action`。
+
+### ifind_excel_tool（纯 CLI，非 MCP）
+
+入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`，仅 `lookup`（查已验证公式）、`run`（数值公式矩阵）、`text`（文本公式）三个命令。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。已验证公式库 `formula_library/verified-formulas.jsonl`（40条），全量索引 `catalog.jsonl`（30281条，脚本生成）。库字段、转入规则、随用随开发流程见[包说明](../src/ifind_excel_tool/README.md)与[库说明](../src/ifind_excel_tool/formula_library/README.md)。
 
 ### market-data MCP（7 个工具）
 
