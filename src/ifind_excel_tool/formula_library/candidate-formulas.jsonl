@@ -34,3 +34,4 @@
 {"path":"港股全部指标/港股行情指标/港股日行情","name":"指定日相近交易日","indicator":"","verification":"unverified","note":"港股日行情树截图显示支持该指标，用户未给原文，属不常用备查；使用时向用户索取"}
 {"path":"港股全部指标/港股行情指标/港股日行情","name":"复权因子","indicator":"","verification":"unverified","note":"港股日行情树截图显示支持该指标，用户未给原文，属不常用备查；使用时向用户索取"}
 {"path":"港股全部指标/港股行情指标/港股日行情","name":"停牌原因","indicator":"","verification":"unverified","note":"港股日行情树截图显示支持该指标，用户未给原文，属不常用备查；使用时向用户索取"}
+{"path":"美股全部指标/美股行情指标/美股日行情","name":"复权因子","indicator":"","verification":"unverified","note":"美股日行情树截图显示支持该指标，用户未给原文，属不常用备查；使用时向用户索取"}
