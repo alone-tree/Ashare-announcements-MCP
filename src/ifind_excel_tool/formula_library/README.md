@@ -40,6 +40,8 @@ verified_with_caveat 表示公式正确但有限制条件，返回数据时必�
 - 无 example_value 的记录不得标 verified，只能 verified_with_caveat。
 - 修正须经 update_verified.py 并记录到 correction-log.jsonl；修正只改用户确认过的字段。
 
+总原则：宁可库里少几条，不能有一条错的。
+
 ## 转入规则
 
 未验证公式经推测、实测后，满足全部条件才转入已验证库：

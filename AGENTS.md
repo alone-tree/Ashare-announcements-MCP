@@ -91,7 +91,7 @@ iFinD Excel手册的指标码、参数原文及页码可直接检索[公式索�
 6. **重写/大改任何文档前必须先备份**（时间戳目录 `docs/backup-YYYYMMDD-HHMM/`）。
 7. 未经用户明确要求，不部署、不导出、不推送。**本地 commit 不用等提醒：每组改动完成并验证后直接 `git commit` 作为保存点；仍未要求不 push**。（规则变动过程见 `docs/决策记录.md` 2026-10-19）
 8. 临时探针放 `.codex-temp/`，不得混入生产模块。
-9. **ifind_excel_tool 公式库只认两类权威来源**：用户从 iFinD 插件界面提供并确认的描述与值、真实 Excel 取数且人工确认过的结果。`excel_description.dat`/`catalog.jsonl`、2018手册、历史仓库、AI 自己填的 path/name/source/unit 都不是权威，**严禁用这些来源去核对或覆盖已验证库**（2026-11-18 踩坑：拿 catalog 把港元数据"元"覆盖了用户实测的"港元"，还塞入了不在插件里的枚举）。path/name 一律以用户贴的插件界面原文为准，不自己按理解填。无示例值的记录不得标 `verified`，只能 `verified_with_caveat`。宁可库里少几条，不能有一条错的。
+9. ifind_excel_tool 公式库的数据来源与写入纪律见[库说明](../src/ifind_excel_tool/formula_library/README.md#数据来源等级2026-11-18-踩坑后定)，不在本文件复述。
 
 ## 七、开发方式
 
