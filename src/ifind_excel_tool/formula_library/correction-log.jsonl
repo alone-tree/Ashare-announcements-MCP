@@ -20,3 +20,4 @@
 {"action":"add-parent-name","at":"2026-11-19","reason":"带缩进科目新增parent_name字段（只写直接上级纯名称、不带缩进/path/不穿透，上级与子path相同）。对比两种提取：json缩进向前找会对现金流量表（小计在明细之后）找错父；notes里的父子关系由人确认准确，从notes提取父名后去掉已废弃的中文顿号编号以匹配当前name。写入前验证所有父名都能在库里找到对应记录。notes保留不动。","added_count":187}
 {"action":"add","at":"2026-11-19","reason":"用户提供现金流量表(单季度)101条；第4参100复跑101条与Excel一致；期初现金等价物余额(ths_sq_final_cce_balance_stock)经勾稽验证期末-净增加=期初确认数据正确按原样录；path到分组，带缩进加parent_name，去中文编号与其中前缀，补充资料归入虚拟路径。","added_count":101}
 {"action":"fix","at":"2026-11-19","reason":"用户指出利润表有独立单季度path，现金流量表录入时误将101条单季度记录塞进累计path（与利润表处理不一致）。迁移74条至现金流量表单季度、27条至现金流量表单季度/补充资料（含1条ths_sq_initial_balance_of_cce_stock漏标name已补单季度前缀）；general-notes id7作用域限定累计、新增id8覆盖单季度两path。记录数不变547条。"}
+{"action":"add","at":"2026-11-19","reason":"录入港股一般企业资产负债表24条（流动资产11+非流动资产13，含资产合计归非流动资产path），库547→571。公式5参+单位元忽略，general-notes id9记口径；example锚2026-09-30，2025-12-31值记notes。"}
