@@ -16,3 +16,4 @@
 {"action": "fix-cf-notes-v2", "at": "2026-11-19", "reason": "首次录入用向前找父，因现金流量表小计在明细之后导致28条notes为空或错标；改为重读Excel按行号重建父子（L2明细向后找L1小计、L1小计差额向后找L0净额、L3其中子公司向前找L2），按indicator精确修正。", "fixed_count": 63}
 {"action": "fix-financial-path", "at": "2026-11-19", "reason": "用户指出财报科目path不应深入到科目名（与name重叠）；插件函数树path只到分组（资产负债表/流动资产等、利润表、现金流量表、补充资料），科目名只在name字段。批量去掉财报path末段科目名，保留中间分组；name/indicator不变，通用注释靠path前缀匹配仍生效。", "fixed_count": 394}
 {"action": "fix-qizhong-prefix", "at": "2026-11-19", "reason": "三大报表均检查：之前确定二级科目name只用缩进、不加“其中：”前缀，但录入时照抄了Excel原文自带的“其中：”。全财报范围去掉name的“其中：/其中:”前缀，保留缩进空格，indicator/notes/path不变。", "fixed_count": 19}
+{"action": "fix-cn-number-prefix", "at": "2026-11-19", "reason": "用户要求去掉财报name里“一、二、三、”这类中文数字顿号编号（17条，利润表/单季度/现金流量表一级小计）；“(一)”“1,”等其他编号格式不动。只改name前导编号，保留缩进与后续文字，path/indicator/notes不变。", "fixed_count": 17}
