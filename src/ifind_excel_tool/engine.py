@@ -289,6 +289,54 @@ def _excel_executable() -> str:
     raise RuntimeError("未找到桌面版 Excel 安装路径")
 
 
+def _cleanup_recovery():
+    """启动前清除本工作簿的崩溃恢复残留；失败不阻塞打开。
+
+    Excel 被强杀后 DocumentRecovery 注册表记录会让下次启动弹「文档恢复」
+    面板；本工作簿只作临时取数板、永远不需要恢复。仅按名称删除本工作簿
+    的记录与自动保存副本，其他工作簿（含 PERSONAL）的恢复数据不动。
+    """
+    import re
+    import shutil
+    import stat
+    import winreg
+
+    marker = WORKBOOK.stem.lower()
+    backup = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Excel"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"SOFTWARE\Microsoft\Office\16.0\Excel\Resiliency\DocumentRecovery",
+                            0, winreg.KEY_ALL_ACCESS) as key:
+            for index in reversed(range(winreg.QueryInfoKey(key)[0])):
+                subkey = winreg.EnumKey(key, index)
+                with winreg.OpenKey(key, subkey) as item:
+                    texts = []
+                    for pos in range(winreg.QueryInfoKey(item)[1]):
+                        data = winreg.EnumValue(item, pos)[1]
+                        if isinstance(data, bytes):
+                            texts.append(data.decode("utf-16le", errors="ignore").lower())
+                if not any(marker in text for text in texts):
+                    continue
+                for text in texts:
+                    for name in sorted(set(re.findall(r"~ar\w+\.xar", text))):
+                        path = backup / name
+                        if path.is_file():
+                            path.unlink()  # 仅删本工作簿记录引用的自动保存文件
+                winreg.DeleteKey(key, subkey)
+    except OSError:
+        pass  # 清理失败最多让恢复面板再弹一次，不值得阻塞取数
+    if backup.is_dir():
+        for path in backup.glob(WORKBOOK.stem + "*"):
+            if not path.is_dir():
+                continue
+            try:
+                for child in path.rglob("*"):
+                    os.chmod(child, stat.S_IWRITE)  # 恢复副本带只读属性，先解除再删
+                shutil.rmtree(path)
+            except OSError:
+                pass  # 同上，失败只留垃圾文件，不影响取数
+
+
 def _check_ifind_disabled():
     """Connect=True 不能排除 Excel 硬禁用；只检测，不更改用户的禁用选择。"""
     import winreg
@@ -380,6 +428,7 @@ def _execute(request: dict, deadline: float) -> dict:
             return {"workbook": str(WORKBOOK), "opened": False}
         if not WORKBOOK.is_file():
             raise FileNotFoundError(f"缺少专用工作簿：{WORKBOOK}")
+        _cleanup_recovery()
         process = subprocess.Popen([_excel_executable(), "/x", str(WORKBOOK)],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL)

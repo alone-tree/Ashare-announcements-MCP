@@ -6,12 +6,12 @@
 
 | 部分 | 内容 |
 |---|---|
-| engine.py | Excel COM 执行层，从 market_data_mcp/ifind_excel.py 复制，独立定位工作簿 |
-| cli.py | 极薄入口，只有 lookup / run / text 三个命令 |
+| engine.py | Excel COM 执行层，从 market_data_mcp/ifind_excel.py 复制，独立定位工作簿；启动前自动清除本工作簿的崩溃恢复残留 |
+| cli.py | 极薄入口，只有 lookup / run / text / close 四个命令 |
 | formula_library/verified-formulas.jsonl | 已验证公式，人工锚定，AI 优先检索 |
 | formula_library/catalog.jsonl | 全量30281条指标索引，脚本生成，未验证 |
 | recipes/ | 高频场景脚本，初期为空 |
-| data/ifind_workspace.xlsx | 专用工作簿 |
+| data/ifind_workspace.xlsx | 专用工作簿，只含 data 页（纯取数通道，永不保存） |
 
 ## 用法
 
@@ -30,7 +30,7 @@ CLI 示例（stdin JSON → stdout JSON）：
 echo '{"cmd":"lookup","keyword":"净利润","limit":5}' | PYTHONPATH=src D:/venvs/a-share-announcements/Scripts/python.exe src/ifind_excel_tool/cli.py
 ```
 
-`run`/`text` 同理，把上面 JSON 换成 `{"cmd":"run","matrix":[...]}` 或 `{"cmd":"text","formulas":[...]}`。
+`run`/`text` 同理，把上面 JSON 换成 `{"cmd":"run","matrix":[...]}` 或 `{"cmd":"text","formulas":[...]}`；用完可发 `{"cmd":"close"}` 不保存关闭专用 Excel。
 
 一次性脚本示例（写到 `.codex-temp/` 用完即删）：
 

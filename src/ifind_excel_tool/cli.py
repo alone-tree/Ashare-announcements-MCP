@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ifind_excel_tool 极薄 CLI：只提供 lookup / run / text 三个命令。
+"""ifind_excel_tool 极薄 CLI：只提供 lookup / run / text / close 四个命令。
 
 设计意图：CLI 不做场景封装，只暴露库检索与原始执行能力。
 AI 需要数据时先 lookup 查公式，再写一次性脚本调 engine；
@@ -9,6 +9,7 @@ AI 需要数据时先 lookup 查公式，再写一次性脚本调 engine；
   {"cmd":"lookup","keyword":"市盈率","limit":5}
   {"cmd":"run","matrix":[[=@thsiFinD(...)],...],"timeout":300}
   {"cmd":"text","formulas":["=@thsiFinD(...)"]}
+  {"cmd":"close"}
 """
 from __future__ import annotations
 
@@ -68,7 +69,12 @@ def text(req: dict) -> dict:
     return {"ok": True, "source": "ifind_excel", **result}
 
 
-CMDS = {"lookup": lookup, "run": run, "text": text}
+def close(req: dict) -> dict:
+    return {"ok": True, "source": "ifind_excel",
+            **engine.close_excel(timeout=float(req.get("timeout") or 30))}
+
+
+CMDS = {"lookup": lookup, "run": run, "text": text, "close": close}
 
 
 def main() -> None:
