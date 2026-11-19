@@ -174,33 +174,6 @@ def set_visible(visible: bool, *, timeout: float = 15) -> dict:
     return _call("visible", visible=visible, timeout=timeout)
 
 
-def fetch_formulas(formulas: list[str], *, visible: bool | None = None,
-                   timeout: float = 120) -> dict:
-    """一列普通 iFinD 公式批写批读；返回原始数值/空值，前后清空 data 页。
-
-    visible=None 保持复用实例的状态，新实例默认可见。这里只接受调用方
-    已确认的 thsiFinD 公式，不生成指标参数或计算派生值。
-    """
-    if not formulas or not all(isinstance(f, str) and
-                               f.lower().startswith(("=@thsifind(", "=thsifind("))
-                               for f in formulas):
-        raise ValueError("需要非空的普通 thsiFinD 公式列表")
-    return _call("fetch", formulas=list(formulas), visible=visible, timeout=timeout)
-
-
-def fetch_matrix(formulas: list[list[str]], *, visible: bool | None = None,
-                 timeout: float = 600) -> dict:
-    """日期×字段的完整公式矩阵一次写入、整块读取；错误单元格单独报告。"""
-    if not formulas or not isinstance(formulas[0], list) or not formulas[0]:
-        raise ValueError("需要非空的二维 iFinD 公式矩阵")
-    width = len(formulas[0])
-    if any(not isinstance(row, list) or len(row) != width or
-           any(not isinstance(f, str) or not f.lower().startswith(
-               ("=@thsifind(", "=thsifind(")) for f in row) for row in formulas):
-        raise ValueError("公式矩阵必须为等宽的普通 thsiFinD 公式行")
-    return _call("fetch", matrix=formulas, visible=visible, timeout=timeout)
-
-
 def get_market_value(code: str, start: str, end: str, *,
                      visible: bool | None = None, timeout: float = 120) -> dict:
     """用已实测模板按日历日查询总市值，不读写业务缓存、不回退 SDK。"""
