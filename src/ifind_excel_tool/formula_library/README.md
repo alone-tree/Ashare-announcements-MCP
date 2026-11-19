@@ -6,10 +6,10 @@
 
 | 字段 | 含义 |
 |---|---|
-| path | 插件函数搜索树路径，斜杠分隔 |
-| name / aliases | 中文名与别名，用于检索 |
+| path | 插件函数搜索树路径，斜杠分隔，只到分组层（如资产负债表/流动资产），不含具体科目名 |
+| name / aliases | 中文名与别名，用于检索。name 前导空格（每级4个）是报表内层级缩进，勿 strip；层级同时以 parent_name 标直接上级纯名称（path 相同的父子不另标 path，多层只标直接上级不穿透） |
 | indicator | iFinD 指标码 |
-| formula_template | 带 {code}/{date} 占位符的完整公式 |
+| formula_template | 带 {code}/{date}/{type} 占位符的完整公式；喂给 engine 前需自行替换成完整 thsiFinD 公式 |
 | definition / algorithm | 定义与算法原文 |
 | parameters | 数组，每项 position/name/meaning/options/default |
 | source / unit | 来源与单位，原文为空则留空 |

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""生成 verified-formulas.jsonl：只生成用户亲自确认的2条。"""
+"""首批生成脚本（历史遗留）：仅生成最初用户亲自确认的2条，RECORDS 已置空不再使用；当前库由多轮人工确认累积至547条，见 correction-log.jsonl。新增记录不要用本脚本，按 formula_library/README.md 的写入纪律直接追加。"""
 from __future__ import annotations
 import json
 from pathlib import Path

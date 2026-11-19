@@ -24,11 +24,32 @@ AI 取数流程：
 
 CLI 示例（stdin JSON → stdout JSON）：
 
-```bat
-echo {"cmd":"lookup","keyword":"市盈率"} | python ifind_excel_tool\cli.py
-echo {"cmd":"run","matrix":[["=@thsiFinD(...)"]]} | python ifind_excel_tool\cli.py
-echo {"cmd":"text","formulas":["=@thsiFinD(...)"]} | python ifind_excel_tool\cli.py
+在仓库根目录执行（必须设 PYTHONPATH=src 并用项目 venv）：
+
+```bash
+echo '{"cmd":"lookup","keyword":"净利润","limit":5}' | PYTHONPATH=src D:/venvs/a-share-announcements/Scripts/python.exe src/ifind_excel_tool/cli.py
 ```
+
+`run`/`text` 同理，把上面 JSON 换成 `{"cmd":"run","matrix":[...]}` 或 `{"cmd":"text","formulas":[...]}`。
+
+一次性脚本示例（写到 `.codex-temp/` 用完即删）：
+
+```python
+import sys
+sys.path.insert(0, 'src')
+from ifind_excel_tool import engine
+
+# 先用 lookup 拿 formula_template，替换 {code}/{date}/{type} 占位符后填入完整公式
+matrix = [
+    ['=@thsiFinD("ths_revenue_stock","600519.SH","2025-12-31",100)'],
+    ['=@thsiFinD("ths_np_stock","600519.SH","2025-12-31",100)'],
+]
+r = engine.fetch_matrix(matrix, timeout=300)
+print(r['values'], r.get('errors'))
+# engine 返回裸数值二维数组；单位取 lookup 的 unit 字段（注意 EPS 为元/股，与金额元不同）
+```
+
+公式模板里的占位符有 `{code}`、`{date}`、`{type}` 三种，需自行替换成完整公式；engine 只接受以 `=@thsiFinD(` 开头或 `=thsiFinD(` 开头的完整公式。
 
 ## 库维护
 

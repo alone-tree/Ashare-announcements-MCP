@@ -47,7 +47,7 @@ CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。�
 
 ### ifind_excel_tool（纯 CLI，非 MCP）
 
-入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`，仅 `lookup`（查已验证公式）、`run`（数值公式矩阵）、`text`（文本公式）三个命令。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。已验证公式库 `formula_library/verified-formulas.jsonl`（当前2条，仅用户亲自确认的公式；2026-11-18 清除了38条未经人工核验的记录），全量索引 `catalog.jsonl`（30281条，脚本生成）。库字段、转入规则、随用随开发流程见[包说明](../src/ifind_excel_tool/README.md)与[库说明](../src/ifind_excel_tool/formula_library/README.md)。
+入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`，仅 `lookup`（查已验证公式）、`run`（数值公式矩阵）、`text`（文本公式）三个命令。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。已验证公式库 `formula_library/verified-formulas.jsonl`（当前547条，清库后经多轮人工确认补回；仅收用户提供的插件原文或人工确认的实测值，2026-11-18 曾清除38条未经人工核验的记录），全量索引 `catalog.jsonl`（30281条，脚本生成）。库字段、转入规则、随用随开发流程见[包说明](../src/ifind_excel_tool/README.md)与[库说明](../src/ifind_excel_tool/formula_library/README.md)。
 
 ### market-data MCP（7 个工具）
 

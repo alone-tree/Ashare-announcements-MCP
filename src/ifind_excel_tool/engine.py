@@ -1,6 +1,6 @@
 """独立 iFinD Excel 运行层；无 MCP/CLI/SDK/业务缓存依赖。
 
-使用说明见 docs/Excel常驻运行层.md。COM 在有超时边界的短工作进程中执行，
+使用说明见本包 README.md（src/ifind_excel_tool/README.md）。COM 在有超时边界的短工作进程中执行，
 Excel 自身常驻；每次从本模块相对位置定位专用工作簿。
 """
 
