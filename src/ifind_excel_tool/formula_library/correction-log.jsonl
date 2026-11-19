@@ -18,3 +18,4 @@
 {"action": "fix-qizhong-prefix", "at": "2026-11-19", "reason": "三大报表均检查：之前确定二级科目name只用缩进、不加“其中：”前缀，但录入时照抄了Excel原文自带的“其中：”。全财报范围去掉name的“其中：/其中:”前缀，保留缩进空格，indicator/notes/path不变。", "fixed_count": 19}
 {"action": "fix-cn-number-prefix", "at": "2026-11-19", "reason": "用户要求去掉财报name里“一、二、三、”这类中文数字顿号编号（17条，利润表/单季度/现金流量表一级小计）；“(一)”“1,”等其他编号格式不动。只改name前导编号，保留缩进与后续文字，path/indicator/notes不变。", "fixed_count": 17}
 {"action": "add-parent-name", "at": "2026-11-19", "reason": "带缩进科目新增parent_name字段（只写直接上级纯名称、不带缩进/path/不穿透，上级与子path相同）。对比两种提取：json缩进向前找会对现金流量表（小计在明细之后）找错父；notes里的父子关系由人确认准确，从notes提取父名后去掉已废弃的中文顿号编号以匹配当前name。写入前验证所有父名都能在库里找到对应记录。notes保留不动。", "added_count": 187}
+{"action": "add", "at": "2026-11-19", "reason": "用户提供现金流量表(单季度)101条；第4参100复跑101条与Excel一致；期初现金等价物余额(ths_sq_final_cce_balance_stock)经勾稽验证期末-净增加=期初确认数据正确按原样录；path到分组，带缩进加parent_name，去中文编号与其中前缀，补充资料归入虚拟路径。", "added_count": 101}
