@@ -354,6 +354,7 @@ def test_query_transcripts_index_missing_note(monkeypatch: pytest.MonkeyPatch) -
     result = transcripts.query_transcripts("TSM")
     assert result["total_transcripts"] == 0
     assert "没有该公司的电话会页面" in result["note"]
+    assert "manual_check" in result
 
 
 def test_query_transcripts_routes_pure_hk(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -375,6 +376,9 @@ def test_query_transcripts_routes_pure_hk(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["applicable"] is True
     assert result["matched"] == 0
     assert result["results"][0]["status"] == "missing"
+    urls = result["manual_check"]["urls"]
+    assert urls["stockanalysis"] == "https://stockanalysis.com/quote/hkg/0700/transcripts/"
+    assert urls["roic"] == "https://www.roic.ai/quote/HKEX-700/transcripts"
 
 
 def test_query_transcripts_ah_pair_uses_hk_store(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -770,6 +774,7 @@ def test_query_transcripts_period_roic_rate_limit_note(monkeypatch: pytest.Monke
 
     assert "12 秒后可重试" in result["note"]
     assert result["results"][0]["status"] == "missing"
+    assert "manual_check" in result
 
 
 def test_query_transcripts_by_period(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -793,6 +798,7 @@ def test_query_transcripts_by_period(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     result = transcripts.query_transcripts("AAPL", period="FY2026-Q2")
     assert result["matched"] == 1
     assert result["body"][0]["author"] == "CEO"
+    assert "manual_check" not in result
 
 
 def test_query_transcripts_period_missing_note(monkeypatch: pytest.MonkeyPatch) -> None:

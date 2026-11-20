@@ -578,6 +578,25 @@ def _roic_note_suffix(roic_meta: dict[str, Any]) -> str:
     return ""
 
 
+def _manual_check(ticker: str, market: str) -> dict[str, Any]:
+    """两源未取得正文时的人工兜底入口：浏览器可直接打开核对的 URL 与操作说明。"""
+    if market == "H":
+        sa = f"https://stockanalysis.com/quote/hkg/{_hk_symbol(ticker)}/transcripts/"
+        roic = f"https://www.roic.ai/quote/HKEX-{ticker.lstrip('0')}/transcripts"
+    else:
+        sa = f"https://stockanalysis.com/stocks/{ticker.lower()}/transcripts/"
+        roic = f"https://www.roic.ai/quote/{ticker}/transcripts"
+    return {
+        "instruction": (
+            "两源均未取得该季正文时的人工兜底：用浏览器依次打开下列页面核对是否已上架，"
+            "可直接阅读全文；仍未发则用浏览器搜索 investing.com『"
+            + ticker
+            + " earnings call transcript』找当天带发言人的新闻稿。"
+        ),
+        "urls": {"stockanalysis": sa, "roic": roic},
+    }
+
+
 def query_transcripts(
     stock_code: str,
     period: str | None = None,
@@ -613,6 +632,7 @@ def query_transcripts(
             "matched": 0,
             "results": [],
             "note": "stockanalysis 没有该公司的电话会页面（ADR/外国私人发行人常见），暂无数据",
+            "manual_check": _manual_check(ticker, market),
         }
 
     if period:
@@ -626,6 +646,7 @@ def query_transcripts(
                 "results": [],
                 "note": f"未找到财季 {period} 的电话会议（stockanalysis 索引里没有该季）"
                         + _roic_note_suffix(roic_meta),
+                "manual_check": _manual_check(ticker, market),
             }
         record = match[0]
         if record.get("status") != "ok":
@@ -642,6 +663,7 @@ def query_transcripts(
                 "matched": 0,
                 "results": [record],
                 "note": note,
+                "manual_check": _manual_check(ticker, market),
             }
         body = json.loads(Path(record["body_file"]).read_text(encoding="utf-8"))
         return {
