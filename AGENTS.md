@@ -12,7 +12,7 @@
 |---|---|---|
 | 定位 | 公告/提交文档（非结构化）的发现、定位、阅读 | 行情/财报/指标/概况（结构化）数据获取 + 行情绘图（K线/折线，事件标注/高低点） |
 | 数据源 | A/B/H 股=东方财富；美股=SEC EDGAR；LOCAL-=本地材料 | 来源与模块分工见架构设计及财报子文档 |
-| 能力 | 公告、A股互动问答、美股电话会议；具体市场边界见公告侧主文档 | 证券搜索、行情、绘图、财报、营收结构、基础比率及公司信息；具体市场边界见行为规范 |
+| 能力 | 公告、A股互动问答、港美电话会议；具体市场边界见公告侧主文档 | 证券搜索、行情、绘图、财报、营收结构、基础比率及公司信息；具体市场边界见行为规范 |
 | 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（行为）+ `字段与数据源支持情况.md`（客观能力）+ `docs/决策记录.md`（变动历史） |
 
 绘图属于market-data，入口为`get_quote_chart`与`get_quote_chart_batch`；完整行为与视觉约束仅见架构§2.6。
@@ -40,7 +40,7 @@
 | `read_announcement` | 自动检测或按页精读；契约见PROJECT，阅读策略见阅读产品文档 |
 | `search_announcement` | 逐页检索、命中片段及按需OCR；契约见PROJECT |
 | `query_a_share_interactions` | A股互动问答；见PROJECT及公告主文档§6 |
-| `query_transcripts` | 美股电话会议索引及正文；见PROJECT |
+| `query_transcripts` | 港美电话会议索引及正文（美股+港股）；见PROJECT |
 | `search_transcripts` | 已缓存电话会议正文检索；见PROJECT |
 
 CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。入口为`establish_company`、`query_batch`、`read_batch`、`search_batch`、`query_a_share_interactions_batch`、`query_transcripts_batch`、`search_transcripts_batch`，与MCP共用业务实现。顶层分发字段固定为`tool`，建档子动作固定为`action`。

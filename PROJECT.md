@@ -65,13 +65,14 @@ query_transcripts(
 )
 ```
 
-- 美股电话会议（earnings call transcript）通道，仅美股适用；其他市场返回 `applicable=false`。
-- 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`），每次调用同步一次索引页，首次下载最近 12 财季，`force_refresh` 重试失败季。
-- 传 `period`（如 `FY2026-Q3`）：返回该财季完整正文（逐发言轮次：`author` + `text`）；索引里有但没缓存过的季会按需单独补下载。
-- 正文来源 stockanalysis.com：`/stocks/{ticker}/transcripts/` 索引页列出全部财季电话会（标签即公司财季），正文页按发言轮次结构化解析；纯 `requests`，不依赖 cookie 或浏览器。
-- `report_date`/`form` 只从本地公告档案的 10-Q/10-K 反查，有则附上、没有留空（刚开完会尚未提交 10-Q 时为空，属正常）；是否有电话会完全由索引页决定，不再依赖 10-Q/10-K。
+- 港美电话会议（earnings call transcript）通道，美股与港股适用；A/B 股、本地公司返回 `applicable=false`。
+- 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`），每次调用同步一次索引页，首次下载最近 12 财季。
+- 传 `period`（如 `FY2026-Q3`）：只同步并处理该财季，返回完整正文（逐发言轮次：`author` + `text`），不触发最近 12 季批量下载；更早季同样按此按需补。
+- `force_refresh`：重取范围内全部季正文；某季刷新失败时保留已缓存旧稿并附 `refresh_error`，不销毁好缓存。
+- 正文来源 stockanalysis.com：美股 `/stocks/{ticker}/transcripts/`，港股 `/quote/hkg/{四位代码}/transcripts/`（`00700` → `0700`）；正文页按发言轮次结构化解析，截取止于站点注记与页脚；纯 `requests`，不依赖 cookie 或浏览器。
+- 港股电话稿按实际港股证券代码存取；A+H 公司从任一代码查询定位同一份缓存。`report_date`/`form` 仅美股从本地公告档案的 10-Q/10-K 反查，有则附上、没有留空（刚开完会尚未提交 10-Q 时为空，属正常）；是否有电话会完全由索引页决定。
 - ADR/外国发行人走主上市代码兜底：美股代码页 404 时读个股页 `transcriptsLinkSymbol`（TSM → `TPE-2330`、BABA → `HKG-9988`），改走 `/quote/{exchange}/{code}/transcripts/`；两者都没有才返回空索引 + `note`。
-- 状态语义：`ok`=正文已缓存；`missing`=页面 404（该季上游未收录）；`failed`=网络/HTTP/解析异常（带 `http_status` 或 `error`），不冒充「未收录」。
+- 状态语义：`ok`=正文已缓存；`missing`=页面 404（该季上游未收录）；`failed`=网络/HTTP/解析异常（带 `http_status` 或 `error`），不冒充「未收录」。索引条目存在不代表正文可读（老格式页解析不出时为 `failed`）。
 
 ### `search_transcripts`
 
@@ -83,7 +84,7 @@ search_transcripts(
 ```
 
 - 在全部已缓存电话会议正文中检索关键词（空格=AND），返回命中财季、发言作者与上下文片段。
-- 仅美股适用；未同步过正文的财季不参与检索（先调 `query_transcripts` 全量同步）。
+- 美股与港股适用，缓存键与 `query_transcripts` 一致（A+H 两种入口同一份缓存）；未同步过正文的财季不参与检索（先调 `query_transcripts` 同步）。
 
 ### `query_a_share_interactions`
 

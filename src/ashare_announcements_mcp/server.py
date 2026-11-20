@@ -177,13 +177,14 @@ def query_transcripts(
     period: str | None = None,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """查询美股电话会议（earnings call transcript）索引与正文（仅美股适用）。
+    """查询港美电话会议（earnings call transcript）索引与正文（美股与港股适用）。
 
     正文来源 stockanalysis.com：索引页列出全部财季电话会，每次调用同步一次；
     不传 period：返回全部财季索引（fiscal_quarter/report_date/form/status），
-    首次同步下载最近 12 财季，force_refresh 重试失败季；
-    传 period（如 FY2026-Q3）：返回该财季完整正文（逐发言轮次：作者+内容）。
-    report_date 从公司申报的 10-Q/10-K 反查，刚开完会尚未提交 10-Q 时为空，属正常。
+    首次同步下载最近 12 财季；force_refresh 重取范围内全部季，失败时保留旧稿；
+    传 period（如 FY2026-Q3）：只处理该财季，返回完整正文（逐发言轮次：作者+内容）。
+    港股传五位代码（如 00700）；A+H 公司两种入口定位同一份港股缓存。
+    report_date 仅美股从 10-Q/10-K 反查，刚开完会尚未提交 10-Q 时为空，属正常。
     状态：ok=已缓存；missing=该季上游未收录（404）；failed=网络/HTTP 异常（带原因）。
     """
     try:
@@ -197,7 +198,7 @@ def search_transcripts(
     stock_code: str,
     query: str,
 ) -> dict[str, Any]:
-    """检索美股电话会议正文；在全部已缓存财季中定位关键词，返回命中财季与片段（仅美股适用）。
+    """检索港美电话会议正文；在全部已缓存财季中定位关键词，返回命中财季与片段（美股与港股适用）。
 
     字面关键词检索（空格=AND）。结果含发言作者与上下文片段，可用于跨季度对比管理层口径。
     """

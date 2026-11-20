@@ -99,6 +99,31 @@ def test_parse_index_ignores_non_earnings_entries() -> None:
     assert set(entries) == {(2026, 2)}
 
 
+def test_hk_index_url() -> None:
+    """港股五位代码转上游四位习惯写法；美股路径不受影响。"""
+    assert transcripts._index_url("00700", "H") == "https://stockanalysis.com/quote/hkg/0700/transcripts/"
+    assert transcripts._index_url("1024", "H") == "https://stockanalysis.com/quote/hkg/1024/transcripts/"
+    assert transcripts._index_url("AAPL") == "https://stockanalysis.com/stocks/aapl/transcripts/"
+
+
+def test_parse_transcript_stops_at_site_footer() -> None:
+    """正文截取在站点注记/页脚前截止，不混入最后一轮发言。"""
+    html = (
+        '<html><body><div id="transcript-panel-full" role="region">'
+        + _turn("Tim Cook", "We delivered record revenue of $100 billion.")
+        + "<p>Play Audio Download Transcript</p>"
+        + '<summary><div class="border-t"><p>Earnings call transcripts are provided by '
+        + '<a href="https://quartr.com/">Quartr</a> and are published within hours.</p></div></summary>'
+        + "<footer>© 2026 StockAnalysis.com. All rights reserved.</footer>"
+        + "</div></body></html>"
+    )
+    turns = transcripts._parse_transcript(html)
+    assert len(turns) == 1
+    assert "record revenue" in turns[0]["text"]
+    assert "StockAnalysis" not in turns[0]["text"]
+    assert "Quartr" not in turns[0]["text"]
+
+
 def test_parse_transcript() -> None:
     turns = transcripts._parse_transcript(_transcript_html())
     assert [t["author"] for t in turns] == ["Operator", "Tim Cook", "Analyst"]
@@ -329,16 +354,130 @@ def test_query_transcripts_index_missing_note(monkeypatch: pytest.MonkeyPatch) -
     assert "没有该公司的电话会页面" in result["note"]
 
 
-def test_query_transcripts_not_applicable_for_hk(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_query_transcripts_routes_pure_hk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """纯港股走 hkg 路径；指定财季 missing 时如实返回未收录。"""
+    captured: dict[str, Any] = {}
+
+    def fake_sync(code, ticker, market="US", **kw):
+        captured.update(code=code, ticker=ticker, market=market)
+        return {"items": [{"fiscal_quarter": "FY2026-Q3", "status": "missing"}], "new": 0}
+
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "00700")
+    monkeypatch.setattr(
+        transcripts, "resolve_company", lambda code: ("00700", [{"market": "H", "code": "00700"}])
+    )
+    monkeypatch.setattr(transcripts, "sync_transcripts", fake_sync)
+
+    result = transcripts.query_transcripts("00700", period="FY2026-Q3")
+    assert captured == {"code": "00700", "ticker": "00700", "market": "H"}
+    assert result["applicable"] is True
+    assert result["matched"] == 0
+    assert result["results"][0]["status"] == "missing"
+
+
+def test_query_transcripts_ah_pair_uses_hk_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A+H 公司从 A 股代码查询时，电话稿按 H 股代码存取。"""
+    captured: dict[str, Any] = {}
+
+    def fake_sync(code, ticker, market="US", **kw):
+        captured.update(code=code, market=market)
+        return {"items": [], "new": 0}
+
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "300308")
     monkeypatch.setattr(
         transcripts,
         "resolve_company",
-        lambda code: ("00700", [{"market": "H", "code": "00700"}]),
+        lambda code: (
+            "300308",
+            [{"market": "A", "code": "300308"}, {"market": "H", "code": "03308"}],
+        ),
     )
-    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "00700")
-    result = transcripts.query_transcripts("00700")
-    assert result["applicable"] is False
-    assert result["results"] == []
+    monkeypatch.setattr(transcripts, "sync_transcripts", fake_sync)
+
+    transcripts.query_transcripts("300308")
+    assert captured == {"code": "03308", "market": "H"}
+
+
+def test_query_transcripts_period_only_targets_quarter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """指定财季时只处理该季，不触发最近 12 季批量下载。"""
+    captured: dict[str, Any] = {}
+
+    def fake_sync(code, ticker, market="US", only_recent=True, target_period=None, **kw):
+        captured.update(only_recent=only_recent, target_period=target_period)
+        return {"items": [{"fiscal_quarter": "FY2020-Q1", "status": "missing"}], "new": 0}
+
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "AAPL")
+    monkeypatch.setattr(
+        transcripts, "resolve_company", lambda code: ("AAPL", [{"market": "US", "code": "AAPL"}])
+    )
+    monkeypatch.setattr(transcripts, "sync_transcripts", fake_sync)
+
+    transcripts.query_transcripts("AAPL", period="FY2020-Q1")
+    assert captured == {"only_recent": False, "target_period": "FY2020-Q1"}
+
+
+def test_search_transcripts_uses_hk_store(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """A+H 检索与查询同键：从 A 股入口检索 H 股代码下的缓存。"""
+    import json
+
+    body_file = tmp_path / "FY2026-Q3.json"
+    body_file.write_text(
+        json.dumps(
+            {"meta": {"source": "stockanalysis"}, "body": [{"author": "CEO", "text": "revenue up"}]}
+        ),
+        encoding="utf-8",
+    )
+    items = [{"fiscal_quarter": "FY2026-Q3", "status": "ok", "body_file": str(body_file)}]
+    seen: dict[str, Any] = {}
+
+    def fake_load(code: str):
+        seen["code"] = code
+        return {"items": items, "meta": {}}
+
+    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "300308")
+    monkeypatch.setattr(
+        transcripts,
+        "resolve_company",
+        lambda code: (
+            "300308",
+            [{"market": "A", "code": "300308"}, {"market": "H", "code": "03308"}],
+        ),
+    )
+    monkeypatch.setattr(transcripts, "load_transcripts", fake_load)
+
+    result = transcripts.search_transcripts("300308", "revenue")
+    assert seen["code"] == "03308"
+    assert result["applicable"] is True
+    assert result["matched"] == 1
+
+
+def test_sync_transcripts_force_refresh_keeps_ok_on_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """强制刷新正文下载失败时保留已缓存旧稿，只记刷新失败原因。"""
+    _setup(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        transcripts, "_fetch_html", _fake_fetch(_index_html([(2026, 1)]), _transcript_html())
+    )
+    first = transcripts.sync_transcripts("AAPL", "AAPL")
+    assert first["items"][0]["status"] == "ok"
+    body_file = first["items"][0]["body_file"]
+
+    monkeypatch.setattr(
+        transcripts,
+        "load_transcripts",
+        lambda _code: {"items": first["items"], "meta": {}},
+    )
+    monkeypatch.setattr(
+        transcripts,
+        "_fetch_html",
+        lambda url: (200, _index_html([(2026, 1)])) if url.endswith("/transcripts/") else (503, ""),
+    )
+    second = transcripts.sync_transcripts("AAPL", "AAPL", force_refresh=True)
+    item = second["items"][0]
+    assert item["status"] == "ok"
+    assert item["body_file"] == body_file
+    assert "503" in str(item.get("refresh_error"))
 
 
 def test_query_transcripts_by_period(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

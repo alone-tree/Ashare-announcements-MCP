@@ -679,6 +679,13 @@ https://stockanalysis.com/stocks/{ticker}/transcripts/
 
 ADR/外国发行人的电话会可挂在主上市代码下；实测个股页`transcriptsLinkSymbol`提供TSM → `TPE-2330`、BABA → `HKG-9988`，主上市代码页覆盖TSM 62季、BABA 48季、NIO 32季、ASML 41季。工具的路由、report_date关联、状态与缓存规则仅见[PROJECT的query_transcripts契约](../PROJECT.md#query_transcripts)。
 
+**港股正文页**（2026-11-20 接入实测）：`/quote/hkg/{四位代码}/transcripts/{id}-q{q}-{year}/`
+
+- 路径用交易所四位习惯写法：`00700` → `0700`（实测 `00700` 路径 404）。腾讯最新季正文 41 发言轮次（含问答）、快手 63 轮、小米 2018 Q3 历史季 174 轮，现有站点级解析器直接可读。
+- 索引条目存在不代表正文可读：NVDA 2011 Q1 与腾讯 2010 Q2 页面 HTTP 200 但解析不出发言轮次（老格式页），按 `failed` 处理。
+- 代码复用旧公司样本 00300、03308 索引 404；接入按当前建档证券代码取稿，上游不承诺历史条目发行人一致性。
+- 正文截取止于 `<summary`/`<footer` 站点注记边界；此前页脚与 Quartr 注记会混入最后一轮发言（美股页同样存在），2026-11-20 修复。
+
 **已退役来源（2026-10-22）**：
 
 - Alpha Spread：原主源，正文是 `div.comment` 结构。2026-09 起 Cloudflare managed challenge，须 `alphaspread_cookies.json` 的 cf_clearance + 配套 UA，而 cf_clearance 绑定出口 IP，2026-09-10 之后长期 403；同时站点改版（`div.comment` → `article.earnings-call__turn`）使旧解析器取不到正文。已整体移除。

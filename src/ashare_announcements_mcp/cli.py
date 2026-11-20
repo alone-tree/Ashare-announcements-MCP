@@ -231,7 +231,18 @@ def query_transcripts_batch(request: dict[str, Any]) -> dict[str, Any]:
         try:
             result = query_transcripts(stock_code, period=period, force_refresh=force_refresh)
             company = {"ok": True, **result}
-            transcripts.extend(result.get("results") or [])
+            if period:
+                # 指定财季时结果没有 results 列表，用单条记录保证顶层计数与公司一致
+                if result.get("matched"):
+                    transcripts.append(
+                        {
+                            "stock_code": stock_code,
+                            "fiscal_quarter": result.get("fiscal_quarter"),
+                            "matched": 1,
+                        }
+                    )
+            else:
+                transcripts.extend(result.get("results") or [])
         except Exception as exc:
             company = {"ok": False, "stock_code": stock_code, "error": str(exc), "results": []}
         companies.append(company)

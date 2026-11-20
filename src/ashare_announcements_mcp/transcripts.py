@@ -1,4 +1,4 @@
-"""美股电话会议（earnings call transcript）通道。
+"""港美电话会议（earnings call transcript）通道。
 
 数据源：stockanalysis.com（站点级提取器，2026-10-22 起唯一正文源）
 - 索引页 /stocks/{ticker}/transcripts/ 直接列出全部电话会（“Earnings Call: Q2 2026”+链接），
@@ -30,6 +30,7 @@ from ashare_announcements_mcp.cache import load_cache, stock_cache_dir
 from ashare_announcements_mcp.service import normalize_stock_code, resolve_company, sync_edgar_archive
 
 SA_BASE = "https://stockanalysis.com/stocks/{ticker}/transcripts/"
+SA_HK_BASE = "https://stockanalysis.com/quote/hkg/{code}/transcripts/"
 SA_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
@@ -248,7 +249,14 @@ def _fetch_html(url: str) -> tuple[int, str]:
     raise RuntimeError(f"请求失败（已重试 3 次）：{type(last_error).__name__}: {last_error}")
 
 
-def _index_url(ticker: str) -> str:
+def _hk_symbol(hk_code: str) -> str:
+    """00700 → 0700：上游港股页使用交易所四位习惯写法（实测 00700 路径 404）。"""
+    return hk_code[1:] if hk_code.startswith("0") else hk_code
+
+
+def _index_url(ticker: str, market: str = "US") -> str:
+    if market == "H":
+        return SA_HK_BASE.format(code=_hk_symbol(ticker))
     return SA_BASE.format(ticker=ticker.lower())
 
 
@@ -292,9 +300,10 @@ def _parse_transcript(html: str) -> list[dict[str, str]]:
     """正文页 → [{author, text}]；按 turn 分块（div.border-t + div.text-lg.font-bold）。"""
     start = html.find('id="transcript-panel-full"')
     body = html[start:] if start != -1 else html
-    end = body.find('id="transcript-panel-')
-    if end > 0:
-        body = body[:end]
+    for marker in ('id="transcript-panel-', "<summary", "<footer"):
+        end = body.find(marker)
+        if end > 0:
+            body = body[:end]
 
     parts: list[dict[str, str]] = []
     for chunk in re.split(r'<div class="border-t border-sharp pt-5', body)[1:]:
@@ -325,30 +334,32 @@ def _download_body(code: str, url: str) -> tuple[dict[str, Any] | None, dict[str
         return None, {"status": "failed", "http_status": status}
     turns = _parse_transcript(html)
     if not turns:
-        return None, {"status": "failed", "error": "正文页解析不出发言轮次（站点结构可能改版）"}
+        return None, {"status": "failed", "error": "正文页解析不出发言轮次（老格式页或站点结构变化）"}
     return {
         "meta": {"source": "stockanalysis", "url": url, "fetched_at": date.today().isoformat()},
         "body": turns,
     }, {"status": "ok"}
 
 
-def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
+def sync_transcripts(code: str, ticker: str, market: str = "US", force_refresh: bool = False,
                      only_recent: bool = True,
                      target_period: str | None = None) -> dict[str, Any]:
-    """维护电话会议索引：拉 stockanalysis 索引页，差集下载正文。
+    """维护电话会议索引：拉 stockanalysis 索引页，差集下载正文（美股与港股）。
 
     - 索引页就是“有哪些财季电话会”的唯一依据（不再推算、不再猜 URL）；
-    - report_date/form 从本地 10-Q/10-K 反查（没有则留空）；
-    - 已缓存 ok 的财季不重下；missing/failed 每次同步重试；force_refresh 重试全部非 ok；
+    - 美股 report_date/form 从本地 10-Q/10-K 反查（没有则留空）；港股留空；
+    - 已缓存 ok 且正文文件仍在的财季不重下；missing/failed 每次同步重试；
+      force_refresh 重取范围内全部季，失败时保留旧稿（见下载循环）；
     - only_recent=True（默认）只下载最近 RECENT_QUARTERS 季，更早的按需补（target_period）。
     """
-    cik = _company_cik(code)
-    if cik:
-        sync_edgar_archive(code, cik)  # 仅为 report_date 提供最新 10-Q/10-K
+    if market == "US":
+        cik = _company_cik(code)
+        if cik:
+            sync_edgar_archive(code, cik)  # 仅为 report_date 提供最新 10-Q/10-K
 
-    index_url = _index_url(ticker)
+    index_url = _index_url(ticker, market)
     status, html = _fetch_html(index_url)
-    if status == 404:
+    if status == 404 and market == "US":
         # 美股代码页无电话会（ADR/外国发行人常见）→ 走主上市代码
         cross_url = _cross_listing_index_url(ticker)
         if cross_url:
@@ -380,8 +391,7 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
             "url": url if url.startswith("http") else f"https://stockanalysis.com{url}",
         }
         if (
-            not force_refresh
-            and old.get("status") == "ok"
+            old.get("status") == "ok"
             and old.get("body_file")
             and Path(str(old["body_file"])).exists()
         ):
@@ -394,7 +404,11 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
 
     # only_recent：只看最近 RECENT_QUARTERS 季（含已缓存），更早的等 period 指定再补
     scope = items[:RECENT_QUARTERS] if only_recent and not target_period else items
-    to_fetch = [it for it in scope if it.get("status") != "ok"]
+    if force_refresh:
+        # 强制刷新重取范围内全部季；失败时保留已缓存旧稿
+        to_fetch = list(scope)
+    else:
+        to_fetch = [it for it in scope if it.get("status") != "ok"]
     if target_period:
         to_fetch = [it for it in to_fetch if it["fiscal_quarter"] == target_period]
 
@@ -403,11 +417,15 @@ def sync_transcripts(code: str, ticker: str, force_refresh: bool = False,
         fiscal_quarter = str(item["fiscal_quarter"])
         body, meta = _download_body(code, str(item["url"]))
         if body is None:
-            item["status"] = meta.get("status", "failed")
-            if meta.get("http_status"):
-                item["http_status"] = meta["http_status"]
-            if meta.get("error"):
-                item["error"] = meta["error"]
+            if item.get("status") == "ok" and item.get("body_file"):
+                # 强制刷新失败：保留已缓存旧稿，只记录刷新失败原因
+                item["refresh_error"] = meta.get("error") or f"HTTP {meta.get('http_status')}"
+            else:
+                item["status"] = meta.get("status", "failed")
+                if meta.get("http_status"):
+                    item["http_status"] = meta["http_status"]
+                if meta.get("error"):
+                    item["error"] = meta["error"]
         else:
             item["status"] = "ok"
             item["source"] = body["meta"]["source"]
@@ -437,16 +455,22 @@ def query_transcripts(
     code = normalize_stock_code(stock_code)
     _company_key, securities = resolve_company(code)
     us = [s for s in securities if s.get("market") == "US"]
-    if not us:
+    hk = [s for s in securities if s.get("market") == "H"]
+    if us:
+        ticker, market = us[0]["code"], "US"
+    elif hk:
+        # 港股电话稿按实际港股代码存取；A+H 两种入口定位同一份缓存
+        ticker, market, code = hk[0]["code"], "H", hk[0]["code"]
+    else:
         return {
             "stock_code": code,
             "applicable": False,
-            "reason": "该公司无电话会议（仅美股适用），不适用",
+            "reason": "该公司无电话会议记录（A/B 股、本地公司不适用）",
             "total_transcripts": 0,
             "results": [],
         }
-    ticker = us[0]["code"]
-    result = sync_transcripts(code, ticker, force_refresh=force_refresh, only_recent=True)
+    result = sync_transcripts(code, ticker, market=market, force_refresh=force_refresh,
+                              only_recent=not period, target_period=period)
     items = result["items"]
     if result.get("index_available") is False and not items:
         return {
@@ -470,13 +494,6 @@ def query_transcripts(
                 "note": f"未找到财季 {period} 的电话会议（stockanalysis 索引里没有该季）",
             }
         record = match[0]
-        if record.get("status") != "ok":
-            # 目标财季未缓存（早期季或首次同步范围外）：按需单独补下载该季
-            result = sync_transcripts(code, ticker, force_refresh=force_refresh,
-                                      only_recent=False, target_period=period)
-            items = result["items"]
-            match = [it for it in items if str(it.get("fiscal_quarter") or "") == period]
-            record = match[0] if match else record
         if record.get("status") != "ok":
             status = record.get("status")
             if status == "missing":
@@ -526,18 +543,24 @@ def search_transcripts(stock_code: str, query: str) -> dict[str, Any]:
     code = normalize_stock_code(stock_code)
     _company_key, securities = resolve_company(code)
     us = [s for s in securities if s.get("market") == "US"]
-    if not us:
+    hk = [s for s in securities if s.get("market") == "H"]
+    if us:
+        store = code
+    elif hk:
+        store = hk[0]["code"]  # 与 query_transcripts 同键，A+H 两种入口同一份缓存
+        code = store
+    else:
         return {
             "stock_code": code,
             "applicable": False,
-            "reason": "该公司无电话会议（仅美股适用），不适用",
+            "reason": "该公司无电话会议记录（A/B 股、本地公司不适用）",
             "matched": 0,
             "results": [],
         }
     if not query or not query.strip():
         raise ValueError("query 不能为空")
 
-    cached = load_transcripts(code)
+    cached = load_transcripts(store)
     items = cached.get("items") or []
     keywords = [k for k in query.strip().lower().split() if k]
 

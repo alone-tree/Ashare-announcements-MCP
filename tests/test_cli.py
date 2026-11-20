@@ -285,6 +285,27 @@ def test_search_batch_rejects_null_query() -> None:
     assert result["searches"][0]["error"] == "每条公告必须包含 query，或在请求顶层提供 query"
 
 
+def test_query_transcripts_batch_period_counts_body(monkeypatch) -> None:
+    """指定财季拿到正文时，顶层 matched 与公司结果一致。"""
+    from ashare_announcements_mcp import transcripts
+
+    monkeypatch.setattr(
+        transcripts,
+        "query_transcripts",
+        lambda code, period=None, force_refresh=False: {
+            "stock_code": code,
+            "applicable": True,
+            "fiscal_quarter": period,
+            "matched": 1,
+            "body": [{"author": "CEO", "text": "hi"}],
+        },
+    )
+    result = cli.query_transcripts_batch({"stock_codes": ["AAPL"], "period": "FY2026-Q2"})
+
+    assert result["matched"] == 1
+    assert result["transcripts"][0]["fiscal_quarter"] == "FY2026-Q2"
+
+
 def test_search_item_defaults_match_mcp(monkeypatch) -> None:
     from ashare_announcements_mcp import downloader, reader
 
