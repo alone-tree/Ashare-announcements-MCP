@@ -238,7 +238,14 @@ def _render_financial_markdown(result: dict) -> dict:
 
 
 def create_server() -> Any:
-    mcp = FastMCP("market-data")
+    mcp = FastMCP(
+        "market-data",
+        instructions=(
+            "用于获取行情、财报等结构化数据。"
+            "本工具已不再维护，功能将逐步由 iFinD Excel CLI 承接。"
+            r"优先使用该 CLI，用法见 ifind-excel-formula-tool Skill（D:\HermesSync\global-skills\financial\ifind-excel-formula-tool\SKILL.md）。"
+        ),
+    )
 
     @mcp.tool()
     def get_quote(

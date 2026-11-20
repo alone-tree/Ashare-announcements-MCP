@@ -46,7 +46,14 @@ from ashare_announcements_mcp.transcripts import (
 )
 
 
-mcp = FastMCP("A 股公告阅读")
+mcp = FastMCP(
+    "A 股公告阅读",
+    instructions=(
+        "用于查找、检索和阅读上市公司公告、互动问答及电话会议等资料。"
+        "如需获取行情、财报等结构化数据，推荐使用 iFinD Excel CLI。"
+        r"用法见 ifind-excel-formula-tool Skill（D:\HermesSync\global-skills\financial\ifind-excel-formula-tool\SKILL.md）。"
+    ),
+)
 
 
 @mcp.tool()
