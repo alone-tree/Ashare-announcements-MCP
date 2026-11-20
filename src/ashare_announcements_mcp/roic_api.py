@@ -32,6 +32,22 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
 )
 FREE_RECENT_QUARTERS = 2  # 免费档每公司可见的最近场数（402 窗口）
+RATE_LIMIT = 5  # 免费档每分钟请求数；客户端按滚动窗口主动节流，正常使用不触发 429
+RATE_WINDOW_SECONDS = 60
+
+_REQUEST_TIMES: list[float] = []
+
+
+def _pace() -> None:
+    """滚动窗口节流：60 秒内第 6 个请求起等待窗口腾出，避免打出 429。"""
+    now = time.time()
+    while _REQUEST_TIMES and now - _REQUEST_TIMES[0] > RATE_WINDOW_SECONDS:
+        _REQUEST_TIMES.pop(0)
+    if len(_REQUEST_TIMES) >= RATE_LIMIT:
+        wait = _REQUEST_TIMES[0] + RATE_WINDOW_SECONDS + 1 - now
+        if wait > 0:
+            time.sleep(wait)
+    _REQUEST_TIMES.append(time.time())
 
 
 class RoicRateLimited(RuntimeError):
@@ -77,6 +93,7 @@ def _request(path: str, params: dict[str, Any]) -> dict[str, Any] | None:
     api_key = load_api_key()
     if not api_key:
         raise RuntimeError("ROIC API key 未配置（config.yaml roic.api_key 或环境变量 ROIC_API_KEY）")
+    _pace()
     last: Exception | None = None
     resp = None
     for attempt in range(3):

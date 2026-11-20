@@ -661,6 +661,12 @@ def test_roic_request_injects_apikey(monkeypatch: pytest.MonkeyPatch) -> None:
     """回归：_request 必须自动携带 apikey（曾漏带导致所有调用 401）。"""
     captured: dict[str, Any] = {}
     monkeypatch.setattr(roic_api, "load_api_key", lambda: "k123")
+    import types
+
+    monkeypatch.setattr(
+        roic_api, "time", types.SimpleNamespace(time=lambda: 1000.0, sleep=lambda s: None)
+    )
+    monkeypatch.setattr(roic_api, "_REQUEST_TIMES", [])
 
     class FakeResp:
         status_code = 200
@@ -689,6 +695,30 @@ def test_roic_request_injects_apikey(monkeypatch: pytest.MonkeyPatch) -> None:
     roic_api.fetch_raw("trraw_x")
 
     assert captured["url"].endswith("/documents/transcripts/trraw_x/raw")
+
+
+def test_roic_pacing_throttles_sixth_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """客户端 5 次/分钟滚动节流：第 6 个请求等待窗口腾出，不打出 429。"""
+    import types
+
+    slept: list[float] = []
+    fake_time = types.SimpleNamespace(time=lambda: 1000.0, sleep=lambda s: slept.append(s))
+    monkeypatch.setattr(roic_api, "time", fake_time)
+    monkeypatch.setattr(roic_api, "_REQUEST_TIMES", [995.0] * 5)
+    monkeypatch.setattr(roic_api, "load_api_key", lambda: "k")
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"data": []}
+
+    monkeypatch.setattr(roic_api.requests, "get", lambda *a, **kw: FakeResp())
+
+    roic_api.list_recent("HKEX:700")
+
+    assert slept == [56.0]  # 最旧请求 995 + 61 - now 1000
+    assert len(roic_api._REQUEST_TIMES) == 6
 
 
 def test_roic_identifier_us_uses_edgar_exchange(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
