@@ -191,11 +191,8 @@ def query_transcripts(
     首次同步下载最近 12 财季；force_refresh 重取范围内全部季，失败时保留旧稿；
     传 period（如 FY2026-Q3）：只处理该财季，返回完整正文（逐发言轮次：作者+内容）。
     港股传五位代码（如 00700）；A+H 公司两种入口定位同一份港股缓存。
-    配置 roic.api_key（config.yaml 或环境变量 ROIC_API_KEY）后启用 ROIC.ai 补位：
-    主源缺稿时查其最近 2 场（免费档，raw 正文无发言人标注、author 为空）；
-    限流时 note 附 retry_after 秒数，等待后重试即可，不用换源。
-    查不到时返回 manual_check 字段：附浏览器人工核对的入口 URL 与操作说明，
-    可用浏览器工具按说明打开核对（电话会刚开完、上游未上架时尤其有用）。
+    查不到时返回 manual_check 字段：推荐用浏览器打开 Investing.com 搜索页与
+    Alpha Spread 站内页人工核对（附 URL 拼写示例；电话会刚开完、上游未上架时尤其有用）。
     report_date 仅美股从 10-Q/10-K 反查，刚开完会尚未提交 10-Q 时为空，属正常。
     状态：ok=已缓存；missing=该季上游未收录（404）；failed=网络/HTTP 异常（带原因）。
     """

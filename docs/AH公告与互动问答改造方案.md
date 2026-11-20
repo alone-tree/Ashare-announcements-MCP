@@ -693,6 +693,7 @@ ADR/外国发行人的电话会可挂在主上市代码下；实测个股页`tra
 - 免费档：每公司最近 2 场（超出 402 payment_required `earnings_call_restricted`）；5 次/分钟；有效 key 的每个请求都计数（200/400/404 同扣），429 不计数且带 `retry-after` 与 `x-ratelimit-reset`，实测等待 reset 后立即恢复；坏 key 返回 401。
 - 实测取稿：ROST FY2027-Q2（persisted 路由含发言人分段）与 FY2027-Q3（raw，50,313 字符完整到收尾）、腾讯 HKEX:700 FY2026-Q3（raw）。最新季只保证 raw 可得，persisted 分段路由对最新季滞后且未入文档，不采用。
 - 现存偏差：persisted 路由（`/earnings-calls/{symbol}`）曾对 ROST FY2027-Q3 返回 404 而 events 列表明确有稿——以 events+raw 文档路由为准。
+- 2026-11-20 用户决定不保留该来源（免费档仅每公司最近 2 场、raw 无发言人标注，不好用），接入代码已移除；本节保留上游事实与接口知识备查。
 
 **已退役来源（2026-10-22）**：
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from ashare_announcements_mcp import roic_api, transcripts
+from ashare_announcements_mcp import transcripts
 
 
 class _NoSleep:
@@ -150,8 +150,6 @@ def _setup(monkeypatch: pytest.MonkeyPatch, tmp_path, reports: list[dict[str, An
         transcripts, "stock_cache_dir", lambda _code: tmp_path / "cache" / "AAPL"
     )
     monkeypatch.setattr(transcripts, "time", _NoSleep())
-    # 单元测试一律无 ROIC key：防止读到本机真实 config.yaml 打真实网络
-    monkeypatch.setattr(roic_api, "load_api_key", lambda: "")
 
 
 def test_sync_transcripts_downloads_and_maps_report_date(
@@ -376,9 +374,10 @@ def test_query_transcripts_routes_pure_hk(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["applicable"] is True
     assert result["matched"] == 0
     assert result["results"][0]["status"] == "missing"
-    urls = result["manual_check"]["urls"]
-    assert urls["stockanalysis"] == "https://stockanalysis.com/quote/hkg/0700/transcripts/"
-    assert urls["roic"] == "https://www.roic.ai/quote/HKEX-700/transcripts"
+    mc = result["manual_check"]
+    assert mc["urls"]["stockanalysis"] == "https://stockanalysis.com/quote/hkg/0700/transcripts/"
+    assert "investing.com/search" in mc["urls"]["investing_search"]
+    assert "alphaspread.com" in mc["urls"]["alphaspread_example"]
 
 
 def test_query_transcripts_ah_pair_uses_hk_store(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -486,295 +485,14 @@ def test_sync_transcripts_force_refresh_keeps_ok_on_failure(
     assert "503" in str(item.get("refresh_error"))
 
 
-def _roic_mocks(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    key: str = "k",
-    identifier: str = "HKEX:700",
-    events: list[dict[str, Any]] | None = None,
-    raw: str = "ROICTEXT",
-    list_error: Exception | None = None,
-    raw_error: Exception | None = None,
-) -> dict[str, Any]:
-    """统一 mock ROIC 适配层，返回调用记录。"""
-    calls: dict[str, Any] = {"resolve": 0, "list": 0, "raw": []}
-    monkeypatch.setattr(roic_api, "load_api_key", lambda: key)
-    monkeypatch.setattr(transcripts, "time", _NoSleep())
-
-    def fake_resolve(ticker: str, market: str, cik: str = "") -> str:
-        calls["resolve"] += 1
-        return identifier
-
-    def fake_list(ident: str, limit: int = 2) -> list[dict[str, Any]]:
-        calls["list"] += 1
-        if list_error:
-            raise list_error
-        return events or []
-
-    def fake_raw(tid: str) -> str:
-        calls["raw"].append(tid)
-        if raw_error:
-            raise raw_error
-        return raw
-
-    monkeypatch.setattr(roic_api, "resolve_identifier", fake_resolve)
-    monkeypatch.setattr(roic_api, "list_recent", fake_list)
-    monkeypatch.setattr(roic_api, "fetch_raw", fake_raw)
-    return calls
-
-
-def test_roic_backfill_covers_missing_quarter(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """主源缺稿 + ROIC 有：补位成 ok，正文缓存标注 roic 来源。"""
-    import json
-    from pathlib import Path
-
+def test_sync_transcripts_persists_index(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """同步完成后 transcripts.json 必须落盘（曾因接补位源丢失 save 调用）。"""
     _setup(monkeypatch, tmp_path, [])
-    events = [
-        {
-            "fiscal_year": 2026,
-            "fiscal_quarter": 3,
-            "period_end_date": "2026-09-30",
-            "transcripts": [{"id": "trraw_a"}],
-        }
-    ]
-    calls = _roic_mocks(monkeypatch, events=events)
-    items = [{"fiscal_quarter": "FY2026-Q3", "report_date": "", "form": "", "status": "missing"}]
-
-    meta = transcripts._roic_backfill("00700", "00700", "H", "", items, {}, False, None)
-
-    assert meta["merged"] == ["FY2026-Q3"]
-    assert meta["identifier"] == "HKEX:700"
-    assert calls["raw"] == ["trraw_a"]
-    item = items[0]
-    assert item["status"] == "ok"
-    assert item["source"] == "roic"
-    assert item["report_date"] == "2026-09-30"
-    body = json.loads(Path(item["body_file"]).read_text(encoding="utf-8"))
-    assert body["meta"]["source"] == "roic"
-    assert body["body"] == [{"author": "", "text": "ROICTEXT"}]
-
-
-def test_roic_backfill_skips_when_primary_complete(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """指定财季且主源已给出正文：不发起任何 ROIC 请求。"""
-    _setup(monkeypatch, tmp_path, [])
-    body_file = tmp_path / "b.json"
-    body_file.write_text("{}", encoding="utf-8")
-    items = [
-        {"fiscal_quarter": "FY2026-Q3", "status": "ok", "source": "stockanalysis",
-         "body_file": str(body_file)},
-    ]
-    calls = _roic_mocks(monkeypatch)
-
-    meta = transcripts._roic_backfill("x", "x", "US", "1", items, {}, False, "FY2026-Q3")
-
-    assert meta == {}
-    assert calls["list"] == 0
-    assert calls["resolve"] == 0
-
-
-def test_roic_backfill_lists_recent_without_period(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """不传财季时必须独立查 ROIC：主源目录完好也要列一次，避免旧季掩盖新稿。"""
-    _setup(monkeypatch, tmp_path, [])
-    body_file = tmp_path / "b.json"
-    body_file.write_text("{}", encoding="utf-8")
-    items = [
-        {"fiscal_quarter": "FY2026-Q3", "status": "ok", "source": "stockanalysis",
-         "body_file": str(body_file)},
-        {"fiscal_quarter": "FY2026-Q2", "status": "ok", "source": "stockanalysis",
-         "body_file": str(body_file)},
-    ]
-    calls = _roic_mocks(monkeypatch)
-
-    meta = transcripts._roic_backfill("x", "x", "US", "1", items, {}, False, None)
-
-    assert calls["list"] == 1
-    assert meta.get("merged") == []
-    assert len(items) == 2
-
-
-def test_roic_backfill_surfaces_rate_limit(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """429 限流如实透传 retry_after_seconds，主源条目保持原状。"""
-    _setup(monkeypatch, tmp_path, [])
-    calls = _roic_mocks(monkeypatch, list_error=roic_api.RoicRateLimited(12, 1795142531))
-    items = [{"fiscal_quarter": "FY2026-Q3", "status": "missing"}]
-
-    meta = transcripts._roic_backfill("00700", "00700", "H", "", items, {}, False, None)
-
-    assert meta["rate_limited"] == {"retry_after_seconds": 12, "reset_epoch": 1795142531}
-    assert items[0]["status"] == "missing"
-
-
-def test_roic_backfill_disabled_without_key(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """未配置 key：补位关闭，不发任何请求。"""
-    _setup(monkeypatch, tmp_path, [])
-    calls = _roic_mocks(monkeypatch, key="")
-
-    meta = transcripts._roic_backfill(
-        "x", "x", "US", "1", [{"fiscal_quarter": "FY2026-Q3", "status": "missing"}], {}, False, None
-    )
-
-    assert meta == {}
-    assert calls["resolve"] == 0
-
-
-def test_roic_backfill_out_of_window(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """402 超免费窗口：跳过该场并记录，不冒充成功。"""
-    _setup(monkeypatch, tmp_path, [])
-    events = [
-        {
-            "fiscal_year": 2026,
-            "fiscal_quarter": 3,
-            "period_end_date": "2026-09-30",
-            "transcripts": [{"id": "trraw_a"}],
-        }
-    ]
-    _roic_mocks(monkeypatch, events=events, raw_error=roic_api.RoicOutOfWindow("w"))
-    items = [{"fiscal_quarter": "FY2026-Q3", "status": "missing"}]
-
-    meta = transcripts._roic_backfill("00700", "00700", "H", "", items, {}, False, None)
-
-    assert meta["out_of_window"] == ["FY2026-Q3"]
-    assert meta.get("merged") == []
-    assert items[0]["status"] == "missing"
-
-
-def test_roic_backfill_target_period_filters(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """指定财季时只取目标季，另一场不下载。"""
-    _setup(monkeypatch, tmp_path, [])
-    events = [
-        {"fiscal_year": 2026, "fiscal_quarter": 3, "period_end_date": "2026-09-30",
-         "transcripts": [{"id": "trraw_q3"}]},
-        {"fiscal_year": 2026, "fiscal_quarter": 2, "period_end_date": "2026-06-30",
-         "transcripts": [{"id": "trraw_q2"}]},
-    ]
-    calls = _roic_mocks(monkeypatch, events=events)
-
-    meta = transcripts._roic_backfill("00700", "00700", "H", "", [], {}, False, "FY2026-Q2")
-
-    assert calls["raw"] == ["trraw_q2"]
-    assert meta["merged"] == ["FY2026-Q2"]
-
-
-def test_roic_identifier_rules() -> None:
-    """港股去前导零规则；美股必须带交易所前缀（纯代码被上游 400 拒绝）。"""
-    assert roic_api.resolve_identifier("00700", "H") == "HKEX:700"
-    assert roic_api.resolve_identifier("1024", "H") == "HKEX:1024"
-
-
-def test_roic_request_injects_apikey(monkeypatch: pytest.MonkeyPatch) -> None:
-    """回归：_request 必须自动携带 apikey（曾漏带导致所有调用 401）。"""
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(roic_api, "load_api_key", lambda: "k123")
-    import types
-
     monkeypatch.setattr(
-        roic_api, "time", types.SimpleNamespace(time=lambda: 1000.0, sleep=lambda s: None)
+        transcripts, "_fetch_html", _fake_fetch(_index_html([(2026, 1)]), _transcript_html())
     )
-    monkeypatch.setattr(roic_api, "_REQUEST_TIMES", [])
-
-    class FakeResp:
-        status_code = 200
-
-        def __init__(self, url: str) -> None:
-            self._url = url
-
-        def json(self) -> dict:
-            if self._url.endswith("/raw"):
-                return {"text": "RAWBODY"}
-            return {"data": []}
-
-    def fake_get(url: str, params=None, headers=None, timeout=None):
-        captured["url"] = url
-        captured["params"] = params
-        return FakeResp(url)
-
-    monkeypatch.setattr(roic_api.requests, "get", fake_get)
-
-    roic_api.list_recent("HKEX:700")
-
-    assert captured["params"]["apikey"] == "k123"
-    assert captured["params"]["identifier"] == "HKEX:700"
-    assert captured["url"].endswith("/company-events")
-
-    roic_api.fetch_raw("trraw_x")
-
-    assert captured["url"].endswith("/documents/transcripts/trraw_x/raw")
-
-
-def test_roic_pacing_throttles_sixth_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    """客户端 5 次/分钟滚动节流：第 6 个请求等待窗口腾出，不打出 429。"""
-    import types
-
-    slept: list[float] = []
-    fake_time = types.SimpleNamespace(time=lambda: 1000.0, sleep=lambda s: slept.append(s))
-    monkeypatch.setattr(roic_api, "time", fake_time)
-    monkeypatch.setattr(roic_api, "_REQUEST_TIMES", [995.0] * 5)
-    monkeypatch.setattr(roic_api, "load_api_key", lambda: "k")
-
-    class FakeResp:
-        status_code = 200
-
-        def json(self) -> dict:
-            return {"data": []}
-
-    monkeypatch.setattr(roic_api.requests, "get", lambda *a, **kw: FakeResp())
-
-    roic_api.list_recent("HKEX:700")
-
-    assert slept == [56.0]  # 最旧请求 995 + 61 - now 1000
-    assert len(roic_api._REQUEST_TIMES) == 6
-
-
-def test_roic_identifier_us_uses_edgar_exchange(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """US 交易所前缀来自 EDGAR 元数据并永久缓存，只请求一次。"""
-    monkeypatch.setattr(roic_api, "_symbols_cache_path", lambda: tmp_path / "roic_symbols.json")
-
-    class FakeResp:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            pass
-
-        def json(self) -> dict:
-            return {"exchanges": ["Nasdaq"]}
-
-    calls: list[str] = []
-
-    def fake_get(url: str, **kw):
-        calls.append(url)
-        return FakeResp()
-
-    monkeypatch.setattr(roic_api.requests, "get", fake_get)
-
-    assert roic_api.resolve_identifier("ROST", "US", "0000745732") == "NASDAQ:ROST"
-    assert roic_api.resolve_identifier("ROST", "US", "0000745732") == "NASDAQ:ROST"
-    assert len(calls) == 1
-
-
-def test_query_transcripts_period_roic_rate_limit_note(monkeypatch: pytest.MonkeyPatch) -> None:
-    """指定财季缺稿且 ROIC 限流时，note 附等待秒数。"""
-    monkeypatch.setattr(transcripts, "normalize_stock_code", lambda code: "AAPL")
-    monkeypatch.setattr(
-        transcripts, "resolve_company", lambda code: ("AAPL", [{"market": "US", "code": "AAPL"}])
-    )
-    monkeypatch.setattr(
-        transcripts,
-        "sync_transcripts",
-        lambda _c, _t, **kw: {
-            "items": [{"fiscal_quarter": "FY2026-Q3", "status": "missing"}],
-            "new": 0,
-            "roic": {
-                "source": "roic",
-                "rate_limited": {"retry_after_seconds": 12, "reset_epoch": 1},
-            },
-        },
-    )
-
-    result = transcripts.query_transcripts("AAPL", period="FY2026-Q3")
-
-    assert "12 秒后可重试" in result["note"]
-    assert result["results"][0]["status"] == "missing"
-    assert "manual_check" in result
+    transcripts.sync_transcripts("AAPL", "AAPL")
+    assert (tmp_path / "cache" / "AAPL" / "transcripts.json").exists()
 
 
 def test_query_transcripts_by_period(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

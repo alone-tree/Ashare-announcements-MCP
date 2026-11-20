@@ -7,7 +7,6 @@
 # 支持的凭据：
 # - ifind.accounts：同花顺 iFinD 账号列表（多账号按顺序尝试登录，第一个成功即用）
 # - eodhd.api_key：EODHD API key（付费版提供 30+ 年全历史；免费版 20 次/天、最近 1 年）
-# - roic.api_key：ROIC.ai 电话会议 API key（https://www.roic.ai 注册；免费档 5 次/分钟、近 2 季历史）
 
 ifind:
   accounts:
@@ -17,7 +16,4 @@ ifind:
       password: 密码n
 
 eodhd:
-  api_key: ""
-
-roic:
   api_key: ""

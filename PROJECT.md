@@ -70,8 +70,7 @@ query_transcripts(
 - 不传 `period`：返回全部财季索引（`fiscal_quarter`/`report_date`/`form`/`status`），每次调用同步一次索引页，首次下载最近 12 财季。
 - 传 `period`（如 `FY2026-Q3`）：只同步并处理该财季，返回完整正文（逐发言轮次：`author` + `text`），不触发最近 12 季批量下载；更早季同样按此按需补。
 - `force_refresh`：重取范围内全部季正文；某季刷新失败时保留已缓存旧稿并附 `refresh_error`，不销毁好缓存。
-- 补位源 ROIC.ai：配置 `roic.api_key`（config.yaml 或环境变量 `ROIC_API_KEY`）后启用。主源缺稿（指定季目录缺、正文不可用）或不传 period 时都独立查其免费窗口（每公司最近 2 场）并合并目录，避免主源停在旧季掩盖新稿。补位正文标注 `source=roic`（raw 无发言人标注、`author` 为空）；主源已有正文不覆盖，已补位的季保留 ROIC 稿。限流（429）不在内部等待，`note` 附 `ROIC 限流中：N 秒后可重试`；客户端另按 5 次/分钟滚动窗口主动节流（60 秒内第 6 个请求起自动等待），连续查询多家公司也不触发 429。超窗（402）与 key 无效（401）如实标注。identifier 解析规则见[公告主文档§8.5](docs/AH公告与互动问答改造方案.md#85-电话会议正文源stockanalysis2026-10-22-起)。
-- 人工兜底：两源均未取得正文时返回 `manual_check`（Stock Analysis 与 ROIC 网页版入口 URL + 操作说明），供 AI 用浏览器打开核对，不接入浏览器自动化。
+- 人工兜底：来源未取得正文时返回 `manual_check`（推荐 AI 用浏览器打开 Investing.com 搜索页与 Alpha Spread 站内页核对，附 URL 拼写示例），不接入浏览器自动化。
 - 正文来源 stockanalysis.com：美股 `/stocks/{ticker}/transcripts/`，港股 `/quote/hkg/{四位代码}/transcripts/`（`00700` → `0700`）；正文页按发言轮次结构化解析，截取止于站点注记与页脚；纯 `requests`，不依赖 cookie 或浏览器。
 - 港股电话稿按实际港股证券代码存取；A+H 公司从任一代码查询定位同一份缓存。`report_date`/`form` 仅美股从本地公告档案的 10-Q/10-K 反查，有则附上、没有留空（刚开完会尚未提交 10-Q 时为空，属正常）；是否有电话会完全由索引页决定。
 - ADR/外国发行人走主上市代码兜底：美股代码页 404 时读个股页 `transcriptsLinkSymbol`（TSM → `TPE-2330`、BABA → `HKG-9988`），改走 `/quote/{exchange}/{code}/transcripts/`；两者都没有才返回空索引 + `note`。
