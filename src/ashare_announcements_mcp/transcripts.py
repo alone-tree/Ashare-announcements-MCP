@@ -1,6 +1,7 @@
 """港美电话会议（earnings call transcript）通道。
 
-数据源：stockanalysis.com（站点级提取器，2026-10-22 起唯一正文源）
+数据源顺位：stockanalysis.com（主源，2026-10-22 起）→ ROIC.ai 官方 API（补位，2026-11-20 起，
+配置 roic key 才启用；免费档每公司最近 2 场，raw 正文无发言人标注，author 留空交 AI 判断）
 - 索引页 /stocks/{ticker}/transcripts/ 直接列出全部电话会（“Earnings Call: Q2 2026”+链接），
   标签就是公司财季（META Q2 2026、NVDA Q2 2027），不需要推算，也不需要 cookie/浏览器：
   纯 requests + 普通 UA 即可 200（Alpha Spread 的 cf_clearance 绑定出口 IP，换节点即 403，
@@ -26,6 +27,7 @@ from typing import Any
 
 import requests
 
+from ashare_announcements_mcp import roic_api
 from ashare_announcements_mcp.cache import load_cache, stock_cache_dir
 from ashare_announcements_mcp.service import normalize_stock_code, resolve_company, sync_edgar_archive
 
@@ -352,6 +354,7 @@ def sync_transcripts(code: str, ticker: str, market: str = "US", force_refresh: 
       force_refresh 重取范围内全部季，失败时保留旧稿（见下载循环）；
     - only_recent=True（默认）只下载最近 RECENT_QUARTERS 季，更早的按需补（target_period）。
     """
+    cik = ""
     if market == "US":
         cik = _company_cik(code)
         if cik:
@@ -437,13 +440,142 @@ def sync_transcripts(code: str, ticker: str, market: str = "US", force_refresh: 
         changed += 1
         time.sleep(REQUEST_DELAY)
 
-    save_transcripts(code, items, {"source": "stockanalysis", "cache_complete": True,
-                                   "index_url": index_url})
-    return {
+    roic_meta = _roic_backfill(code, ticker, market, cik, items, cached,
+                               force_refresh, target_period)
+    if roic_meta.get("merged"):
+        items.sort(key=lambda it: str(it.get("fiscal_quarter") or ""), reverse=True)
+
+    result = {
         "items": items,
         "meta": {"source": "stockanalysis", "cache_complete": True, "index_url": index_url},
         "new": changed,
     }
+    if roic_meta:
+        result["roic"] = roic_meta
+    return result
+
+
+def _roic_backfill(code: str, ticker: str, market: str, cik: str,
+                   items: list[dict[str, Any]], cached: dict[str, dict[str, Any]],
+                   force_refresh: bool, target_period: str | None) -> dict[str, Any]:
+    """ROIC.ai 补位（配置 roic key 才启用）：只查每公司免费窗口内的最近 2 场。
+
+    - 顺位：主源已有可用正文（含此前 ROIC 缓存）的不覆盖；
+    - 指定财季只处理该季；不传财季只看主源目录最近 2 季的缺口；
+    - raw 正文无发言人标注，author 留空交 AI 判断（同 AlphaStreet 先例）；
+    - 429 限流不在内部等待，把 retry_after_seconds 放进返回 meta 如实透传。
+    """
+    api_key = roic_api.load_api_key()
+    if not api_key or market not in ("US", "H"):
+        return {}
+    by_label = {str(it.get("fiscal_quarter") or ""): it for it in items}
+
+    def _ready(item: dict[str, Any] | None) -> bool:
+        return bool(
+            item and item.get("status") == "ok" and item.get("body_file")
+            and Path(str(item["body_file"])).exists()
+            and (item.get("source") != "roic" or not force_refresh)
+        )
+
+    if target_period:
+        # 指定财季且主源已给出可用正文：不再动用补位源
+        if _ready(by_label.get(target_period)):
+            return {}
+    # 不传财季时必须独立查 ROIC 最近记录：主源目录停在旧季的 200 响应会掩盖新稿
+    keep_labels = {str(it.get("fiscal_quarter") or "") for it in items[:2]}
+
+    try:
+        identifier = roic_api.resolve_identifier(ticker, market, cik)
+    except Exception as exc:  # noqa: BLE001 - 解析失败归入补位错误，不阻断主源结果
+        return {"source": "roic", "error": str(exc)}
+    meta: dict[str, Any] = {"source": "roic", "identifier": identifier}
+    try:
+        events = roic_api.list_recent(identifier)
+    except roic_api.RoicRateLimited as exc:
+        meta["rate_limited"] = {"retry_after_seconds": exc.retry_after_seconds,
+                                "reset_epoch": exc.reset_epoch}
+        return meta
+    except roic_api.RoicAuthError as exc:
+        meta["error"] = str(exc)
+        return meta
+
+    merged: list[str] = []
+    for event in events:
+        label = f"FY{event.get('fiscal_year')}-Q{event.get('fiscal_quarter')}"
+        if target_period:
+            if label != target_period:
+                continue
+        elif label in by_label and label not in keep_labels:
+            continue
+        transcript_id = next(
+            (
+                t.get("id")
+                for t in event.get("transcripts") or []
+                if str(t.get("id") or "").startswith("trraw_")
+            ),
+            "",
+        )
+        if not transcript_id:
+            continue
+        existing = by_label.get(label)
+        if _ready(existing):
+            continue
+        raw_url = f"{roic_api.API_BASE}/documents/transcripts/{transcript_id}/raw"
+        try:
+            text = roic_api.fetch_raw(transcript_id)
+        except roic_api.RoicOutOfWindow:
+            meta.setdefault("out_of_window", []).append(label)
+            continue
+        except roic_api.RoicRateLimited as exc:
+            meta["rate_limited"] = {"retry_after_seconds": exc.retry_after_seconds,
+                                    "reset_epoch": exc.reset_epoch}
+            return meta
+        body_path = _body_path(code, label)
+        temporary = body_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "meta": {"source": "roic", "url": raw_url,
+                             "fetched_at": date.today().isoformat()},
+                    "body": [{"author": "", "text": text}],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(body_path)
+        fields = {
+            "fiscal_quarter": label,
+            "report_date": str(event.get("period_end_date") or ""),
+            "form": "",
+            "url": raw_url,
+            "status": "ok",
+            "source": "roic",
+            "body_file": str(body_path),
+        }
+        if existing:
+            existing.update(fields)
+        else:
+            new_item = dict(fields)
+            by_label[label] = new_item
+            items.append(new_item)
+        merged.append(label)
+        time.sleep(REQUEST_DELAY)
+    meta["merged"] = merged
+    return meta
+
+
+def _roic_note_suffix(roic_meta: dict[str, Any]) -> str:
+    """把 ROIC 补位的限流/错误信息转成给 AI 的可操作提示。"""
+    limited = roic_meta.get("rate_limited") or {}
+    if limited:
+        return f"；ROIC 限流中：{limited.get('retry_after_seconds')} 秒后可重试"
+    if roic_meta.get("error"):
+        return f"；ROIC 补位失败：{roic_meta.get('error')}"
+    if roic_meta.get("out_of_window"):
+        return f"；ROIC 免费窗口外：{'、'.join(roic_meta.get('out_of_window') or [])}"
+    return ""
 
 
 def query_transcripts(
@@ -472,6 +604,7 @@ def query_transcripts(
     result = sync_transcripts(code, ticker, market=market, force_refresh=force_refresh,
                               only_recent=not period, target_period=period)
     items = result["items"]
+    roic_meta = result.get("roic") or {}
     if result.get("index_available") is False and not items:
         return {
             "stock_code": code,
@@ -491,16 +624,17 @@ def query_transcripts(
                 "fiscal_quarter": period,
                 "matched": 0,
                 "results": [],
-                "note": f"未找到财季 {period} 的电话会议（stockanalysis 索引里没有该季）",
+                "note": f"未找到财季 {period} 的电话会议（stockanalysis 索引里没有该季）"
+                        + _roic_note_suffix(roic_meta),
             }
         record = match[0]
         if record.get("status") != "ok":
             status = record.get("status")
             if status == "missing":
-                note = f"该财季页面 404：上游未收录（尚未开或刚开完，等一两天）"
+                note = f"该财季页面 404：上游未收录（尚未开或刚开完，等一两天）" + _roic_note_suffix(roic_meta)
             else:
                 detail = record.get("error") or f"HTTP {record.get('http_status')}"
-                note = f"获取失败：{detail}"
+                note = f"获取失败：{detail}" + _roic_note_suffix(roic_meta)
             return {
                 "stock_code": code,
                 "applicable": True,
@@ -520,7 +654,7 @@ def query_transcripts(
             "body": body["body"],
         }
 
-    return {
+    index_result = {
         "stock_code": code,
         "applicable": True,
         "total_transcripts": len(items),
@@ -532,10 +666,14 @@ def query_transcripts(
                 "report_date": it.get("report_date"),
                 "form": it.get("form"),
                 "status": it.get("status"),
+                "source": it.get("source", "stockanalysis"),
             }
             for it in items
         ],
     }
+    if roic_meta:
+        index_result["roic"] = roic_meta
+    return index_result
 
 
 def search_transcripts(stock_code: str, query: str) -> dict[str, Any]:

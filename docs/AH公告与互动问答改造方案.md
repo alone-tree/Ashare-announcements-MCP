@@ -686,6 +686,14 @@ ADR/外国发行人的电话会可挂在主上市代码下；实测个股页`tra
 - 代码复用旧公司样本 00300、03308 索引 404；接入按当前建档证券代码取稿，上游不承诺历史条目发行人一致性。
 - 正文截取止于 `<summary`/`<footer` 站点注记边界；此前页脚与 Quartr 注记会混入最后一轮发言（美股页同样存在），2026-11-20 修复。
 
+**ROIC.ai API（2026-11-20 起补位来源；官方接口，不做网页抓取——其条款禁止爬取）**
+
+- 列表：`GET /v3.0.0/company-events?identifier={EXCH:SYM}&content=transcript&order=desc`，文档明确建议 `limit=1` 轮询新季；正文：`GET /v3.0.0/documents/transcripts/{trraw_id}/raw`（纯文本、无发言人标注；校订稿 edited 需付费档）。官方文档 roic.ai/api/docs。
+- identifier 必须带交易所前缀（纯代码 400）：US 由 EDGAR submissions 元数据 `exchanges` 解析（免费，永久缓存 `cache/roic_symbols.json`，实测 ROST→NASDAQ）；港股 `HKEX:{五位代码去前导零}`（00700→700 实测）。
+- 免费档：每公司最近 2 场（超出 402 payment_required `earnings_call_restricted`）；5 次/分钟；有效 key 的每个请求都计数（200/400/404 同扣），429 不计数且带 `retry-after` 与 `x-ratelimit-reset`，实测等待 reset 后立即恢复；坏 key 返回 401。
+- 实测取稿：ROST FY2027-Q2（persisted 路由含发言人分段）与 FY2027-Q3（raw，50,313 字符完整到收尾）、腾讯 HKEX:700 FY2026-Q3（raw）。最新季只保证 raw 可得，persisted 分段路由对最新季滞后且未入文档，不采用。
+- 现存偏差：persisted 路由（`/earnings-calls/{symbol}`）曾对 ROST FY2027-Q3 返回 404 而 events 列表明确有稿——以 events+raw 文档路由为准。
+
 **已退役来源（2026-10-22）**：
 
 - Alpha Spread：原主源，正文是 `div.comment` 结构。2026-09 起 Cloudflare managed challenge，须 `alphaspread_cookies.json` 的 cf_clearance + 配套 UA，而 cf_clearance 绑定出口 IP，2026-09-10 之后长期 403；同时站点改版（`div.comment` → `article.earnings-call__turn`）使旧解析器取不到正文。已整体移除。

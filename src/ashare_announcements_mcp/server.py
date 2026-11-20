@@ -180,10 +180,13 @@ def query_transcripts(
     """查询港美电话会议（earnings call transcript）索引与正文（美股与港股适用）。
 
     正文来源 stockanalysis.com：索引页列出全部财季电话会，每次调用同步一次；
-    不传 period：返回全部财季索引（fiscal_quarter/report_date/form/status），
+    不传 period：返回全部财季索引（fiscal_quarter/report_date/form/status/source），
     首次同步下载最近 12 财季；force_refresh 重取范围内全部季，失败时保留旧稿；
     传 period（如 FY2026-Q3）：只处理该财季，返回完整正文（逐发言轮次：作者+内容）。
     港股传五位代码（如 00700）；A+H 公司两种入口定位同一份港股缓存。
+    配置 roic.api_key（config.yaml 或环境变量 ROIC_API_KEY）后启用 ROIC.ai 补位：
+    主源缺稿时查其最近 2 场（免费档，raw 正文无发言人标注、author 为空）；
+    限流时 note 附 retry_after 秒数，等待后重试即可，不用换源。
     report_date 仅美股从 10-Q/10-K 反查，刚开完会尚未提交 10-Q 时为空，属正常。
     状态：ok=已缓存；missing=该季上游未收录（404）；failed=网络/HTTP 异常（带原因）。
     """
