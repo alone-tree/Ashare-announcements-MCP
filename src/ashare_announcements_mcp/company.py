@@ -209,10 +209,10 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
                     "code": security["code"],
                     "market": security["market"],
                     "name": security["name"],
-                    "success": True,
+                    "success": bool(status.get("update_check_ok")),
                     "total": len(items),
                     "new": status.get("new_announcements", 0),
-                    "error": None,
+                    "error": status.get("update_error"),
                 }
             )
         except Exception as exc:
@@ -235,10 +235,10 @@ def establish_company(codes: list[str]) -> dict[str, Any]:
             items, status = sync_interactions(a_security["code"])
             interactions_status = {
                 "applicable": True,
-                "success": True,
+                "success": bool(status.get("update_check_ok")),
                 "total": len(items),
                 "new": status.get("new_interactions", 0),
-                "error": None,
+                "error": status.get("update_error"),
             }
         except Exception as exc:
             interactions_status = {

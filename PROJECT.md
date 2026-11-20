@@ -42,6 +42,7 @@ query_announcements(
 - 查询前须显式建档；未建档时提示`check → establish → query`。建档与同步规则见[公告主文档§3—5](docs/AH公告与互动问答改造方案.md#3-establish_company)。
 - `market`可取`all/A/H`，只筛选本地结果；`A`包含B股，`H`只筛港股，美股提交使用`all`。所有关联证券仍执行同步。
 - 日期、关键词、翻页只作用于本地缓存。
+- `securities[].update.success` 反映本次增量检查是否成功；上游失败时保留旧缓存并在 `update.error` 附原因，不冒充已刷新。
 - 每页固定最多 50 条；返回完整公告数、匹配数和总页数。
 - 股票代码自动清理市场前后缀；关键词空格为 OR，显式 `AND` 为 AND。
 

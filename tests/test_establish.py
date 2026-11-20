@@ -424,3 +424,23 @@ def test_establish_partial_failure_keeps_saved_mapping(
     assert by_code["300308"]["success"] is True
     assert by_code["03308"]["success"] is False
     assert by_code["03308"]["error"] == "东方财富请求超时"
+
+
+def test_establish_reports_stale_update_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """同步返回 update_check_ok=False 时，建档结果如实记为失败。"""
+    _setup(
+        monkeypatch,
+        securities=[_security("300308", "中际旭创", "AStock", "A-INNER")],
+    )
+
+    def stale_sync(_code: str, **_kwargs: Any):
+        return (
+            [],
+            {"update_check_ok": False, "new_announcements": 0, "update_error": "增量检查失败"},
+        )
+
+    monkeypatch.setattr(company, "sync_archive", stale_sync)
+    result = company.establish_company(["300308"])
+
+    assert result["securities"][0]["success"] is False
+    assert result["securities"][0]["error"] == "增量检查失败"

@@ -170,6 +170,26 @@ def test_query_hk_failure_keeps_a_results(monkeypatch: pytest.MonkeyPatch) -> No
     assert h_status["update"]["error"] == "东方财富请求超时"
 
 
+def test_query_reports_stale_update_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """上游刷新失败但保留旧缓存时，update.success 如实为 False 并带原因。"""
+    monkeypatch.setattr(service, "load_companies", lambda: _registry())
+
+    def stale_sync(code: str, **_kwargs: Any):
+        items = [_item("A1", "2026-07-30 10:00:00")] if code == "300308" else []
+        return (
+            items,
+            {"update_check_ok": False, "new_announcements": 0, "update_error": "增量检查失败"},
+        )
+
+    monkeypatch.setattr(service, "sync_archive", stale_sync)
+
+    result = service.query_archive("300308")
+
+    assert result["securities"][0]["update"]["success"] is False
+    assert result["securities"][0]["update"]["error"] == "增量检查失败"
+    assert result["total_announcements"] == 1
+
+
 def test_query_sorts_merged_by_time_desc(monkeypatch: pytest.MonkeyPatch) -> None:
     _setup(
         monkeypatch,

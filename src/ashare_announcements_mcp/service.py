@@ -286,10 +286,10 @@ def query_archive(
                     "market": market_code,
                     "name": security["name"],
                     "update": {
-                        "success": True,
+                        "success": bool(update_status.get("update_check_ok")),
                         "total": len(items),
                         "new": update_status.get("new_announcements", 0),
-                        "error": None,
+                        "error": update_status.get("update_error"),
                     },
                 }
             )
