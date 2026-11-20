@@ -456,30 +456,40 @@ def _manual_check(ticker: str, market: str) -> dict[str, Any]:
         if market == "H"
         else f"https://stockanalysis.com/stocks/{low}/transcripts/"
     )
-    hk_note = "港股路径未逐一验证，先开 ③ 主源网页版核对。" if market == "H" else ""
+    urls = {
+        "investing_search": (
+            f"https://www.investing.com/search/?q={low}%20earnings%20call%20transcript"
+        ),
+        "stockanalysis": sa,
+    }
+    if market == "H":
+        # Alpha Spread 港股 URL 段未验证，不给猜测路径；只给站点搜索入口
+        spread = f"https://www.alphaspread.com/search?q={low}"
+        rule = "Alpha Spread 港股路径未验证，用站内搜索进入公司页再找 Earnings Calls 栏目。"
+    else:
+        spread = (
+            f"https://www.alphaspread.com/security/nasdaq/{low}/earnings-calls/q3-2026"
+        )
+        rule = (
+            "Alpha Spread 美股 URL 拼写："
+            f"https://www.alphaspread.com/security/{{nasdaq或nyse}}/{{ticker}}/earnings-calls/q{{季度}}-{{年份}}"
+            "（如上面示例；nyse 上市把 nasdaq 换成 nyse；不确定季度先开 "
+            f"https://www.alphaspread.com/security/nasdaq/{low}/investor-relations/earnings-call 目录页）。"
+        )
+        urls["alphaspread_example"] = spread
+        urls["alphaspread_index"] = (
+            f"https://www.alphaspread.com/security/nasdaq/{low}/investor-relations/earnings-call"
+        )
+    urls["alphaspread_search"] = spread
     return {
         "instruction": (
             "来源未取得该季正文时的人工兜底（免费页面，用浏览器打开）："
-            "① Investing.com 当天常有带发言人的新闻稿，搜索页 "
-            f"https://www.investing.com/search/?q={low}%20earnings%20call%20transcript ；"
-            "② Alpha Spread 站内页通常带逐发言人全文，URL 拼写 "
-            f"https://www.alphaspread.com/security/nasdaq/{low}/earnings-calls/q{{季度}}-{{年份}}"
-            "（nyse 上市公司把 nasdaq 段换成 nyse；不确定季度先开目录页 "
-            f"https://www.alphaspread.com/security/nasdaq/{low}/investor-relations/earnings-call ）；"
-            "③ 对照主源网页版确认是否已上架：" + sa + hk_note
+            "① Investing.com 当天常有带发言人的新闻稿："
+            f"{urls['investing_search']} ；"
+            f"② {rule} 搜索入口：{spread} ；"
+            "③ 对照主源网页版确认是否已上架：" + sa
         ),
-        "urls": {
-            "investing_search": (
-                f"https://www.investing.com/search/?q={low}%20earnings%20call%20transcript"
-            ),
-            "alphaspread_example": (
-                f"https://www.alphaspread.com/security/nasdaq/{low}/earnings-calls/q3-2026"
-            ),
-            "alphaspread_index": (
-                f"https://www.alphaspread.com/security/nasdaq/{low}/investor-relations/earnings-call"
-            ),
-            "stockanalysis": sa,
-        },
+        "urls": urls,
     }
 
 
