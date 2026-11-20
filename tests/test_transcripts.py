@@ -377,8 +377,9 @@ def test_query_transcripts_routes_pure_hk(monkeypatch: pytest.MonkeyPatch) -> No
     mc = result["manual_check"]
     assert mc["urls"]["stockanalysis"] == "https://stockanalysis.com/quote/hkg/0700/transcripts/"
     assert "investing.com/search" in mc["urls"]["investing_search"]
-    assert "alphaspread.com/search" in mc["urls"]["alphaspread_search"]
-    assert "alphaspread_example" not in mc["urls"]  # 港股 Alpha Spread 路径未验证，不给猜测
+    assert mc["urls"]["alphaspread_example"] == (
+        "https://www.alphaspread.com/security/hkex/700/earnings-calls/q3-2026"
+    )
 
 
 def test_query_transcripts_ah_pair_uses_hk_store(monkeypatch: pytest.MonkeyPatch) -> None:

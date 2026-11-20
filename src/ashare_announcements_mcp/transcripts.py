@@ -449,47 +449,48 @@ def sync_transcripts(code: str, ticker: str, market: str = "US", force_refresh: 
 
 
 def _manual_check(ticker: str, market: str) -> dict[str, Any]:
-    """来源未取得正文时的人工兜底：推荐浏览器打开 Investing.com 与 Alpha Spread。"""
+    """来源未取得正文时的人工兜底：推荐浏览器打开 Investing.com 与 Alpha Spread。
+
+    2026-11-20 浏览器实测路径：
+    - 美股 Alpha Spread：/security/nasdaq/{ticker}/earnings-calls/q{q}-{year}（nyse 换段）；
+    - 港股 Alpha Spread：/security/hkex/{去前导零代码}/earnings-calls/q{q}-{year}
+      （腾讯 00700 → hkex/700，Q3 2026 实测 36 轮、含问答）；
+    - Investing.com：区域站（www/ca 等）同一文章 ID 可能指向不同稿，用搜索页最稳。
+    """
     low = ticker.lower()
-    sa = (
-        f"https://stockanalysis.com/quote/hkg/{_hk_symbol(ticker)}/transcripts/"
-        if market == "H"
-        else f"https://stockanalysis.com/stocks/{low}/transcripts/"
-    )
-    urls = {
-        "investing_search": (
-            f"https://www.investing.com/search/?q={low}%20earnings%20call%20transcript"
-        ),
-        "stockanalysis": sa,
-    }
     if market == "H":
-        # Alpha Spread 港股 URL 段未验证，不给猜测路径；只给站点搜索入口
-        spread = f"https://www.alphaspread.com/search?q={low}"
-        rule = "Alpha Spread 港股路径未验证，用站内搜索进入公司页再找 Earnings Calls 栏目。"
-    else:
-        spread = (
-            f"https://www.alphaspread.com/security/nasdaq/{low}/earnings-calls/q3-2026"
-        )
+        code = ticker.lstrip("0")
+        sa = f"https://stockanalysis.com/quote/hkg/{_hk_symbol(ticker)}/transcripts/"
+        spread = f"https://www.alphaspread.com/security/hkex/{code}/earnings-calls/q3-2026"
+        spread_index = f"https://www.alphaspread.com/security/hkex/{code}/investor-relations/earnings-call"
         rule = (
-            "Alpha Spread 美股 URL 拼写："
-            f"https://www.alphaspread.com/security/{{nasdaq或nyse}}/{{ticker}}/earnings-calls/q{{季度}}-{{年份}}"
-            "（如上面示例；nyse 上市把 nasdaq 换成 nyse；不确定季度先开 "
-            f"https://www.alphaspread.com/security/nasdaq/{low}/investor-relations/earnings-call 目录页）。"
+            f"Alpha Spread 港股 URL：https://www.alphaspread.com/security/hkex/{{去前导零代码}}"
+            "/earnings-calls/q{季度}-{年份}（如腾讯 00700 → hkex/700，Q3 2026 路径实测可用）；"
+            f"不确定季度先开目录页 {spread_index}。"
         )
-        urls["alphaspread_example"] = spread
-        urls["alphaspread_index"] = (
-            f"https://www.alphaspread.com/security/nasdaq/{low}/investor-relations/earnings-call"
+    else:
+        sa = f"https://stockanalysis.com/stocks/{low}/transcripts/"
+        spread = f"https://www.alphaspread.com/security/nasdaq/{low}/earnings-calls/q3-2026"
+        spread_index = f"https://www.alphaspread.com/security/nasdaq/{low}/investor-relations/earnings-call"
+        rule = (
+            "Alpha Spread 美股 URL：https://www.alphaspread.com/security/{nasdaq或nyse}/{ticker}"
+            "/earnings-calls/q{季度}-{年份}（nyse 上市把 nasdaq 换成 nyse；"
+            f"不确定季度先开目录页 {spread_index}）。"
         )
-    urls["alphaspread_search"] = spread
+    search = f"https://www.investing.com/search/?q={low}%20earnings%20call%20transcript"
     return {
         "instruction": (
             "来源未取得该季正文时的人工兜底（免费页面，用浏览器打开）："
-            "① Investing.com 当天常有带发言人的新闻稿："
-            f"{urls['investing_search']} ；"
-            f"② {rule} 搜索入口：{spread} ；"
-            "③ 对照主源网页版确认是否已上架：" + sa
+            f"① Investing.com 搜索当天带发言人的新闻稿：{search}（区域站 www/ca 同一 ID 可能是不同稿，从搜索页进入更稳）；"
+            f"② {rule} 示例：{spread}；"
+            f"③ 对照主源网页版确认是否已上架：{sa}"
         ),
-        "urls": urls,
+        "urls": {
+            "investing_search": search,
+            "alphaspread_example": spread,
+            "alphaspread_index": spread_index,
+            "stockanalysis": sa,
+        },
     }
 
 
