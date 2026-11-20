@@ -19,7 +19,7 @@ AI 取数流程：
 
 1. `lookup` 查已验证库，拿到公式模板和参数。
 2. 命中：写一次性脚本调 engine.fetch_matrix（数值）或 fetch_formulas（文本）执行。
-3. 未命中：查 catalog.jsonl 找候选，推测写法小批实测；可靠则追加进 verified，可疑则转人工。
+3. 未命中：按[公式来源与录入流程](formula_library/README.md#批量公式录入与验证流程)核对插件原文。
 4. 反复使用的场景才写成 recipes/ 下的固定脚本。
 
 CLI 示例（stdin JSON → stdout JSON）：
@@ -53,7 +53,6 @@ print(r['values'], r.get('errors'))
 
 ## 库维护
 
-- 已验证库只追加经确认的记录，字段定义见 formula_library/README.md。
+- 公式来源、字段定义和验收标准见[公式库说明](formula_library/README.md)。
 - catalog.jsonl 由 build_catalog.py 从插件 excel_description.dat 生成，不手工编辑。
-- 新公式转入已验证库的标准：返回非空非零、量级合理、参数在枚举内、同类样本横比一致。
 - 文本字段（简称、日期）用 reading_mode=text，走 fetch_formulas(text_ok=True)。
