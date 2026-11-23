@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ifind_excel_tool import engine
+from ifind_excel_tool import engine, scenes as _scenes
 
 LIB = Path(__file__).resolve().parent / "formula_library"
 
@@ -155,8 +156,68 @@ def open_excel(req: dict) -> dict:
                                 timeout=float(req.get("timeout") or 60))}
 
 
+def scenes(req: dict) -> dict:
+    """列出固定场景，让调用方知道自己能直接取哪几套数据。"""
+    return {"ok": True, "scenes": _scenes.list_scenes()}
+
+
+def scene_info(req: dict) -> dict:
+    """看某个场景会取哪些字段，取数前先确认再取。"""
+    spec = _scenes.load_scene(req.get("scene") or "")
+    return {"ok": True, "name": spec.get("name"),
+            "description": spec.get("description", ""),
+            "dims": spec.get("dims") or {},
+            "defaults": spec.get("defaults") or {},
+            "fields": [{"label": f["label"],
+                        "indicator": f.get("indicator") or "+".join(f.get("candidates") or []),
+                        "pick": f.get("pick")} for f in spec["fields"]]}
+
+
+def fetch_scene(req: dict) -> dict:
+    """按固定场景取数。换公司与日期只改 code 和 report_date。"""
+    name = req.get("scene") or ""
+    codes = req.get("codes") or []
+    single = (req.get("code") or "").strip()
+    if single:
+        codes = [single]
+    if not codes:
+        return {"ok": False, "error": "code 或 codes 至少要给一个"}
+    spec = _scenes.load_scene(name)
+    library = _scenes._load_library()
+    results = []
+    for one in codes:
+        built = _scenes.build(spec, library, code=one,
+                              report_date=req.get("report_date"),
+                              params=req.get("params"),
+                              start=req.get("start"), end=req.get("end"))
+        raw = engine.fetch_matrix(built["matrix"], visible=req.get("visible"),
+                                  timeout=float(req.get("timeout") or 300),
+                                  text_ok=True)
+        records = _scenes.shape(spec, built["plan"], built["columns"],
+                                built["combos"], raw["values"])
+        for record in records:
+            record["code"] = one
+        results.extend(records)
+    resp = {"ok": True, "source": "ifind_excel", "scene": spec.get("name"),
+            "fields": len(spec["fields"]), "rows": len(results),
+            "records": results}
+    # 导出口径：调用方给了路径就写文件；没给且行数超过阈值，自动落盘避免把大结果塞进对话
+    export_path = req.get("export_path")
+    if export_path or len(results) > int(req.get("auto_export_rows") or 200):
+        target = export_path or str(
+            Path(__file__).resolve().parent / "exports"
+            / f"{spec.get('name')}_{(req.get('code') or (req.get('codes') or [''])[0]).replace('.', '_')}"
+              f"_{datetime.now():%Y%m%d-%H%M%S}.csv")
+        resp["export"] = _scenes.to_csv(results, target)
+        if not export_path:
+            resp["records"] = results[:20]  # 大结果只回前20行示意，完整数据在文件里
+            resp["truncated"] = True
+    return resp
+
+
 CMDS = {"lookup": lookup, "run": run, "text": text, "close": close,
-        "status": status, "open": open_excel}
+        "status": status, "open": open_excel,
+        "scenes": scenes, "scene_info": scene_info, "fetch_scene": fetch_scene}
 
 
 def main() -> None:

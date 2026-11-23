@@ -22,3 +22,6 @@ financial-probe/
 # 专用 Excel 打开期间的 Office 锁文件，不属于代码资源。
 src/market_data_mcp/data/~$*.xlsx
 src/ifind_excel_tool/data/~$*.xlsx
+
+# iFinD 场景取数导出目录（数据文件不入库）
+src/ifind_excel_tool/exports/
