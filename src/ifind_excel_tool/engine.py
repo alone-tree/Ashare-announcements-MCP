@@ -75,6 +75,44 @@ def _com_busy(error: Exception) -> bool:
     return "com_error" in text or "-2147418111" in text or "拒绝" in text
 
 
+def _cancel_cell_edit(pid: int) -> bool:
+    """向专用工作簿窗口发 Esc，结束残留的单元格编辑状态。
+
+    仅用于专用工作簿（data 页是临时取数区，不含用户手输内容，2026-11-23 用户确认）。
+    不碰同实例中的其他工作簿，也不碰其他 Excel 进程。
+    返回是否真的发出了按键。
+    """
+    import win32con
+    import win32gui
+    import win32process
+
+    try:
+        windows = []
+        win32gui.EnumWindows(
+            lambda hwnd, _: windows.append(hwnd)
+            if win32process.GetWindowThreadProcessId(hwnd)[1] == pid
+            and win32gui.GetClassName(hwnd) == "XLMAIN"
+            and WORKBOOK.name.lower() in win32gui.GetWindowText(hwnd).lower() else None,
+            None,
+        )
+        if not windows:
+            return False
+        children = []
+        win32gui.EnumChildWindows(
+            windows[0], lambda child, _: children.append(child)
+            if win32gui.GetClassName(child) == "EXCEL7" else None, None,
+        )
+        if not children:
+            return False
+        for child in children:
+            win32gui.PostMessage(child, win32con.WM_KEYDOWN, win32con.VK_ESCAPE, 0)
+            win32gui.PostMessage(child, win32con.WM_KEYUP, win32con.VK_ESCAPE, 0)
+        time.sleep(0.3)
+        return True
+    except Exception:
+        return False
+
+
 def _diagnose(pid: int) -> str:
     """COM 取不到 Application 时，判断最可能的原因并给出可执行的下一步。
 
@@ -266,7 +304,30 @@ def close_excel(*, timeout: float = 30) -> dict:
 
 
 def _find_workbook():
-    """用 WM_GETOBJECT/OBJID_NATIVEOM 取得原生 COM 对象，不改变焦点。"""
+    """用 WM_GETOBJECT/OBJID_NATIVEOM 取得原生 COM 对象，不改变焦点。
+
+    返回 ((app, book, pid) 或 None, 是否解除过单元格编辑)。
+    绑定失败且窗口有响应时多为编辑未结束：对专用工作簿发 Esc 解除后重绑，并把
+    解除标记返回给调用方用于重启 Excel。原因：iFinD 会把一次取数失败的返回值
+    缓存进同名公式，仅解除编辑仍返回旧错误值（2026-11-23 实测：编辑上下文下
+    同一公式返回0，关掉重开后才返回正确值）。
+    """
+    connected, busy = _bind_once()
+    if connected is not None:
+        return connected, False
+    if busy:
+        # 只对专用工作簿发 Esc：data 页是临时取数区，用户不在其中手输内容。
+        if any(_cancel_cell_edit(pid) for pid in busy):
+            connected, busy = _bind_once()
+            if connected is not None:
+                return connected, True
+        detail = "；".join(f"pid {pid}：{_diagnose(pid)}" for pid in busy)
+        raise RuntimeError(f"无法连接专用工作簿。{detail}")
+    return None, False
+
+
+def _bind_once():
+    """绑定一次专用工作簿；返回 ((app, book, pid) 或 None, 忙碌的 pid 字典)。"""
     import pythoncom
     import pywintypes
     import win32gui
@@ -300,16 +361,12 @@ def _find_workbook():
                 ).Application
                 for book in app.Workbooks:
                     if os.path.normcase(os.path.abspath(book.FullName)) == os.path.normcase(str(WORKBOOK)):
-                        return app, book, pid
+                        return (app, book, pid), {}
                 seen.add(pid)
                 break
             except (pythoncom.com_error, pywintypes.error, AttributeError) as error:
                 busy[pid] = str(error)
-    if busy:
-        # 其他忙碌实例不妨碍绑定已经找到的目标；找不到目标时不能贸然另开。
-        detail = "；".join(f"pid {pid}：{_diagnose(pid)}" for pid in busy)
-        raise RuntimeError(f"无法连接专用工作簿。{detail}")
-    return None
+    return None, busy
 
 
 def _personal_readonly(pid: int, handled: set[int]) -> int:
@@ -491,7 +548,8 @@ def _execute(request: dict, deadline: float) -> dict:
 
     operation = request["operation"]
     text_ok = bool(request.get("text_ok"))
-    connected = _find_workbook()
+    found, recovered = _find_workbook()
+    connected = found
     reused = connected is not None
     startup_prompts = 0
     if connected is None:
@@ -508,7 +566,7 @@ def _execute(request: dict, deadline: float) -> dict:
             startup_prompts += _personal_readonly(process.pid, handled)
             pythoncom.PumpWaitingMessages()
             try:
-                connected = _find_workbook()
+                connected, _ = _find_workbook()
             except RuntimeError:
                 connected = None  # 仅此次启动期间允许等待原实例就绪，不再次启动。
             if connected:
@@ -544,6 +602,36 @@ def _execute(request: dict, deadline: float) -> dict:
                 "startup_personal_readonly": startup_prompts}
     if operation != "fetch":
         raise ValueError(f"未知内部操作：{operation}")
+    if recovered:
+        # 刚解除过单元格编辑：iFinD 可能已把失败结果缓存进同名公式，仅重输公式
+        # 仍会返回旧值。关掉重开一次再取数，代价是一次冷启动，换来结果可信。
+        others, unsaved = _other_books(app, book)
+        book.Worksheets(SHEET).Cells.ClearContents()
+        book.Close(SaveChanges=False)
+        if not others and not unsaved:
+            app.Quit()
+        _cleanup_recovery()
+        process = subprocess.Popen([_excel_executable(), "/x", str(WORKBOOK)],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+        connected = None
+        while time.monotonic() < deadline:
+            pythoncom.PumpWaitingMessages()
+            try:
+                connected, _ = _find_workbook()
+            except RuntimeError:
+                connected = None
+            if connected:
+                break
+            if process.poll() is not None:
+                raise RuntimeError(f"Excel 启动进程提前退出：{process.returncode}")
+            time.sleep(0.5)
+        if connected is None:
+            raise TimeoutError("解除编辑后重启专用工作簿超时")
+        app, book, pid = connected
+        sheet = book.Worksheets(SHEET)
+        sheet.Cells.ClearContents()
+        functions = _ensure_functions(app)
     matrix_mode = "matrix" in request
     formulas = request["matrix"] if matrix_mode else [[f] for f in request["formulas"]]
     height, width = len(formulas), len(formulas[0])
