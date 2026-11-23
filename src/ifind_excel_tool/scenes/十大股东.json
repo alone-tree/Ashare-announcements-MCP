@@ -1,0 +1,14 @@
+{
+  "name": "十大股东",
+  "description": "一期完整的前十大股东披露表，十行乘各字段。换公司改 code，换报告期改 report_date；默认最近一期年报。",
+  "code_required": true,
+  "dims": {"rank": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]},
+  "fields": [
+    {"label": "股东名称", "indicator": "ths_holder_name_stock"},
+    {"label": "股东性质", "indicator": "ths_holder_nature_stock"},
+    {"label": "股份性质", "indicator": "ths_holder_held_shares_nature_stock"},
+    {"label": "持股数量", "indicator": "ths_holder_held_num_stock", "unit": "股"},
+    {"label": "持股比例", "indicator": "ths_holder_held_ratio_stock", "unit": "%"},
+    {"label": "限售股数", "indicator": "ths_holder_held_ls_num_stock", "unit": "股"}
+  ]
+}

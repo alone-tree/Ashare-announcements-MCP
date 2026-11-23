@@ -141,7 +141,8 @@ def shape(spec: dict, plan: list[dict], columns: list[tuple[int, int]],
             if count == 1:
                 value = cells[0] if cells else None
             elif not numbers:
-                value = None
+                # 单候选之外：候选全是文本时取第一个非空值（本工具的多候选只用于数值科目）
+                value = next((v for v in cells if v is not None), None)
             else:
                 value, _ = max(numbers, key=lambda x: x[0])
             record[field["label"]] = value

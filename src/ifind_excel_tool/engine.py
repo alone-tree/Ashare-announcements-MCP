@@ -668,6 +668,11 @@ def _execute(request: dict, deadline: float) -> dict:
                         if isinstance(value, str) and any(word in value for word in LOADING):
                             loading = True
                             continue
+                        if isinstance(value, str) and value.startswith(("=", "@")):
+                            # Excel 尚未把公式计算成值，单元格里还是公式原文。
+                            # 若按普通文本返回，调用方会拿到一串公式当数据，故视为仍在计算。
+                            loading = True
+                            continue
                         if isinstance(value, str):
                             if text_ok:
                                 continue  # 文本数据原样保留（如港股上市日期、营收名称）
