@@ -74,11 +74,33 @@ def close(req: dict) -> dict:
             **engine.close_excel(timeout=float(req.get("timeout") or 30))}
 
 
-CMDS = {"lookup": lookup, "run": run, "text": text, "close": close}
+def status(req: dict) -> dict:
+    """只读查询；Excel 未打开时不会启动它。"""
+    return {"ok": True, "source": "ifind_excel",
+            **engine.status(timeout=float(req.get("timeout") or 15))}
+
+
+def open_excel(req: dict) -> dict:
+    return {"ok": True, "source": "ifind_excel",
+            **engine.open_excel(visible=req.get("visible", True),
+                                timeout=float(req.get("timeout") or 60))}
+
+
+CMDS = {"lookup": lookup, "run": run, "text": text, "close": close,
+        "status": status, "open": open_excel}
 
 
 def main() -> None:
-    req = json.loads(sys.stdin.read())
+    try:
+        req = json.loads(sys.stdin.read())
+    except json.JSONDecodeError as error:
+        print(json.dumps({"ok": False, "error": f"输入不是合法JSON：{error}"},
+                         ensure_ascii=False))
+        return
+    if not isinstance(req, dict):
+        print(json.dumps({"ok": False, "error": "输入必须是JSON对象"},
+                         ensure_ascii=False))
+        return
     cmd = req.get("cmd")
     if cmd not in CMDS:
         resp = {"ok": False, "error": f"未知 cmd：{cmd}；支持 {list(CMDS)}"}

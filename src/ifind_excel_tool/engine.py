@@ -75,6 +75,76 @@ def _com_busy(error: Exception) -> bool:
     return "com_error" in text or "-2147418111" in text or "拒绝" in text
 
 
+def _diagnose(pid: int) -> str:
+    """COM 取不到 Application 时，判断最可能的原因并给出可执行的下一步。
+
+    仅在绑定失败后调用。三种情况的窗口表现不同（2026-11-23 实测）：
+    - 正在编辑单元格：EXCEL7 探测正常返回，但后续 COM 绑定报 AttributeError；
+      按 Esc 或 Enter 结束编辑即可，不需要关 Excel。
+    - iFinD 弹窗遮挡：能看到可见的 #32770（参数定义/函数搜索）窗口；
+      关掉该窗口即可。
+    - 实例真正僵死：EXCEL7 探测也超时或失败，只能结束该进程。
+
+    注意：EXCEL7 探测正常只说明窗口线程活着，不等于 COM 可用，
+    所以「可响应」这一分支指向编辑状态而不是正常状态。
+    """
+    import win32gui
+    import win32process
+
+    try:
+        windows = []
+        win32gui.EnumWindows(
+            lambda hwnd, _: windows.append(hwnd)
+            if win32process.GetWindowThreadProcessId(hwnd)[1] == pid
+            and win32gui.GetClassName(hwnd) == "XLMAIN"
+            and WORKBOOK.name.lower() in win32gui.GetWindowText(hwnd).lower() else None,
+            None,
+        )
+        if not windows:
+            return ("该进程已没有本工作簿的窗口，可能是残留进程。"
+                    "结束该 Excel 进程后重新取数即可，data 页不留数据。")
+        children = []
+        win32gui.EnumChildWindows(
+            windows[0], lambda child, _: children.append(child)
+            if win32gui.GetClassName(child) == "EXCEL7" else None, None,
+        )
+        responsive = False
+        for child in children:
+            try:
+                ok, value = win32gui.SendMessageTimeout(child, 0x003D, 0, -16, 2, 1500)
+                if ok and value:
+                    responsive = True
+                    break
+            except Exception:
+                continue
+        dialogs = []
+        win32gui.EnumWindows(
+            lambda hwnd, _: dialogs.append(win32gui.GetWindowText(hwnd))
+            if win32process.GetWindowThreadProcessId(hwnd)[1] == pid
+            and win32gui.GetClassName(hwnd) in ("#32770", "bosa_sdm_XL9")
+            and win32gui.IsWindowVisible(hwnd) else None, None,
+        )
+        named = [t for t in dialogs if t.strip()]
+        if named:
+            return ("Excel 被对话框挡住：" + "、".join(named) +
+                    "。关掉这些窗口后重试，不要结束 Excel 进程。")
+        if responsive:
+            return ("Excel 界面有响应但拒绝 COM，最常见原因是正在编辑单元格"
+                    "（光标停在某个格子里还没按回车）。按 Esc 或回车结束编辑后重试即可，"
+                    "Excel 本身没坏，不需要关闭。")
+        return ("Excel 实例已无响应（真的僵死）。结束该进程后重新取数，data 页不留数据。")
+    except Exception as error:  # 诊断失败不影响主报错
+        return f"无法判断具体原因（诊断本身失败：{type(error).__name__}）"
+
+
+def _reset_hint(error: Exception) -> str:
+    """给出不会绕圈的下一步：COM 不通时 close 也走同一条通道，同样会失败。"""
+    text = str(error)
+    if "无法连接专用工作簿" in text or "尚未就绪" in text:
+        return "Excel 当前不可用，close 命令也依赖同一条 COM 通道、此时同样会失败，不要反复重试 close"
+    return "可调用 close 重置专用工作簿后重试"
+
+
 def _fetch_one(matrix: list[list[str]], *, visible: bool | None,
                timeout: float, text_ok: bool) -> dict:
     last: Exception | None = None
@@ -86,12 +156,12 @@ def _fetch_one(matrix: list[list[str]], *, visible: bool | None,
                          timeout=timeout, text_ok=text_ok)
         except TimeoutError as error:
             raise TimeoutError(
-                f"{error}；Excel 保持原状，可调用close_ifind_excel重置专用工作簿后重试") from None
+                f"{error}；Excel 保持原状，{_reset_hint(error)}") from None
         except RuntimeError as error:
             last = error
             if not _com_busy(error):
                 break
-    raise RuntimeError(f"{last}；可调用close_ifind_excel重置专用工作簿后重试")
+    raise RuntimeError(f"{last}；{_reset_hint(last)}")
 
 
 def _fetch_batched(matrix: list[list[str]], *, visible: bool | None,
@@ -125,12 +195,12 @@ def _fetch_one_strict(formulas: list[str], *, visible: bool | None,
                          timeout=timeout, text_ok=text_ok)
         except TimeoutError as error:
             raise TimeoutError(
-                f"{error}；Excel 保持原状，可调用close_ifind_excel重置专用工作簿后重试") from None
+                f"{error}；Excel 保持原状，{_reset_hint(error)}") from None
         except RuntimeError as error:
             last = error
             if not _com_busy(error):
                 break
-    raise RuntimeError(f"{last}；可调用close_ifind_excel重置专用工作簿后重试")
+    raise RuntimeError(f"{last}；{_reset_hint(last)}")
 
 
 def _call(operation: str, *, timeout: float, **arguments) -> dict:
@@ -237,7 +307,8 @@ def _find_workbook():
                 busy[pid] = str(error)
     if busy:
         # 其他忙碌实例不妨碍绑定已经找到的目标；找不到目标时不能贸然另开。
-        raise RuntimeError(f"Excel 实例尚未就绪：{busy}")
+        detail = "；".join(f"pid {pid}：{_diagnose(pid)}" for pid in busy)
+        raise RuntimeError(f"无法连接专用工作簿。{detail}")
     return None
 
 
