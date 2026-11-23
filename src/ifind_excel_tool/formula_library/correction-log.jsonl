@@ -338,3 +338,26 @@
 {"action": "delete", "match": {"indicator": "ths_top10_hlolder_held_ratio_stock"}, "removed": {"name": "前十大股东持股比例合计", "path": "股票全部指标/股东结构"}, "reason": "指标码由 catalog.jsonl 反查得到，按项目铁律 catalog 属不可靠来源；待用户提供插件原文后重录", "at": "2026-11-23"}
 {"action": "delete", "match": {"indicator": "ths_top10_float_hlolder_held_num_stock"}, "removed": {"name": "前十大流通股东持股数量合计", "path": "股票全部指标/股东结构"}, "reason": "指标码由 catalog.jsonl 反查得到，按项目铁律 catalog 属不可靠来源；待用户提供插件原文后重录", "at": "2026-11-23"}
 {"action": "delete", "match": {"indicator": "ths_top10_float_hlolder_held_ratio_stock"}, "removed": {"name": "前十大流通股东持股比例合计", "path": "股票全部指标/股东结构"}, "reason": "指标码由 catalog.jsonl 反查得到，按项目铁律 catalog 属不可靠来源；待用户提供插件原文后重录", "at": "2026-11-23"}
+{"action": "delete", "match": {"indicator": "actual_controller"}, "removed": {"name": "实际控制人", "path": "全球股票全部指标/基本资料/公司资料", "verification": "verified_with_caveat"}, "reason": "用户要求删除全球版实控人记录：同花顺不覆盖该口径，留着无意义；改由A股专属指标 ths_actual_controller_stock 承接", "at": "2026-11-23"}
+{"action": "delete", "match": {"indicator": "actual_controller_type"}, "removed": {"name": "实际控制人类型", "path": "全球股票全部指标/基本资料/公司资料", "verification": "verified_with_caveat"}, "reason": "用户要求删除全球版实控人记录：同花顺不覆盖该口径，留着无意义；改由A股专属指标 ths_actual_controller_stock 承接", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_holder_name_stock"}, "added": {"name": "股东名称", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_holder_held_num_stock"}, "added": {"name": "股东持股数量", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_holder_held_ratio_stock"}, "added": {"name": "股东持股比例", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_holder_held_shares_nature_stock"}, "added": {"name": "股东持股股份性质", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_holder_nature_stock"}, "added": {"name": "股东性质", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_org_holder_type_stock"}, "added": {"name": "机构股东类型", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_org_holder_name_stock"}, "added": {"name": "机构股东名称", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_holder_held_ls_num_stock"}, "added": {"name": "大股东持有的限售股份数", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_top10_hlolder_held_num_stock"}, "added": {"name": "前十大股东持股数量合计", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_top10_hlolder_held_ratio_stock"}, "added": {"name": "前十大股东持股比例合计", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_float_holder_name_stock"}, "added": {"name": "流通股东名称", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_float_holder_held_num_stock"}, "added": {"name": "流通股东持股数量", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_float_holder_held_ratio_stock"}, "added": {"name": "流通股东持股比例", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_float_holder_held_share_nature_stock"}, "added": {"name": "流通股东持股股份性质", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_top10_float_hlolder_held_num_stock"}, "added": {"name": "前十大流通股东持股数量合计", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_top10_float_hlolder_held_ratio_stock"}, "added": {"name": "前十大流通股东持股比例合计", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_controlling_holder_stock"}, "added": {"name": "控股股东", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_controlling_holder_held_ratio_stock"}, "added": {"name": "控股股东持股比例", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_actual_controller_stock"}, "added": {"name": "实际控制人", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_actual_controller_held_ratio_stock"}, "added": {"name": "实际控制人持股比例", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"action": "add", "match": {"indicator": "ths_actual_controller_type_stock"}, "added": {"name": "实际控制人类型", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
