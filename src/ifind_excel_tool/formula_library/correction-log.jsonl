@@ -361,3 +361,4 @@
 {"action": "add", "match": {"indicator": "ths_actual_controller_stock"}, "added": {"name": "实际控制人", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
 {"action": "add", "match": {"indicator": "ths_actual_controller_held_ratio_stock"}, "added": {"name": "实际控制人持股比例", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
 {"action": "add", "match": {"indicator": "ths_actual_controller_type_stock"}, "added": {"name": "实际控制人类型", "path": "股票全部指标/股东结构"}, "reason": "用户提供插件原文录入", "at": "2026-11-23"}
+{"match": {"indicator": "ths_actual_controller_held_ratio_stock"}, "before": {"notes": "无排名参数。与控股股东持股比例是两套口径，茅台实控人比例低于控股股东比例。"}, "after": {"notes": "无排名参数。实控人股比是同花顺按股权链条穿透计算的，不是年报直接披露的单一主体持股比例，因此与控股股东/第一大股东的持股比例不是同一口径，不能相互校验或替代。茅台2024年报披露母公司中国贵州茅台酒厂(集团)有限责任公司持股54.07%、表决权54.07%，而本指标返回48.6630，年报中无此数，差异来自穿透计算方式。"}, "reason": "2026-11-23 用户说明实控人股比为iFinD穿透计算，补充口径说明避免与年报直接披露值混用", "at": "2026-11-23"}
