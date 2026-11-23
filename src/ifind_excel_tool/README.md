@@ -9,8 +9,8 @@
 | engine.py | Excel COM 执行层，从 market_data_mcp/ifind_excel.py 复制，独立定位工作簿；启动前自动清除本工作簿的崩溃恢复残留 |
 | cli.py | 极薄入口，只有 lookup / run / text / close 四个命令 |
 | formula_library/verified-formulas.jsonl | 已验证公式，人工锚定，AI 优先检索 |
-| formula_library/catalog.jsonl | 全量30281条指标索引，脚本生成，未验证 |
-| recipes/ | 高频场景脚本，初期为空 |
+| formula_library/catalog.jsonl | 全量30281条指标索引，内容不可靠，禁止查询 |
+| scenes/ | 固定场景清单，按场景取数 |
 | data/ifind_workspace.xlsx | 专用工作簿，只含 data 页（纯取数通道，永不保存） |
 
 ## 用法
@@ -71,5 +71,5 @@ print(r['values'], r.get('errors'))
 ## 库维护
 
 - 公式来源、字段定义和验收标准见[公式库说明](formula_library/README.md)。
-- catalog.jsonl 由 build_catalog.py 从插件 excel_description.dat 生成，不手工编辑。
+- catalog.jsonl 内容不可靠，除用户明确要求外禁止查询，不得用于找候选、核对字段或补参数。
 - 文本字段（简称、日期）用 reading_mode=text，走 fetch_formulas(text_ok=True)。

@@ -39,11 +39,11 @@ lookup 命中公式时，按该公式 path 找出所有前缀匹配的通用注�
 
 前缀匹配是有意设计：scope 写累计报表路径（如现金流量表），其注释会同时命中单季度报表（现金流量表单季度）；scope 写单季度专属路径的注释只命中单季度，不反向命中累计。需要只覆盖某一分支时，把 scope 写到该分支的完整路径层级。
 
-## catalog.jsonl（全量索引）
+## catalog.jsonl（全量索引，禁止查询）
 
-由 build_catalog.py 从 C:/Program Files/iFinD/etc/datacube/excel_description.dat 生成。
-保留定义/算法/参数原文/参数枚举/来源/单位/ui_path，verification 固定为 unverified。
-只作查漏与候选推测，不直接当可用公式。
+由 build_catalog.py 从 C:/Program Files/iFinD/etc/datacube/excel_description.dat 生成，30281 条。
+
+内容错误、口径混淆，AI 多次据此取数出错。除用户明确要求外，任何情况下都不得查询此文件，不得用它找候选写法、核对字段、推断参数或补充任何信息。查不到指标时向用户要插件界面原文。
 
 ## 数据来源等级（2026-11-18 踩坑后定）
 
@@ -51,7 +51,7 @@ lookup 命中公式时，按该公式 path 找出所有前缀匹配的通用注�
 
 `candidate-formulas.jsonl` 用于登记待核对公式。旧索引只提供检索线索。批量收到的插件公式是筛选素材，正式库只录入有明确用途的指标。入选指标若多次返回 0 或口径仍待确认，记录已知写法、实测情况和限制。
 
-不可靠来源：catalog.jsonl（来自 excel_description.dat，信息可能旧/错/笼统）、2018手册、历史仓库、AI 自己填的 path/name/source/unit。**严禁用不可靠来源核对或覆盖已验证库**。
+不可靠来源：catalog.jsonl（来自 excel_description.dat，信息可能旧/错/笼统）、2018手册、历史仓库、AI 自己填的 path/name/source/unit。严禁查询、核对或覆盖已验证库。
 
 具体教训：
 - 不得拿 catalog 的 source/unit 覆盖已有记录。曾把用户实测的港元数据「港元」改成 catalog 的「元」，把对值改错。原文为空就留空，不从其他市场推断。
