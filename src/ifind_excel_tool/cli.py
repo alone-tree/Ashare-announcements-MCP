@@ -30,25 +30,94 @@ def _load(name: str) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+# 匹配强度：数字越小越靠前。用途是让 AI 一眼看出哪条才是用户要的科目，
+# 避免「搜净资产取第一条却拿到归母口径」这类错。
+MATCH_EXACT_INDICATOR = 1   # 指标码完全相同
+MATCH_EXACT_NAME = 2        # 正式名称完全相同
+MATCH_EXACT_ALIAS = 3       # 别名完全相同
+MATCH_NAME_CONTAINS = 4     # 正式名称包含
+MATCH_ALIAS_CONTAINS = 5    # 别名包含
+MATCH_INDICATOR_CONTAINS = 6  # 指标码包含
+MATCH_DEFINITION = 7        # 仅定义正文命中
+
+
+def _match_rank(record: dict, keyword: str) -> int | None:
+    """返回该记录对关键词的匹配强度；不命中返回 None。
+
+    多词关键词（空格分隔）沿用历史语义：全部词都要出现在检索范围内才命中，
+    匹配强度按整串关键词在字段中的位置判定。
+    """
+    words = keyword.split()
+    name = (record.get("name") or "").strip()
+    aliases = [a.strip() for a in (record.get("aliases") or [])]
+    indicator = record.get("indicator") or ""
+    definition = record.get("definition") or ""
+    path = record.get("path") or ""
+
+    # 全部词必须出现在合并检索范围内，否则不命中（保持原有可用性）
+    haystack = " ".join([path, name, indicator, " ".join(aliases), definition])
+    if not all(w in haystack for w in words):
+        return None
+
+    # 单字关键词才能做完全匹配判定；多词按包含处理
+    if len(words) == 1:
+        if keyword == indicator:
+            return MATCH_EXACT_INDICATOR
+        if keyword == name:
+            return MATCH_EXACT_NAME
+        if keyword in aliases:
+            return MATCH_EXACT_ALIAS
+        if keyword in name:
+            return MATCH_NAME_CONTAINS
+        if any(keyword in a for a in aliases):
+            return MATCH_ALIAS_CONTAINS
+        if keyword in indicator:
+            return MATCH_INDICATOR_CONTAINS
+        return MATCH_DEFINITION
+
+    if all(w in name for w in words):
+        return MATCH_NAME_CONTAINS
+    if any(all(w in a for w in words) for a in aliases):
+        return MATCH_ALIAS_CONTAINS
+    if all(w in indicator for w in words):
+        return MATCH_INDICATOR_CONTAINS
+    return MATCH_DEFINITION
+
+
 def lookup(req: dict) -> dict:
     kw = (req.get("keyword") or "").strip()
     limit = int(req.get("limit") or 5)
+    offset = max(0, int(req.get("offset") or 0))
     if not kw:
         return {"ok": False, "error": "keyword 不能为空"}
     verified = _load("verified-formulas.jsonl")
     general = _load("general-notes.jsonl")
-    hits = []
-    for r in verified:
-        haystack = " ".join([r["path"], r["name"], r["indicator"],
-                             " ".join(r.get("aliases") or []), r.get("definition", "")])
-        if all(k in haystack for k in kw.split()):
-            item = {k: r[k] for k in ("path", "name", "indicator", "formula_template",
-                                       "parameters", "unit", "verification", "notes")}
-            item["general_notes"] = [{"id": g["id"], "note": g["note"]}
-                                     for g in general if r["path"].startswith(g["scope"])]
-            hits.append(item)
-    return {"ok": True, "keyword": kw, "source": "verified", "hits": hits[:limit],
-            "total": len(hits)}
+    ranked = []
+    for order, r in enumerate(verified):
+        rank = _match_rank(r, kw)
+        if rank is None:
+            continue
+        item = {k: r[k] for k in ("path", "name", "indicator", "formula_template",
+                                   "parameters", "unit", "verification", "notes")}
+        # reading_mode 决定该走数值通道还是文本通道，缺了它 AI 会用错命令
+        item["reading_mode"] = r.get("reading_mode") or "matrix"
+        item["aliases"] = r.get("aliases") or []
+        item["match"] = {MATCH_EXACT_INDICATOR: "指标码完全匹配",
+                         MATCH_EXACT_NAME: "名称完全匹配",
+                         MATCH_EXACT_ALIAS: "别名完全匹配",
+                         MATCH_NAME_CONTAINS: "名称包含",
+                         MATCH_ALIAS_CONTAINS: "别名包含",
+                         MATCH_INDICATOR_CONTAINS: "指标码包含",
+                         MATCH_DEFINITION: "仅定义正文命中"}[rank]
+        item["general_notes"] = [{"id": g["id"], "note": g["note"]}
+                                 for g in general if r["path"].startswith(g["scope"])]
+        ranked.append((rank, order, item))
+    # 先按匹配强度，同强度保持库内原有顺序
+    ranked.sort(key=lambda x: (x[0], x[1]))
+    hits = [item for _, _, item in ranked]
+    return {"ok": True, "keyword": kw, "source": "verified",
+            "hits": hits[offset:offset + limit], "total": len(hits),
+            "offset": offset, "limit": limit}
 
 
 def run(req: dict) -> dict:
