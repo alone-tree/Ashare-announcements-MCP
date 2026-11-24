@@ -99,8 +99,12 @@ def build(spec: dict, library: dict[str, dict], *, code: str,
         combos = [{**e, "date": d} for d in days for e in extra]
     else:
         combos = _combos(dims)
+    user_params = dict(params or {})
+    # adjust 是业务叫法，公式模板占位符是 type；统一成 type，让用户能覆盖场景字段里的硬编码复权值
+    if "adjust" in user_params:
+        user_params.setdefault("type", user_params["adjust"])
     base = {"code": code, "date": report_date or defaults.get("date") or "",
-            **(params or {})}
+            **user_params}
 
     columns: list[tuple[int, int]] = []          # (字段序号, 候选序号)
     plan: list[dict] = []
@@ -123,7 +127,9 @@ def build(spec: dict, library: dict[str, dict], *, code: str,
             field = spec["fields"][field_index]
             indicator = (field.get("candidates") or [field["indicator"]])[candidate_index]
             record = library[indicator]
-            context = {**base, **(field.get("params") or {}), **combo}
+            # 字段params是场景默认值，用户传入的type/adjust优先级更高
+            context = {**base, **(field.get("params") or {}), **combo,
+                       **{k: v for k, v in user_params.items() if k in ("type", "adjust")}}
             if not context.get("date"):
                 context["date"] = defaults.get("date") or ""
             row.append(_fill(record["formula_template"], context))
