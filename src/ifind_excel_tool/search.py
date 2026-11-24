@@ -29,13 +29,27 @@ def _read_csv(name: str) -> list[dict[str, str]]:
         return [dict(r) for r in csv.DictReader(f)]
 
 
+# 搜索词里允许出现的市场后缀，匹配前剥离
+_MARKET_SUFFIXES = ("SH", "SZ", "BJ", "HK", "US", "TI", "CSI", "GI")
+
+
+def _normalize_keyword(kw: str) -> str:
+    """剥离市场后缀并转大写，用于代码匹配。600519.SH→600519，0100.HK→0100。"""
+    k = (kw or "").strip().upper()
+    if "." in k:
+        bare, _, suffix = k.rpartition(".")
+        if suffix in _MARKET_SUFFIXES:
+            k = bare
+    return k
+
+
 def _ifind_stock_code(code: str, name: str, sec_type: str, type_us: str) -> str | None:
     """东财股票候选 → iFinD代码；非正股权证等返回None。"""
     suffix = _STOCK_SUFFIX.get(sec_type)
     if sec_type == "港股":
         if type_us not in ("1", "3"):  # 排除权证等衍生品
             return None
-        if name.endswith("-R"):  # 人民币柜台，非正股
+        if "-R" in name or "-WR" in name:  # 人民币柜台/非标准柜台
             return None
         return (code.lstrip("0") or "0").zfill(4) + ".HK"
     if sec_type == "美股":
@@ -50,14 +64,16 @@ def _ifind_stock_code(code: str, name: str, sec_type: str, type_us: str) -> str 
 def _search_stock(keyword: str) -> tuple[list[dict], list[dict]]:
     import requests
 
+    query = _normalize_keyword(keyword)  # 带后缀时用裸码查东财，否则0100.HK会0结果
     with requests.Session() as s:
         s.trust_env = False
-        resp = s.get(_EM_URL, params={"input": keyword, "type": "14", "count": "50", "token": _EM_TOKEN}, timeout=20)
+        resp = s.get(_EM_URL, params={"input": query, "type": "14", "count": "50", "token": _EM_TOKEN}, timeout=20)
         resp.raise_for_status()
         table = resp.json()["QuotationCodeTable"]
     if int(table.get("Status", -1)) != 0:
         raise RuntimeError(f"东财搜索失败：{table.get('Message')}")
     matches, excluded = [], []
+    norm_kw = _normalize_keyword(keyword)  # 剥离后缀，如600519.SH→600519
     for item in table.get("Data") or []:
         c = (item.get("Code") or "").strip()
         name = (item.get("Name") or "").strip()
@@ -69,13 +85,18 @@ def _search_stock(keyword: str) -> tuple[list[dict], list[dict]]:
         row = {"name": name, "ifind_code": code, "kind": "股票", "market": sec_type,
                "type": "正股", "source_code": c, "type_us": type_us}
         if code:
+            # 简单分层：代码或名称精确命中排前，其余按包含；同层按代码序。
+            # 不做严格码位区分：都是股票、都是代码，AI能区分腾讯和模塑科技。
+            bare = code.split(".")[0]
+            exact = (norm_kw == c or norm_kw == bare or name.upper() == keyword.upper())
+            contains = (norm_kw in c or norm_kw in bare or keyword.upper() in name.upper())
+            row["_rank"] = 0 if exact else (1 if contains else 2)
             matches.append(row)
-        else:
-            row["type"] = "非正股" if sec_type in ("港股", "美股") else sec_type
-            excluded.append(row)
-    # 名称完全相等排最前，其次名称包含关键词
-    matches.sort(key=lambda r: (0 if r["name"] == keyword else (1 if keyword in r["name"] else 2), r["ifind_code"]))
-    return matches, excluded
+        # 非正股（权证、R股、票据等）直接过滤掉，不返回
+    matches.sort(key=lambda r: (r["_rank"], r["ifind_code"]))
+    for r in matches:
+        r.pop("_rank", None)
+    return matches, []
 
 
 def _index_records() -> list[dict]:
@@ -98,12 +119,19 @@ def _index_records() -> list[dict]:
     return rows
 
 
+# 核心宽基：常补标记，让常用优先在同级排序里生效
+CORE_INDICES = {
+    "000300.SH", "000905.SH", "000016.SH", "000015.SH", "000922.CSI",
+    "000001.SH", "399006.SZ", "000688.SH", "899050.BJ", "000985.CSI",
+    "HSI.HK", "HSTECH.HK", "SPX.GI", "NDX.GI",
+}
 def _rank_index(row: dict, kw: str) -> int | None:
     code = (row.get("证券代码") or "").strip()
     bare = code.split(".")[0]
     name = (row.get("证券名称") or "").strip()
     full = (row.get("指数全称") or "").strip()
-    if code == kw or bare == kw:
+    k = _normalize_keyword(kw)
+    if code == kw or bare == kw or bare == k:
         return 1
     if name == kw:
         return 2
@@ -117,31 +145,52 @@ def _rank_index(row: dict, kw: str) -> int | None:
 
 
 def _search_index(keyword: str) -> list[dict]:
+    # 借鉴 Adobe Live Search 的分层相关性 + Algolia 精确优先：
+    # 1) 按匹配强度分层（代码/简称精确 > 全称精确 > 简称包含 > 全称包含）；
+    # 2) 同层内常用/核心指数优先——主流指数是用户大多数时候想要的；
+    # 3) 再按名称长度，较短者贴近查询词；不硬排除全收益/R等变体，
+    #    用户搜全名时它靠更强的匹配层自然排第一。
     hit = []
     for row in _index_records():
         rank = _rank_index(row, keyword)
         if rank is not None:
-            hit.append((rank, 0 if row.get("常用") == "1" else 1, row))
-    hit.sort(key=lambda x: (x[0], x[1], x[2]["证券代码"]))
-    return [r for _, _, r in hit]
+            common = row.get("常用") == "1" or row["证券代码"].strip() in CORE_INDICES
+            name_len = len(row.get("证券名称", ""))
+            hit.append((rank, 0 if common else 1, name_len, row))
+    hit.sort(key=lambda x: (x[0], x[1], x[2], x[3]["证券代码"]))
+    return [r for _, _, _, r in hit]
+
+
+# 俗称→证券名称的别名映射（外汇）
+_FOREX_ALIAS = {"黄金": "伦敦金", "金价": "伦敦金", "gold": "伦敦金"}
 
 
 def _search_forex(keyword: str) -> list[dict]:
+    kw = keyword.strip()
+    alias = _FOREX_ALIAS.get(kw, kw)
+    # 名称归一化：去斜杠和空格，「欧元美元」可匹配「欧元/美元」
+    flat = lambda s: s.replace("/", "").replace(" ", "")
+    kw_flat = flat(alias)
     hit = []
     for row in _read_csv("汇率代码表.csv"):
         code = row.get("证券代码", "").strip()
         name = row.get("证券名称", "").strip()
-        if code == keyword:
+        k = _normalize_keyword(kw)  # 代码匹配剥离后缀
+        if code == kw or code.upper() == k or code.split(".")[0].upper() == k:
             rank = 1
-        elif name == keyword:
+        elif name == alias:
             rank = 2
-        elif keyword in code or keyword in name:
+        elif kw_flat in flat(name):
             rank = 3
+        elif k in code.upper():
+            rank = 4
         else:
             continue
-        hit.append((rank, row))
-    hit.sort(key=lambda x: (x[0], x[1]["证券代码"]))
-    return [r for _, r in hit]
+        common = 0 if row.get("是否常用") == "常用" else 1
+        hit.append((rank, common, row))
+    # 匹配强度 > 常用优先 > 代码
+    hit.sort(key=lambda x: (x[0], x[1], x[2]["证券代码"]))
+    return [r for _, _, r in hit]
 
 
 def search(keyword: str, offset: int = 0, limit: int = PAGE_SIZE, kind: str = "") -> dict:
