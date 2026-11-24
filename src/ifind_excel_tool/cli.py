@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-"""ifind_excel_tool 极薄 CLI：只提供 lookup / run / text / close 四个命令。
+"""ifind_excel_tool CLI：stdin JSON → stdout JSON，顶层字段 cmd。
 
-设计意图：CLI 不做场景封装，只暴露库检索与原始执行能力。
-AI 需要数据时先 lookup 查公式，再写一次性脚本调 engine；
-只有反复使用的场景才沉淀为 recipes/ 下的脚本。
+先跑 {"cmd":"help"} 看导航（start_here 按需求指明该调哪个命令）。
+主要命令：
+  search       查证券代码，返回可直接取数的ifind_code（每页10行，offset翻页）
+  fetch_scene  按固定场景取数（优先用这个）
+  lookup/run/text  查公式、执行公式矩阵、取文本字段（场景没有才用）
+  help/help_scene/help_indicators/scenes/scene_info  各种帮助查询
+  open/status/close  Excel生命周期
 
-用法（stdin JSON → stdout JSON，顶层字段 cmd）：
-  {"cmd":"lookup","keyword":"市盈率","limit":5}
-  {"cmd":"run","matrix":[[=@thsiFinD(...)],...],"timeout":300}
-  {"cmd":"text","formulas":["=@thsiFinD(...)"]}
-  {"cmd":"close"}
+详细用法见 usage.md。设计意图：让AI行动前先查清有什么、该用什么，
+避免绕过现成场景自己拼公式踩坑（港股五位代码、非交易日前推等）。
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ifind_excel_tool import engine, help as _help, scenes as _scenes
+from ifind_excel_tool import engine, help as _help, scenes as _scenes, search as _search
 
 LIB = Path(__file__).resolve().parent / "formula_library"
 
@@ -237,6 +238,16 @@ def _fetch_table_scene(req: dict, spec: dict) -> dict:
     return resp
 
 
+def search(req: dict) -> dict:
+    """按名称或代码查证券，返回可直接用于取数的ifind代码（每页最多10行）。"""
+    return _search.search(
+        req.get("keyword") or "",
+        offset=int(req.get("offset") or 0),
+        limit=int(req.get("limit") or _search.PAGE_SIZE),
+        kind=req.get("kind") or "",
+    )
+
+
 def scenes(req: dict) -> dict:
     """列出固定场景，让调用方知道自己能直接取哪几套数据。"""
     return {"ok": True, "scenes": _scenes.list_scenes()}
@@ -316,7 +327,7 @@ def help_indicators(req: dict) -> dict:
 
 
 CMDS = {"lookup": lookup, "run": run, "text": text, "close": close,
-        "status": status, "open": open_excel,
+        "status": status, "open": open_excel, "search": search,
         "scenes": scenes, "scene_info": scene_info, "fetch_scene": fetch_scene,
         "help": help_overview, "help_scene": help_scene, "help_indicators": help_indicators}
 

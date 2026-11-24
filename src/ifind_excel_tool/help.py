@@ -60,6 +60,19 @@ def overview() -> dict:
 
     return {
         "ok": True,
+        "start_here": {
+            "不知道证券代码": '先 {"cmd":"search","keyword":"腾讯"} 查代码，用返回的ifind_code取数',
+            "要一段行情或某天估值": 'fetch_scene 场景「历史行情」「估值快照」',
+            "要财报三表": "fetch_scene 对应的资产负债表/利润表/现金流量表场景",
+            "要公司资料或股东": "fetch_scene 场景「工商信息」「十大股东」",
+            "要指数成分股": "fetch_scene 场景「指数成分股」",
+            "库里没有的指标": "lookup 查公式，确认场景确实没有再自己用 run 拼",
+            "重要规则": [
+                "优先用fetch_scene，场景确实没有才用run自己拼公式",
+                "取数的code必须是iFinD格式：港股四位如0700.HK，不是五位；用search查最稳",
+                "search每页最多10行，更多用offset翻页",
+            ],
+        },
         "families": [
             {"family": fam,
              "what": FAMILY_DESC.get(fam, ""),
@@ -67,6 +80,7 @@ def overview() -> dict:
             for fam, items in sorted(families.items())
         ],
         "how_to_call": {
+            "查证券代码": '{"cmd":"search","keyword":"腾讯"}',
             "看场景清单": '{"cmd":"scenes"}',
             "看某场景要哪些字段": '{"cmd":"scene_info","scene":"历史行情"}',
             "取数": '{"cmd":"fetch_scene","scene":"历史行情","code":"600519.SH"}',
@@ -87,6 +101,12 @@ def scene_params(scene: str) -> dict:
 
     out = {"ok": True, "scene": spec.get("name") or scene, "kind": kind,
            "description": spec.get("description", "")}
+    if scene == "历史行情":
+        out["key_points"] = [
+            "默认前复权108，可在params改adjust：100不复权、107后复权、108前复权",
+            "区间start/end，默认2016年至今",
+            "已剔除非交易日（周末、节假日），但保留停牌日、量额记0；判据是不前推收盘价大于0",
+        ]
 
     if kind == "table":
         out["required_inputs"] = {
