@@ -10,6 +10,12 @@
   },
   "dims": {"date_range": true},
   "drop_non_trading_field": "非交易日判定",
+  "resample": {
+    "field_map": {
+      "open": "开盘价", "high": "最高价", "low": "最低价",
+      "close": "收盘价", "volume": "成交量", "amount": "成交额"
+    }
+  },
   "fields": [
     {"label": "非交易日判定", "indicator": "close_no_forward", "params": {"type": "100"}, "hidden": true},
     {"label": "收盘价", "indicator": "ths_close_price_stock", "params": {"type": "108"}},

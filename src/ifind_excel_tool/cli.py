@@ -23,7 +23,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ifind_excel_tool import engine, help as _help, scenes as _scenes, search as _search
+from ifind_excel_tool import engine, help as _help, resample as _resample, scenes as _scenes, search as _search
 
 LIB = Path(__file__).resolve().parent / "formula_library"
 
@@ -260,17 +260,28 @@ def scene_info(req: dict) -> dict:
             "description": spec.get("description", ""),
             "dims": spec.get("dims") or {},
             "defaults": spec.get("defaults") or {},
+            "periods": ["daily", "weekly", "monthly"] if spec.get("resample") else ["daily"],
             "fields": [{"label": f["label"],
                         "indicator": f.get("indicator") or "+".join(f.get("candidates") or []),
                         "pick": f.get("pick")} for f in spec["fields"]]}
 
 
 def fetch_scene(req: dict) -> dict:
-    """按固定场景取数。换公司与日期只改 code 和 report_date。"""
+    """按固定场景取数。换公司与日期只改 code 和 report_date。
+
+    历史行情场景支持 period=daily/weekly/monthly（默认 daily）：始终先取日K，
+    再按需本地聚合为周/月线，不直接取周月K。
+    """
     name = req.get("scene") or ""
     spec = _scenes.load_scene(name)
     if spec.get("kind") == "table":
         return _fetch_table_scene(req, spec)
+    period = req.get("period") or "daily"
+    if period not in ("daily", "weekly", "monthly"):
+        return {"ok": False, "error": f"不支持的周期 {period}（支持 daily/weekly/monthly）"}
+    resample_spec = spec.get("resample") or {}
+    if period != "daily" and not resample_spec:
+        return {"ok": False, "error": f"场景「{name}」不支持 period={period}（仅日线）"}
     codes = req.get("codes") or []
     single = (req.get("code") or "").strip()
     if single:
@@ -291,10 +302,13 @@ def fetch_scene(req: dict) -> dict:
                                 built["combos"], raw["values"])
         for record in records:
             record["code"] = one
+        if period != "daily":
+            records = _resample.resample_ohlcv(
+                records, period, resample_spec.get("field_map") or {})
         results.extend(records)
     resp = {"ok": True, "source": "ifind_excel", "scene": spec.get("name"),
-            "fields": len(spec["fields"]), "rows": len(results),
-            "records": results}
+            "period": period, "fields": len(spec["fields"]),
+            "rows": len(results), "records": results}
     # 导出口径：调用方给了路径就写文件；没给且行数超过阈值，自动落盘避免把大结果塞进对话
     export_path = req.get("export_path")
     if export_path or len(results) > int(req.get("auto_export_rows") or 200):

@@ -106,6 +106,7 @@ def scene_params(scene: str) -> dict:
             "默认前复权108，可在params改adjust：100不复权、107后复权、108前复权",
             "区间start/end，默认2016年至今",
             "已剔除非交易日（周末、节假日），但保留停牌日、量额记0；判据是不前推收盘价大于0",
+            "period可选daily/weekly/monthly，默认daily；先取日K再本地聚合，不直接取周月K",
         ]
 
     if kind == "table":
@@ -131,6 +132,8 @@ def scene_params(scene: str) -> dict:
         "params": "覆盖场景里的字段参数，如 {\"adjust\": 100}",
         "export_path": "结果写 CSV 的路径；不传但行数超 200 时自动落盘",
     }
+    if spec.get("resample"):
+        out["optional_inputs"]["period"] = "daily/weekly/monthly，默认daily；周/月线由日线本地聚合"
     out["defaults"] = spec.get("defaults") or {}
     out["dims"] = spec.get("dims") or {}
     out["fields"] = [{"label": f["label"],
