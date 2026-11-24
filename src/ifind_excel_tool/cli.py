@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ifind_excel_tool import engine, scenes as _scenes
+from ifind_excel_tool import engine, help as _help, scenes as _scenes
 
 LIB = Path(__file__).resolve().parent / "formula_library"
 
@@ -156,6 +157,86 @@ def open_excel(req: dict) -> dict:
                                 timeout=float(req.get("timeout") or 60))}
 
 
+def _fetch_table_scene(req: dict, spec: dict) -> dict:
+    """表函数场景：一条公式返回整张表，需要写公式后等函数把数据写到下方。
+
+    与矩阵场景的差别在等待方式：矩阵靠单元格是否还在显示抓取/提取，
+    表函数是往下方逐步追加行，只能按行数稳定判断。实测约 1 秒到位。
+    """
+    params = dict(req.get("params") or {})
+    for key in spec.get("inputs") or []:
+        if key not in params and req.get(key) is not None:
+            params[key] = req[key]
+    for key, value in (spec.get("defaults") or {}).items():
+        if value == "today_ymd" and key not in params:
+            params[key] = f"{datetime.now():%Y%m%d}"
+        elif key not in params:
+            params[key] = value
+    try:
+        built = _scenes.build_table(spec, params=params)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc),
+                "expected_inputs": spec.get("inputs"),
+                "input_labels": spec.get("input_labels") or {}}
+
+    connected, _ = engine._find_workbook()
+    if connected is None:
+        return {"ok": False, "error": "专用工作簿未打开，请先执行 {\"cmd\":\"open\"}"}
+    app, book, pid = connected
+    sheet = book.Worksheets("data")
+    engine._ensure_functions(app)
+    sheet.Cells.ClearContents()
+
+    region = req.get("read_region") or "A1:J2000"
+    sheet.Range("A1").Formula2 = built["formula"]
+
+    limit = float(req.get("timeout") or 120)
+    started = time.time()
+    prev_sig, stable, rows_now = None, 0, 0
+    block = []
+    while time.time() - started < limit:
+        time.sleep(0.8)
+        try:
+            block = sheet.Range(region).Value2
+        except Exception:
+            continue
+        if not isinstance(block, tuple):
+            block = ((block,),)
+        rows_now = sum(1 for row in block
+                       if isinstance(row, tuple) and any(v is not None for v in row))
+        sig = str(block)
+        if sig == prev_sig:
+            stable += 1
+            if stable >= 2 and rows_now > 1:
+                break
+        else:
+            stable = 0
+            prev_sig = sig
+
+    records = _scenes.shape_table(spec, block,
+                                  meta={"params": params, "formula": built["formula"]})
+    units = spec.get("field_units") or {}
+    for record in records:
+        for field, unit in units.items():
+            if field in record:
+                record[f"{field}__unit"] = unit
+    resp = {"ok": True, "source": "ifind_excel", "scene": spec.get("name"),
+            "kind": "table", "formula": built["formula"],
+            "params": params, "rows": len(records), "records": records,
+            "elapsed_seconds": round(time.time() - started, 2)}
+    export_path = req.get("export_path")
+    if export_path or len(records) > int(req.get("auto_export_rows") or 200):
+        target = export_path or str(
+            Path(__file__).resolve().parent / "exports"
+            / f"{spec.get('name')}_{params.get('idx_code') or 'table'}_"
+              f"{datetime.now():%Y%m%d-%H%M%S}.csv")
+        resp["export"] = _scenes.to_csv(records, target)
+        if not export_path:
+            resp["records"] = records[:20]
+            resp["truncated"] = True
+    return resp
+
+
 def scenes(req: dict) -> dict:
     """列出固定场景，让调用方知道自己能直接取哪几套数据。"""
     return {"ok": True, "scenes": _scenes.list_scenes()}
@@ -176,13 +257,15 @@ def scene_info(req: dict) -> dict:
 def fetch_scene(req: dict) -> dict:
     """按固定场景取数。换公司与日期只改 code 和 report_date。"""
     name = req.get("scene") or ""
+    spec = _scenes.load_scene(name)
+    if spec.get("kind") == "table":
+        return _fetch_table_scene(req, spec)
     codes = req.get("codes") or []
     single = (req.get("code") or "").strip()
     if single:
         codes = [single]
     if not codes:
         return {"ok": False, "error": "code 或 codes 至少要给一个"}
-    spec = _scenes.load_scene(name)
     library = _scenes._load_library()
     results = []
     for one in codes:
@@ -215,9 +298,27 @@ def fetch_scene(req: dict) -> dict:
     return resp
 
 
+def help_overview(req: dict) -> dict:
+    """一页看清所有场景与族归属。"""
+    return _help.overview()
+
+
+def help_scene(req: dict) -> dict:
+    """某场景要什么参数、有哪些字段、默认值是什么。"""
+    return _help.scene_params(req.get("scene") or "")
+
+
+def help_indicators(req: dict) -> dict:
+    """按市场或关键词列出库里可用的指标。"""
+    return _help.list_indicators(req.get("market") or "",
+                                 req.get("keyword") or "",
+                                 int(req.get("limit") or 100))
+
+
 CMDS = {"lookup": lookup, "run": run, "text": text, "close": close,
         "status": status, "open": open_excel,
-        "scenes": scenes, "scene_info": scene_info, "fetch_scene": fetch_scene}
+        "scenes": scenes, "scene_info": scene_info, "fetch_scene": fetch_scene,
+        "help": help_overview, "help_scene": help_scene, "help_indicators": help_indicators}
 
 
 def main() -> None:

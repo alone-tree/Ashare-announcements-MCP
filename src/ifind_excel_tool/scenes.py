@@ -27,12 +27,17 @@ def list_scenes() -> list[dict]:
     out = []
     for path in sorted(SCENES.glob("*.json")):
         spec = json.loads(path.read_text(encoding="utf-8"))
-        out.append({"name": spec.get("name") or path.stem,
-                    "description": spec.get("description", ""),
-                    "fields": len(spec.get("fields") or []),
-                    "dims": sorted((spec.get("dims") or {}).keys()),
-                    "defaults": spec.get("defaults") or {},
-                    "single_code_only": bool(spec.get("single_code_only"))})
+        item = {"name": spec.get("name") or path.stem,
+                "description": spec.get("description", ""),
+                "kind": spec.get("kind") or "matrix",
+                "fields": len(spec.get("fields") or []),
+                "dims": sorted((spec.get("dims") or {}).keys()),
+                "defaults": spec.get("defaults") or {},
+                "single_code_only": bool(spec.get("single_code_only"))}
+        if item["kind"] == "table":
+            item["inputs"] = spec.get("inputs") or []
+            item["input_labels"] = spec.get("input_labels") or {}
+        out.append(item)
     return out
 
 
@@ -155,8 +160,12 @@ def shape(spec: dict, plan: list[dict], columns: list[tuple[int, int]],
             if field["unit"]:
                 record[f"{field['label']}__unit"] = field["unit"]
         records.append(record)
-    if spec.get("drop_empty_rows"):
+    if spec.get("drop_non_trading_field"):
         records = _drop_non_trading(records, spec)
+    # hidden 字段只用于筛选，不出现在结果里
+    hidden = [f["label"] for f in plan if f.get("hidden")]
+    if hidden:
+        records = [{k: v for k, v in r.items() if k not in hidden} for r in records]
     return records
 
 
@@ -186,19 +195,94 @@ def to_csv(records: list[dict], path: str) -> dict:
 
 
 def _drop_non_trading(records: list[dict], spec: dict) -> list[dict]:
-    """剔除非交易日的空行。
+    """剔除非交易日的空行，保留停牌日。
 
-    按自然日展开时，周末与节假日的收盘价会取到前一个交易日的值、而成交量成交额为 0，
-    直接返回会让序列里混进重复价格。判定用清单里指定的字段：
-    有 drop_empty_rows 时，该字段为 0 或空即视为非交易日。
+    按自然日展开时，周末与节假日的收盘价会取到前一个交易日的值，直接返回会让
+    序列里混进重复价格。判据是清单里 drop_non_trading_field 指定的「不前推收盘价」：
+    该值大于 0 表示当天市场开市，为 0 表示非交易日。
+
+    不用成交量判定：停牌日与全天零成交日的成交量也是 0，用成交量会把真实开市
+    但停牌的交易日一并删掉。口径与 market-data 一致——停牌日保留、量额记 0。
     """
-    key = spec.get("drop_empty_rows")
+    key = spec.get("drop_non_trading_field")
+    if not key:
+        return records
     kept = []
     for record in records:
         value = record.get(key)
-        if isinstance(value, (int, float)) and value == 0:
-            continue
-        if value is None:
-            continue
-        kept.append(record)
+        if isinstance(value, (int, float)) and value > 0:
+            kept.append(record)
     return kept
+
+
+# ---------------------------------------------------------------------------
+# 表函数场景（kind = "table"）
+#
+# THS_RPT / THS_DR 这类函数一次返回整张表，与上面「一个指标一个值」的矩阵路径
+# 完全不同：公式只有一条，数据由函数写到公式下方，行列由字段清单决定。
+# 因此单独实现，不混进 build()/shape()。
+# ---------------------------------------------------------------------------
+
+
+def build_table(spec: dict, *, params: dict) -> dict:
+    """把表函数场景拼成一条完整公式。
+
+    清单字段：function 函数名、report 报表编码、inputs 输入参数名列表、
+    fields 输出字段名列表、tail 固定尾部参数。
+
+    实测（2026-11-24）：rows/cols 的具体数值不影响返回行数，函数按实际数据量输出；
+    那个空参数不能省。公式全内联，不引用任何单元格。
+    """
+    report = spec["report"]
+    pairs = []
+    for name in spec["inputs"]:
+        if name not in params:
+            raise ValueError(f"缺少输入参数：{name}（场景「{spec['name']}」需要 {spec['inputs']}）")
+        pairs.append(f'"{name}={params[name]}"')
+    fields = "{" + ",".join(f'"{f}"' for f in spec["fields"]) + "}"
+    tail = "".join(f',"{t}"' for t in (spec.get("tail") or []))
+    if spec.get("function") == "THS_RPT":
+        body = f'=@THS_RPT("{report}",' + ",".join(pairs) + f",{fields}{tail})"
+    else:
+        names = ",".join(spec["inputs"])
+        values = ",".join(str(params[n]) for n in spec["inputs"])
+        codes = ",".join(spec["fields"])
+        body = f'=@THS_DR("{report}","{names}","{values}","{codes}")'
+    return {"formula": body, "fields": list(spec["fields"]),
+            "field_labels": spec.get("field_labels") or list(spec["fields"])}
+
+
+def shape_table(spec: dict, raw_block, meta: dict | None = None) -> list[dict]:
+    """把表函数写出的整块区域变成带列名的记录。
+
+    实测落点：公式格起第 3 行为字段代码行、第 4 行为中文列名行、第 5 行起为数据。
+    这里按「第一条全角数据行」自动定位，跳过前置的字段行与列名行。
+    """
+    labels = spec.get("field_labels") or spec.get("fields") or []
+    width = len(spec.get("fields") or labels)
+
+    def cells_of(row):
+        return list(row) if isinstance(row, (list, tuple)) else [row]
+
+    start = None
+    for index, row in enumerate(raw_block):
+        cells = cells_of(row)
+        if len(cells) < width:
+            continue
+        head = cells[:width]
+        if all(v is not None and (not isinstance(v, str) or v.strip()) for v in head):
+            start = index
+            break
+    if start is None:
+        return []
+
+    records = []
+    for row in raw_block[start:]:
+        cells = cells_of(row)[:width]
+        if all(v is None for v in cells):
+            continue
+        records.append({label: value for label, value in zip(labels, cells)})
+    if meta:
+        for record in records:
+            record.update(meta)
+    return records

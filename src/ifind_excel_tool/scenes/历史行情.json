@@ -1,6 +1,6 @@
 {
   "name": "历史行情",
-  "description": "单只股票一段区间的日线行情。换公司改 code，换区间改 start/end；不传则按默认 2016年至今、前复权。",
+  "description": "单只股票一段区间的日线行情。换公司改 code，换区间改 start/end；不传则按默认 2016年至今、前复权。停牌日保留，量额为0。",
   "code_required": true,
   "single_code_only": true,
   "defaults": {
@@ -9,8 +9,9 @@
     "adjust": 108
   },
   "dims": {"date_range": true},
-  "drop_empty_rows": "成交量",
+  "drop_non_trading_field": "非交易日判定",
   "fields": [
+    {"label": "非交易日判定", "indicator": "close_no_forward", "params": {"type": "100"}, "hidden": true},
     {"label": "收盘价", "indicator": "ths_close_price_stock", "params": {"type": "108"}},
     {"label": "开盘价", "indicator": "ths_open_price_stock", "params": {"type": "108"}},
     {"label": "最高价", "indicator": "ths_high_price_stock", "params": {"type": "108"}},
