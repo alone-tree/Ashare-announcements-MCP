@@ -193,25 +193,31 @@ def _search_forex(keyword: str) -> list[dict]:
     return [r for _, _, r in hit]
 
 
+VALID_KINDS = ("股票", "指数", "外汇")
+
+
 def search(keyword: str, offset: int = 0, limit: int = PAGE_SIZE, kind: str = "") -> dict:
-    """统一搜索入口。kind 可限定：股票/指数/外汇；空则全部。"""
+    """搜索入口。必须指定 kind（股票/指数/外汇），不替调用方猜渠道。"""
     kw = (keyword or "").strip()
     if not kw:
         return {"ok": False, "error": "keyword不能为空"}
+    if kind not in VALID_KINDS:
+        return {"ok": False,
+                "error": f"必须指定搜索渠道 kind，可选：{'/'.join(VALID_KINDS)}；收到：{kind!r}"}
     offset = max(0, int(offset))
     limit = max(1, min(PAGE_SIZE, int(limit)))
 
     matches: list[dict] = []
     excluded: list[dict] = []
-    if kind in ("", "股票"):
+    if kind == "股票":
         m, ex = _search_stock(kw)
         matches.extend(m)
         excluded.extend(ex)
-    if kind in ("", "指数"):
+    elif kind == "指数":
         for row in _search_index(kw):
             matches.append({"name": row["证券名称"], "ifind_code": row["证券代码"],
                             "kind": "指数", "row": row})
-    if kind in ("", "外汇"):
+    else:  # 外汇
         for row in _search_forex(kw):
             matches.append({"name": row["证券名称"], "ifind_code": row["证券代码"],
                             "kind": "外汇", "row": row})
@@ -221,6 +227,7 @@ def search(keyword: str, offset: int = 0, limit: int = PAGE_SIZE, kind: str = ""
     return {
         "ok": True,
         "keyword": kw,
+        "kind": kind,
         "total": total,
         "offset": offset,
         "limit": limit,

@@ -61,7 +61,7 @@ def overview() -> dict:
     return {
         "ok": True,
         "start_here": {
-            "不知道证券代码": '先 {"cmd":"search","keyword":"腾讯"} 查代码，用返回的ifind_code取数',
+            "不知道证券代码": '先 {"cmd":"search","keyword":"腾讯","kind":"股票"} 查代码（kind必须指定：股票/指数/外汇），用返回的ifind_code取数',
             "要一段行情或某天估值": 'fetch_scene 场景「历史行情」「估值快照」',
             "要财报三表": "fetch_scene 对应的资产负债表/利润表/现金流量表场景",
             "要公司资料或股东": "fetch_scene 场景「工商信息」「十大股东」",
@@ -80,7 +80,7 @@ def overview() -> dict:
             for fam, items in sorted(families.items())
         ],
         "how_to_call": {
-            "查证券代码": '{"cmd":"search","keyword":"腾讯"}',
+            "查证券代码": '{"cmd":"search","keyword":"腾讯","kind":"股票"}  kind必须指定：股票/指数/外汇',
             "看场景清单": '{"cmd":"scenes"}',
             "看某场景要哪些字段": '{"cmd":"scene_info","scene":"历史行情"}',
             "取数": '{"cmd":"fetch_scene","scene":"历史行情","code":"600519.SH"}',

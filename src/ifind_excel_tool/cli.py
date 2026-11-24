@@ -3,7 +3,7 @@
 
 先跑 {"cmd":"help"} 看导航（start_here 按需求指明该调哪个命令）。
 主要命令：
-  search       查证券代码，返回可直接取数的ifind_code（每页10行，offset翻页）
+  search       查证券代码，必须指定kind=股票/指数/外汇（每页10行，offset翻页）
   fetch_scene  按固定场景取数（优先用这个）
   lookup/run/text  查公式、执行公式矩阵、取文本字段（场景没有才用）
   help/help_scene/help_indicators/scenes/scene_info  各种帮助查询
@@ -351,6 +351,11 @@ def main() -> None:
             resp = CMDS[cmd](req)
         except Exception as exc:
             resp = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    # 结果含®等字符时，GBK终端print会抛UnicodeEncodeError，强制UTF-8输出
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     print(json.dumps(resp, ensure_ascii=False))
 
 

@@ -12,19 +12,18 @@
 
 ## 查证券代码
 
-不知道代码时先搜，返回的 `ifind_code` 可以直接复制到取数命令：
+不知道代码时先搜，返回的 `ifind_code` 可以直接复制到取数命令。`kind` 必须指定（股票/指数/外汇），工具不替你猜渠道：
 
 ```
-{"cmd":"search","keyword":"腾讯"}
-{"cmd":"search","keyword":"沪深300"}
-{"cmd":"search","keyword":"美元人民币"}
 {"cmd":"search","keyword":"腾讯","kind":"股票"}
+{"cmd":"search","keyword":"沪深300","kind":"指数"}
+{"cmd":"search","keyword":"美元人民币","kind":"外汇"}
 ```
 
-股票走东财搜索（港股四位、正股优先，权证R股放 `excluded`），指数查本地12741条指数总表，外汇查汇率表。每页最多10行，用 `offset` 翻页：
+股票走东财搜索（港股四位、正股优先，权证/R股/票据等非正股和非股票类型直接过滤掉），指数查本地12741条指数总表，外汇查汇率表。每页最多10行，用 `offset` 翻页：
 
 ```
-{"cmd":"search","keyword":"指数","offset":10}
+{"cmd":"search","keyword":"红利","kind":"指数","offset":10}
 ```
 
 返回里 `total` 是命中总数，`has_more` 表示还有下一页。指数和外汇命中时 `row` 返回该行全部字段。
