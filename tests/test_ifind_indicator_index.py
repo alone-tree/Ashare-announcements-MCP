@@ -1,0 +1,120 @@
+# -*- coding: utf-8 -*-
+"""统一指标索引与取数测试：搜索范围、用法完整度、跨市场择市、派生计算口径。
+
+不触 Excel 的部分在这里覆盖；真实取数验证在交付说明里另记样本。
+"""
+
+import pytest
+
+from ifind_excel_tool import indicator_index, indicators
+
+
+def test_search_covers_every_kind():
+    """方案要求：搜索范围不阉割，六类能力都要搜得到。"""
+    kinds = set()
+    for keyword in ("毛利率", "固定资产", "利润表常用科目", "工商信息",
+                    "指数成分股", "最新报告期", "营业总收入"):
+        result = indicator_index.search(keyword)
+        assert result["ok"]
+        kinds |= {hit["kind"] for hit in result["hits"]}
+    assert {"derived", "select", "group", "scene", "table", "special",
+            "excel"} <= kinds
+
+
+def test_every_hit_carries_usage():
+    """每条命中都要能直接拿来用：命令、参数、返回形状齐全。"""
+    for keyword in ("毛利率", "固定资产", "工商信息"):
+        for hit in indicator_index.search(keyword)["hits"]:
+            assert hit["call"]["cmd"], hit["name"]
+            assert hit["returns"], hit["name"]
+            assert hit["description"] is not None
+
+
+def test_table_scene_reachable_by_business_phrase():
+    """「沪深300成分股」这类自然说法要能搜到「指数成分股」。"""
+    hits = indicator_index.search("沪深300成分股")["hits"]
+    assert hits and hits[0]["name"] == "指数成分股"
+    assert hits[0]["kind"] == "table"
+
+
+def test_derived_overrides_same_name_raw():
+    """自定义库优先：同名时搜到和取到的都是自定义定义。"""
+    hit = indicator_index.search("毛利率")["hits"][0]
+    assert hit["kind"] == "derived"
+    assert indicator_index.resolve("毛利率")["kind"] == "derived"
+
+
+def test_market_is_selected_by_code_suffix():
+    """同名指标跨市场并存时按代码后缀择市场，A股代码拿到A股那条。"""
+    entry = indicator_index.resolve("营业利润", "002796.SZ")
+    assert entry["path"].startswith("股票全部指标")
+    us = indicator_index.resolve("营业利润", "AAPL.US")
+    assert us["path"].startswith("美股全部指标")
+
+
+def test_market_absent_is_reported_plainly():
+    """库里没港股版本时，说明缺哪个市场，不说「多个同名定义」。"""
+    with pytest.raises(ValueError) as error:
+        indicator_index.resolve("营业利润", "0700.HK")
+    assert "没有港股版本" in str(error.value)
+
+
+def test_ambiguous_without_code_refuses_to_guess():
+    """不给代码无法唯一确定时报歧义，不替调用方猜。"""
+    with pytest.raises(ValueError) as error:
+        indicator_index.resolve("营业利润")
+    assert "多个同名定义" in str(error.value)
+
+
+def test_unknown_indicator_says_how_to_search():
+    with pytest.raises(ValueError) as error:
+        indicator_index.resolve("完全不存在的指标")
+    assert "find" in str(error.value)
+
+
+@pytest.mark.parametrize("expr,names,expected", [
+    ("营业总收入 - 营业成本", {"营业总收入": 100.0, "营业成本": 60.0}, 40.0),
+    ("(营业总收入 - 营业成本) / 营业总收入 * 100",
+     {"营业总收入": 100.0, "营业成本": 60.0}, 40.0),
+    ("-营业总收入", {"营业总收入": 5.0}, -5.0),
+])
+def test_expr_eval_only_arithmetic(expr, names, expected):
+    assert indicators._eval_expr(expr, names) == pytest.approx(expected)
+
+
+def test_expr_eval_rejects_missing_dependency():
+    with pytest.raises(ValueError) as error:
+        indicators._eval_expr("营业总收入 - 营业成本", {"营业总收入": 1.0})
+    assert "营业成本" in str(error.value)
+
+
+def test_expr_eval_rejects_non_arithmetic():
+    """算式只允许四则运算，不允许调函数或取属性。"""
+    with pytest.raises(ValueError):
+        indicators._eval_expr("__import__('os').getcwd()", {})
+
+
+def test_zero_denominator_is_unavailable_not_fallback():
+    """分母为零时该值不可用并给原因，不回退成0。"""
+    definition = {"name": "毛利率", "expr": "(营业总收入 - 营业成本) / 营业总收入 * 100",
+                  "decimals": 2}
+    result = indicators._compute_derived(definition, {"营业总收入": 0.0, "营业成本": 10.0})
+    assert result["ok"] is False
+    assert "分母为零" in result["error"]
+
+
+def test_derived_rounds_by_decimals():
+    definition = {"name": "毛利率", "expr": "(营业总收入 - 营业成本) / 营业总收入 * 100",
+                  "decimals": 2}
+    result = indicators._compute_derived(
+        definition, {"营业总收入": 618654770.48, "营业成本": 584204793.3})
+    assert result["ok"] and result["value"] == 5.57
+
+
+def test_group_members_are_declared_indicators():
+    """指标组成员必须都能解析，避免定义写完才发现有成员不存在。"""
+    groups = indicators._load_groups()
+    assert groups, "指标组库不应为空"
+    for name, spec in groups.items():
+        for member in spec["members"]:
+            indicator_index.resolve(member, "002796.SZ")

@@ -27,6 +27,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ifind_excel_tool import chart as _chart, engine, help as _help, resample as _resample, scenes as _scenes, search as _search, report as _report
+from ifind_excel_tool import indicator_index as _indicators, indicators as _get
 
 LIB = Path(__file__).resolve().parent / "formula_library"
 
@@ -239,6 +240,30 @@ def _fetch_table_scene(req: dict, spec: dict) -> dict:
             resp["records"] = records[:20]
             resp["truncated"] = True
     return resp
+
+
+def find_indicator(req: dict) -> dict:
+    """在全部能力里搜指标，返回用法（命令、参数、返回形状）。
+
+    范围覆盖公式型、场景型、报表函数型、自定义派生指标、指标组、特殊能力，
+    不按存储形态割裂。看到想要的指标后用 get 命令取数。
+    """
+    return _indicators.search(req.get("keyword") or "",
+                              limit=int(req.get("limit") or 10),
+                              offset=int(req.get("offset") or 0),
+                              kind=req.get("kind") or "")
+
+
+def get_indicator(req: dict) -> dict:
+    """按指标名或指标码取数，类型自动分派。
+
+    给指标名（如「毛利率」「固定资产」）或指标码（如 ths_operating_cost_stock），
+    底层自动决定走公式、多候选取值还是派生计算，调用方不用判断。
+    """
+    return _get.get(req.get("indicator") or "",
+                    code=(req.get("code") or "").strip(),
+                    date=(req.get("report_date") or "").strip(),
+                    params=req.get("params"))
 
 
 def search(req: dict) -> dict:
@@ -625,6 +650,7 @@ def report(req: dict) -> dict:
 CMDS = {"lookup": lookup, "run": run, "text": text, "close": close,
         "status": status, "open": open_excel, "search": search,
         "scenes": scenes, "scene_info": scene_info, "fetch_scene": fetch_scene,
+        "find": find_indicator, "get": get_indicator,
         "report": report,
         "draw": draw,
         "help": help_overview, "help_scene": help_scene, "help_indicators": help_indicators}
