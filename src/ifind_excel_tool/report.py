@@ -549,7 +549,9 @@ APPENDIX_CASHFLOW = [
 
 def render_statement(records: list[dict], periods: list[str],
                      spec: list[tuple[str, list[str]]] | None = None,
-                     group_map: dict[str, str] | None = None) -> str:
+                     group_map: dict[str, str] | None = None,
+                     *, flat: bool = False,
+                     skip_groups: tuple[str, ...] = ("间接法",)) -> str:
     """按参考件分组渲染：保留全部有数据的科目，仅剔除展示期内整行全0的科目。
 
     spec 为可选白名单（旧参考模式）；不传时按 records 字段顺序与 group 分组渲染，
@@ -558,7 +560,7 @@ def render_statement(records: list[dict], periods: list[str],
     if not records:
         return GAP
     index = by_date(records)
-    headers = ["科目（万元）"] + [period_label(p) for p in periods]
+    headers = ["科目"] + [period_label(p) for p in periods]
     sample = records[0]
     if spec:
         labels_by_group = [(g, labels) for g, labels in spec]
@@ -589,11 +591,17 @@ def render_statement(records: list[dict], periods: list[str],
         return amount(raw, "万元")
 
     blocks: list[str] = []
+    if flat:
+        # 用户定稿：利润表不分组，参考件是单表
+        labels_by_group = [("", [x for _, g in labels_by_group for x in g])]
     for group_title, labels in labels_by_group:
-        if group_title and "间接法" in group_title:
-            continue  # 用户定稿：间接法补充资料整块不进报告
+        if group_title and any(k in group_title for k in skip_groups):
+            continue
         rows = []
         for label in labels:
+            # 利润表不显示其他综合收益相关科目（flat模式下整块略过）
+            if flat and "综合收益" in label:
+                continue
             # 剔全0按原始值判断：有数但换算万元后四舍五入为0的科目要保留。
             raw_values = [to_number(value_at(index.get(p), label)) for p in periods]
             if all(v in (None, 0) for v in raw_values):
@@ -605,6 +613,28 @@ def render_statement(records: list[dict], periods: list[str],
         table = markdown(headers, rows)
         blocks.append(group_title.rstrip("：") + "：" + "\n\n" + table if group_title else table)
     return "\n\n".join(blocks) if blocks else GAP
+
+
+META_ROWS = [
+    ("发布时间", "披露日期"),
+    ("审计单位", "审计单位"),
+    ("审计意见", "审计意见"),
+]
+
+
+def render_meta(meta: list[dict], periods: list[str]) -> str:
+    """报表元信息：发布时间、审计单位、审计意见。三季度等无审计数据的正常留空。"""
+    if not meta:
+        return ""
+    index = by_date(meta)
+    headers = ["项目"] + [period_label(p) for p in periods]
+    rows = []
+    for display, key in META_ROWS:
+        values = [text_value((index.get(p) or {}).get(key)) for p in periods]
+        if all(v == "—" for v in values):
+            continue
+        rows.append([display] + values)
+    return markdown(headers, rows) if rows else ""
 
 
 def build_report(*, company: str, code: str, periods: list[str],
@@ -657,12 +687,17 @@ def build_report(*, company: str, code: str, periods: list[str],
                               income, periods, to_number(valuation.get("总市值")),
                               data_date or periods[0]), ""]
 
-    lines += ["---", "", "## 附录", "",
-              "附录金额统一换算为万元，四舍五入取整。", ""]
-    for title, key in (("A、资产负债表", "资产负债表"), ("B、利润表", "利润表"), ("C、现金流量表", "现金流量表")):
+    lines += ["---", "", "## 附录", ""]
+    meta_table = render_meta(data.get("报表元信息") or [], periods)
+    if meta_table:
+        lines += [meta_table, ""]
+    for title, key, flat in (("A、资产负债表", "资产负债表", False),
+                             ("B、利润表", "利润表", True),
+                             ("C、现金流量表", "现金流量表", False)):
         lines += [f"### {title}（万元）", "",
                   render_statement(data.get(key) or [], periods,
-                                   group_map=groups.get(key) or {}), ""]
+                                   group_map=groups.get(key) or {}, flat=flat,
+                                   skip_groups=("间接法", "其他综合收益")), ""]
 
     if warnings:
         lines += ["## 数据获取提示", "", *[f"- {w}" for w in dict.fromkeys(warnings)], ""]

@@ -546,7 +546,7 @@ def report(req: dict) -> dict:
         warnings.append(f"历史行情取数失败：{quote.get('error')}")
 
     # 非图表板块的CSV：用已取到的记录直接写，避免重复调一次取数
-    for block in REPORT_BLOCKS:
+    for block in REPORT_BLOCKS + ("报表元信息",):
         if block in ("历史行情",) or block not in data:
             continue
         path = out_dir / f"{company}-{block}.csv"
@@ -573,6 +573,37 @@ def report(req: dict) -> dict:
         number = values[0][0] if values and values[0] else None
         if isinstance(number, (int, float)):
             violations = f"{number:,.0f}"
+
+    # 报表元信息：发布时间、审计单位、审计意见，一次矩阵取全部期。
+    # 一季度/三季度无审计数据，上游返回空或0属正常，原样留空。
+    meta_rows = []
+    meta_formulas = []
+    for period in periods:
+        # 披露日期只接受3个参数；审计单位与审计意见第4参数传100（地域类别）
+        meta_formulas.append(
+            f'=@thsiFinD("ths_regular_report_actual_dd_stock","{code}","{period}")')
+        meta_formulas.append(
+            f'=@thsiFinD("ths_audit_institution_stock","{code}","{period}",100)')
+        meta_formulas.append(
+            f'=@thsiFinD("ths_audit_opinion_type_stock","{code}","{period}",100)')
+    # 三项都是文本指标，必须走 text（text_ok=True），否则文本被当错误置空
+    meta_result = text({"cmd": "text", "formulas": meta_formulas})
+    if meta_result.get("ok"):
+        values = meta_result.get("values") or []
+        for index, period in enumerate(periods):
+            chunk = values[index * 3:index * 3 + 3]
+            published = chunk[0] if len(chunk) > 0 else None
+            auditor = chunk[1] if len(chunk) > 1 else None
+            opinion = chunk[2] if len(chunk) > 2 else None
+            meta_rows.append({
+                "date": period,
+                "披露日期": str(published)[:10] if isinstance(published, str) else "",
+                "审计单位": auditor if isinstance(auditor, str) else "",
+                "审计意见": opinion if isinstance(opinion, str) else "",
+            })
+    else:
+        warnings.append(f"报表元信息取数失败：{meta_result.get('error')}")
+    data["报表元信息"] = meta_rows
 
     groups = {name: _scene_groups(name)
               for name in ("资产负债表", "利润表", "现金流量表")}
