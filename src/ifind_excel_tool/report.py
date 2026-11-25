@@ -323,6 +323,7 @@ def _segment_block(items: list[dict], periods: list[str],
             total_cost = to_number(value_at(income.get(period), "营业成本"))
             total_profit = (total_revenue - total_cost
                             if total_revenue is not None and total_cost is not None else None)
+            # 收入占比、毛利率、毛利占比均用金额本地相除，和早期的Excel模板计算方法一致
             detail["收入"].append(amount(revenue, "万元"))
             detail["收入占比"].append(percentage_from_fraction(revenue, total_revenue))
             detail["毛利率"].append(percentage_from_fraction(profit, revenue))
@@ -506,6 +507,7 @@ def render_statement(records: list[dict], periods: list[str],
     def cell(label: str, period: str) -> str:
         record = index.get(period) or {}
         if label == "@毛利润":
+            # 毛利润、毛利率由营业总收入减营业成本本地算出，和早期的Excel模板计算方法一致
             revenue = to_number(record.get("营业总收入"))
             cost = to_number(record.get("营业成本"))
             return amount(revenue - cost, "万元") if revenue is not None and cost is not None else "—"
