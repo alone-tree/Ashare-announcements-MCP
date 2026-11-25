@@ -289,7 +289,12 @@ def render_dividends(records: list[dict], income: dict[str, dict], periods: list
         return GAP
     dividends = {str(rec.get("year") or ""): rec for rec in records}
     years = sorted({str(rec.get("year") or "") for rec in records} | {p[:4] for p in annuals}, reverse=True)
-    headers = ["单位：万元"] + [f"{y}年" for y in years]
+    # 最新年度列按最新已披露财报季标注（如「2026三季」），避免误解为年报
+    latest_label = period_label(periods[0]) if periods else ""
+    headers = ["单位：万元"]
+    for y in years:
+        headers.append(latest_label if y == years[0] and latest_label and str(y) in latest_label
+                       else f"{y}年")
     rows = [
         ["现金分红总额"],
         ["股票回购总额"],
@@ -308,8 +313,8 @@ def render_dividends(records: list[dict], income: dict[str, dict], periods: list
         candidates = [p for p in income if p.startswith(str(year) + "-")]
         latest_period = max(candidates) if candidates else None
         rows[3].append(amount(value_at(income.get(latest_period), "归属于母公司所有者的净利润"), "万元"))
-    note = ("归母净利润取该年度最新已披露报告期（最新年度用三季报/中报，不等年报）；"
-            "现金分红为iFinD按分红所属年度统计的口径。")
+    note = ("最新列按截至" + (latest_label or "最新财报季") + "的现金分红方案统计，不等年报；"
+            "归母净利润取该年度最新已披露报告期；历史年度为完整年度口径。")
     return markdown(headers, rows) + "\n\n" + note
 
 
@@ -422,6 +427,8 @@ def render_forecast(forecast: list[dict], valuation: list[dict],
     annual_year = latest_annual_year(periods)
     forecast_years = [annual_year + 1, annual_year + 2, annual_year + 3]
     history_years = [annual_year, annual_year - 1, annual_year - 2, annual_year - 3]
+    denominator_year = annual_year - 4  # 隐藏年份：只作末列（最早显示年）增速的分母，不显示
+    display_years = list(reversed(forecast_years)) + history_years
     columns = [f"{year}年E" for year in reversed(forecast_years)] + \
               [f"{year}年" for year in history_years]
     forecast_index = {str(rec.get("year") or ""): rec for rec in forecast}
@@ -437,13 +444,15 @@ def render_forecast(forecast: list[dict], valuation: list[dict],
         record = forecast_index.get(str(year)) or {}
         operating[year] = to_number(record.get("营业收入均值"))
         profit[year] = to_number(record.get("归母净利润均值"))
-    for year in history_years:
+    for year in history_years + [denominator_year]:
         record = income.get(f"{year}-12-31") or {}
         operating[year] = to_number(record.get("营业总收入"))
         profit[year] = to_number(record.get("归属于母公司所有者的净利润"))
 
+    calc_years = display_years + [denominator_year]  # 多一年作分母，展示时截掉
+
     def order(values: dict[int, Any]) -> list[Any]:
-        return [values.get(year) for year in list(reversed(forecast_years)) + history_years]
+        return [values.get(year) for year in calc_years]
 
     def growth(values: list[float | None]) -> list[str]:
         """参考件口径：第i列增速 = 第i列 / 第i+1列 - 1（相对更早一年）。
@@ -458,12 +467,13 @@ def render_forecast(forecast: list[dict], valuation: list[dict],
                 out.append(f"{(current / previous - 1) * 100:.1f}%")
         return out
 
+    n = len(display_years)
     operating_series = order(operating)
     profit_series = order(profit)
-    rows = [["营业收入均值"] + [amount(v, "万元") for v in operating_series],
-            ["营收增速"] + growth(operating_series),
-            ["归母净利润均值"] + [amount(v, "万元") for v in profit_series],
-            ["利润增速"] + growth(profit_series)]
+    rows = [["营业收入均值"] + [amount(v, "万元") for v in operating_series[:n]],
+            ["营收增速"] + growth(operating_series)[:n],
+            ["归母净利润均值"] + [amount(v, "万元") for v in profit_series[:n]],
+            ["利润增速"] + growth(profit_series)[:n]]
 
     caps, pe, ps, pb, pcf = [], [], [], [], []
     for year in list(reversed(forecast_years)) + history_years:
