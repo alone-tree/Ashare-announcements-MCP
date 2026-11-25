@@ -489,8 +489,7 @@ def _close_mcap_events(req: dict, rows: list[dict], headers: list[str]) -> dict:
     right.set_ylim(bottom=0)
     _format_x_ticks(left, dates)
     _format_x_ticks(right, dates)
-    _inline_labels(left, [(line_mcap, mcap_col)], len(rows) + 1)
-    _inline_labels(right, [(line_price, price_col)], len(rows) + 1)
+    # 左右轴已标明总市值/收盘价，线上不再重复inline标签
 
     events = _align_events(_parse_events(req.get("events")), dates)
     if req.get("events") and not events:

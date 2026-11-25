@@ -240,9 +240,9 @@ def render_ipo(record: dict, data_date: str = "") -> str:
     latest_shares = to_number(get("最新总股本"))
     issue_price = to_number(get("发行价"))
     after_price = to_number(get("最新后复权收盘价"))
-    raw_close = to_number(get("最新除权收盘价"))
+    latest_cap = to_number(get("最新总市值"))  # 直接公式，不用总股本×收盘价推算
     after_cap = issue_price * after_shares if issue_price and after_shares else None
-    latest_cap = raw_close * latest_shares if raw_close and latest_shares else None
+    ipo_date = text_value(get("上市日期"))
     latest_title = f"最新（{data_date}）" if data_date else "最新"
     rows = [
         ["总股本（万股）", ratio(after_shares / 1e4 if after_shares else None, 0),
@@ -254,16 +254,17 @@ def render_ipo(record: dict, data_date: str = "") -> str:
         ["市盈率（倍）", ratio(get("发行后市盈率")), ratio(get("最新市盈率TTM"))],
         ["市净率（倍）", ratio(get("发行后市净率")), ratio(get("最新市净率"))],
     ]
-    body = markdown(["项目", "发行时", latest_title], rows)
+    body = markdown(["项目", f"发行时（{ipo_date}）", latest_title], rows)
     raised = to_number(get("募资总额"))
     net = to_number(get("募资净额"))
     fee = to_number(get("发行费用"))
-    extra = ["", f"上市日期：{text_value(get('上市日期'))}　　发行数量："
-                 f"{ratio(to_number(get('发行数量')) / 1e4 if get('发行数量') else None, 0)}万股",
-             f"募资总额：{ratio(raised / 1e4 if raised else None, 0)}万元　　"
-             f"募资净额：{ratio(net / 1e4 if net else None, 0)}万元　　"
-             f"发行费用：{ratio(fee, 0)}万元"]
-    return body + "\n" + "\n".join(extra)
+    items = [
+        f"- 发行数量：{ratio(to_number(get('发行数量')) / 1e4 if get('发行数量') else None, 0)}万股",
+        f"- 募资总额：{ratio(raised / 1e4 if raised else None, 0)}万元",
+        f"- 募资净额：{ratio(net / 1e4 if net else None, 0)}万元",
+        f"- 发行费用：{ratio(fee, 0)}万元",
+    ]
+    return body + "\n\n" + "\n".join(items)
 
 
 def render_valuation(record: dict) -> str:

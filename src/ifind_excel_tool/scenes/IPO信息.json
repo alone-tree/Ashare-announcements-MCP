@@ -84,6 +84,15 @@
     {
       "label": "最新市净率",
       "indicator": "pb_mrq"
+    },
+    {
+      "label": "最新总市值",
+      "indicator": "market_value",
+      "unit": "元",
+      "params": {
+        "currency": "CNY",
+        "unit": 1
+      }
     }
   ]
 }

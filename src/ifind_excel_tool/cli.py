@@ -525,7 +525,9 @@ def report(req: dict) -> dict:
     dividend_years = sorted({p[:4] for p in annuals} | {str(end_date)[:4]}, reverse=True)
     take("分红", dims={"year": dividend_years})
     take("资产负债表", report_dates=periods)
-    take("利润表", report_dates=periods)
+    # 营收占比需要中报的营业总收入/成本作分母，利润表要同时覆盖三表期次与营收期次
+    income_periods = sorted(set(periods) | set(segment_periods), reverse=True)
+    take("利润表", report_dates=income_periods)
     take("现金流量表", report_dates=periods)
     take("分产品", report_dates=segment_periods)
     take("分地区", report_dates=segment_periods)
