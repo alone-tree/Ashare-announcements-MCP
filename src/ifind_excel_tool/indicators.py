@@ -170,11 +170,27 @@ def _compute_derived(definition: dict, values: dict) -> dict:
 # 对外入口
 # ---------------------------------------------------------------------------
 
+def _probe_if_needed(kind: str, code: str, date: str) -> tuple[str, str | None]:
+    """派生型与多候选型都是财报科目，日期留空会取到空值或0。
+
+    这类指标不给日期时先探最新已披露报告期再代入，探不到就明说，不静默取空。
+    单格公式不给日期则保持原样：行情类指标有意留空取最新值。
+    """
+    if date or kind not in ("derived", "select", "group") or not code:
+        return date, None
+    from ifind_excel_tool import cli as _cli
+    probed = _cli._probe_report_date(code)
+    if not probed:
+        raise ValueError(f"无法确定最新报告期，请显式传 report_date（探测 {code} 失败）")
+    return probed, probed
+
+
 def get(indicator: str, code: str = "", date: str = "",
         params: dict | None = None) -> dict:
     """按指标名或指标码取数。类型自动分派，调用方不用判断。"""
     entry = _index.resolve(indicator, code)
     kind = entry["kind"]
+    date, probed = _probe_if_needed(kind, code, date)
 
     if kind == "special":
         from ifind_excel_tool import cli as _cli
@@ -196,7 +212,10 @@ def get(indicator: str, code: str = "", date: str = "",
         return _cli.fetch_scene(payload)
 
     if kind == "group":
-        return get_group(entry["name"], code=code, date=date)
+        result = get_group(entry["name"], code=code, date=date)
+        if probed:
+            result["date_probed"] = True
+        return result
 
     if kind == "select":
         # 多候选：一次取全部候选，取较大值，与场景层同一套规则
@@ -212,6 +231,7 @@ def get(indicator: str, code: str = "", date: str = "",
         value, picked = max(numbers, key=lambda x: x[0])
         out = {"ok": True, "indicator": entry["name"], "value": value,
                "unit": entry.get("unit", ""), "picked": picked,
+               "date": date, "date_probed": probed is not None,
                "candidates": entry["candidates"]}
         if len({v for v, _ in numbers}) > 1:
             out["choices"] = {c: v for v, c in zip((_coerce(x) for x in block),
@@ -229,6 +249,7 @@ def get(indicator: str, code: str = "", date: str = "",
             return {"ok": False, "indicator": entry["name"], "error": computed["error"]}
         return {"ok": True, "indicator": entry["name"], "value": computed["value"],
                 "unit": definition.get("unit", ""), "decimals": definition.get("decimals"),
+                "date": date, "date_probed": probed is not None,
                 "deps": values}
 
     # excel 原始型
@@ -244,6 +265,7 @@ def get_group(name: str, code: str = "", date: str = "") -> dict:
     """一次取回整组指标。成员可以是原始型、派生型，也可以是另一个组。"""
     groups = _load_groups()
     members = groups[name]["members"]
+    date, probed = _probe_if_needed("group", code, date)
     # 先展开到底层依赖，合并成一次 Excel 提交
     raw_needed: dict[str, dict] = {}
     derived_needed: dict[str, dict] = {}
@@ -305,7 +327,7 @@ def get_group(name: str, code: str = "", date: str = "") -> dict:
 
     result_records = {member: value_of(member) for member in members}
     out = {"ok": True, "indicator": name, "code": code, "date": date,
-           "members": result_records}
+           "date_probed": probed is not None, "members": result_records}
     if missing:
         out["missing"] = [library[i].get("name", i) for i in missing]
     return out

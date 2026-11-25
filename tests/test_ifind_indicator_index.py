@@ -118,3 +118,32 @@ def test_group_members_are_declared_indicators():
     for name, spec in groups.items():
         for member in spec["members"]:
             indicator_index.resolve(member, "002796.SZ")
+
+
+def test_probe_skipped_for_excel_kind_quote():
+    """行情类单格公式有意留空日期取最新值，不能被财报探测逻辑改写。"""
+    date, probed = indicators._probe_if_needed("excel", "600519.SH", "")
+    assert date == "" and probed is None
+
+
+def test_probe_skipped_when_date_given():
+    date, probed = indicators._probe_if_needed("derived", "600519.SH", "2026-06-30")
+    assert date == "2026-06-30" and probed is None
+
+
+def test_probe_failure_is_reported_not_silent(monkeypatch):
+    """探测拿不到日期时明确报错要求指定，不静默取空导致全0。"""
+    from ifind_excel_tool import cli
+
+    monkeypatch.setattr(cli, "_probe_report_date", lambda code: None)
+    with pytest.raises(ValueError) as error:
+        indicators._probe_if_needed("derived", "600519.SH", "")
+    assert "report_date" in str(error.value)
+
+
+def test_probe_fills_date_for_derived(monkeypatch):
+    from ifind_excel_tool import cli
+
+    monkeypatch.setattr(cli, "_probe_report_date", lambda code: "2026-09-30")
+    date, probed = indicators._probe_if_needed("derived", "600519.SH", "")
+    assert date == "2026-09-30" and probed == "2026-09-30"
