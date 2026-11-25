@@ -183,6 +183,14 @@ def _reset_hint(error: Exception) -> str:
     return "可调用 close 重置专用工作簿后重试"
 
 
+# 实测（2026-11-25）：同一个探测公式在重启前返回 0，close 重开后返回正确日期。
+# iFinD 插件会缓存公式结果，0 不一定代表「上游没有数据」。这条提示只在取不到值时出现。
+ZERO_VALUE_HINT = (
+    "若确认该数据本应存在却取到0或空，可能是 iFinD 插件缓存："
+    "执行 {\"cmd\":\"close\"} 关闭专用工作簿后重试，会重新打开并重算。"
+)
+
+
 def _fetch_one(matrix: list[list[str]], *, visible: bool | None,
                timeout: float, text_ok: bool) -> dict:
     last: Exception | None = None

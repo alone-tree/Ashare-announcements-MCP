@@ -1,17 +1,18 @@
 {
   "name": "指数进出记录",
-  "description": "某指数在一段时间内的成分股调入调出流水。换指数改 iv_zsdm，换区间改 iv_sdate/iv_edate（YYYYMMDD）；状态底层固定取全部，返回后按「状态」列自行筛选纳入或剔除。",
+  "description": "某指数在一段时间内的成分股调入调出流水。换指数改 iv_zsdm，换区间改 iv_sdate/iv_edate（YYYYMMDD）；不传区间默认最近一年。状态底层固定取全部，返回后按「状态」列自行筛选纳入或剔除。",
   "kind": "table",
   "function": "THS_DR",
   "report": "p03316",
   "inputs": ["iv_zsdm", "iv_sdate", "iv_edate", "iv_zt"],
+  "code_input": "iv_zsdm",
   "input_labels": {
     "iv_zsdm": "指数代码（如 000300.SH）",
-    "iv_sdate": "起始日期，YYYYMMDD",
-    "iv_edate": "截止日期，YYYYMMDD",
+    "iv_sdate": "起始日期，YYYYMMDD；不传默认一年前",
+    "iv_edate": "截止日期，YYYYMMDD；不传默认今天",
     "iv_zt": "固定为全部，不用传"
   },
-  "defaults": {"iv_zt": "全部"},
+  "defaults": {"iv_zt": "全部", "iv_sdate": "today-1y_ymd", "iv_edate": "today_ymd"},
   "fields": ["p03316_f001", "p03316_f002", "p03316_f003", "p03316_f004"],
   "field_labels": ["日期", "代码", "简称", "状态"],
   "notes": "公式全内联，不引用单元格。四列依次为日期、同花顺代码、证券简称、状态（纳入/剔除）。日期是事件发生日。"

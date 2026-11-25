@@ -181,7 +181,8 @@ def _probe_if_needed(kind: str, code: str, date: str) -> tuple[str, str | None]:
     from ifind_excel_tool import cli as _cli
     probed = _cli._probe_report_date(code)
     if not probed:
-        raise ValueError(f"无法确定最新报告期，请显式传 report_date（探测 {code} 失败）")
+        raise ValueError(f"无法确定最新报告期，请显式传 report_date（探测 {code} 失败）。"
+                         f"{engine.ZERO_VALUE_HINT}")
     return probed, probed
 
 
@@ -197,7 +198,8 @@ def get(indicator: str, code: str = "", date: str = "",
         latest = _cli._probe_report_date(code)
         if not latest:
             return {"ok": False, "indicator": entry["name"],
-                    "error": f"无法确定最新报告期（探测 {code} 失败）"}
+                    "error": f"无法确定最新报告期（探测 {code} 失败）",
+                    "hint": engine.ZERO_VALUE_HINT}
         return {"ok": True, "indicator": entry["name"], "code": code,
                 "value": latest, "unit": "报告期"}
 

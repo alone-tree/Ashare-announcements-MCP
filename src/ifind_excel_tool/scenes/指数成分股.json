@@ -5,6 +5,7 @@
   "function": "THS_RPT",
   "report": "idx_weight",
   "inputs": ["trade_date", "idx_code"],
+  "code_input": "idx_code",
   "input_labels": {"trade_date": "目标日期（YYYYMMDD）", "idx_code": "指数代码（如 000300.SH）"},
   "defaults": {"trade_date": "today_ymd"},
   "fields": ["weight_date", "ths_code", "sec_name", "weight"],

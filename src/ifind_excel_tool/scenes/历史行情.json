@@ -1,10 +1,10 @@
 {
   "name": "历史行情",
-  "description": "单只股票一段区间的日线行情与总市值。换公司改 code，换区间改 start/end；不传则按默认 2016年至今、前复权。停牌日保留，量额为0。",
+  "description": "单只股票一段区间的日线行情与总市值。换公司改 code，换区间改 start/end；不传默认最近两周（今天往前14个日历日）、前复权。要看长历史自己传 start。停牌日保留，量额为0。",
   "code_required": true,
   "single_code_only": true,
   "defaults": {
-    "start": "2016-01-01",
+    "start": "today-13d",
     "end": "today",
     "adjust": 108
   },

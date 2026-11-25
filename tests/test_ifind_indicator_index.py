@@ -147,3 +147,55 @@ def test_probe_fills_date_for_derived(monkeypatch):
     monkeypatch.setattr(cli, "_probe_report_date", lambda code: "2026-09-30")
     date, probed = indicators._probe_if_needed("derived", "600519.SH", "")
     assert date == "2026-09-30" and probed == "2026-09-30"
+
+
+# ---------------------------------------------------------------------------
+# 三类默认时间口径：财报取最新报告期、行情取最近14个日历日、公司信息取今天
+# ---------------------------------------------------------------------------
+
+def test_quote_default_range_is_fourteen_calendar_days():
+    from datetime import date, timedelta
+
+    from ifind_excel_tool import scenes
+
+    spec = scenes.load_scene("历史行情")
+    assert spec["defaults"]["start"] == "today-13d"
+    start = scenes._resolve_date(spec["defaults"]["start"])
+    end = scenes._resolve_date("today")
+    span = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+    assert span == 14
+    # 14个日历日内含周末，剔除非交易日后行数应少于14
+    days = scenes._date_range(spec["defaults"]["start"], "today")
+    assert len(days) == 14 and days[-1] == date.today().isoformat()
+
+
+def test_recent_year_placeholders():
+    from datetime import date
+
+    from ifind_excel_tool import scenes
+
+    years = scenes._expand_dim_default("__recent_years:5__")
+    assert len(years) == 5 and years[0] == str(date.today().year)
+    ends = scenes._expand_dim_default("__recent_year_ends:5__")
+    assert len(ends) == 5 and all(e.endswith("-12-31") for e in ends)
+    assert all(int(e[:4]) < date.today().year for e in ends)
+
+
+def test_info_scene_defaults_to_today():
+    from ifind_excel_tool import scenes
+
+    for name in ("工商信息", "估值快照", "IPO信息", "盈利预测"):
+        spec = scenes.load_scene(name)
+        assert spec["defaults"]["date"] == "today", name
+
+
+def test_scenes_with_hard_dims_have_defaults():
+    """分红、历史估值原先不传参数会报错，现在都有默认值可用。"""
+    from ifind_excel_tool import scenes
+
+    for name in ("分红", "历史估值"):
+        spec = scenes.load_scene(name)
+        dims = spec.get("dims") or {}
+        assert dims, f"{name} 应有默认维度"
+        assert any(isinstance(v, list) and v and str(v[0]).startswith("__")
+                   for v in dims.values()), f"{name} 的维度默认值应是占位符"

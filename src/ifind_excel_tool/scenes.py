@@ -84,12 +84,54 @@ def _date_range(start: str, end: str) -> list[str]:
     def parse(text: str) -> date:
         if text in ("today", "", None):
             return date.today()
+        # today-13d = 今天往前13天，用于「默认取最近两周」这类滚动区间
+        rolling = re.fullmatch(r"today-(\d+)d", str(text))
+        if rolling:
+            return date.today() - timedelta(days=int(rolling.group(1)))
         return date.fromisoformat(text)
 
     first, last = parse(start), parse(end)
     if first > last:
         raise ValueError(f"开始日期 {first} 晚于结束日期 {last}")
     return [(first + timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]
+
+
+def _expand_dim_default(token):
+    """把维度默认值里的占位符换成实际取值。
+
+    只支持两个占位符，够用就好：
+      __recent_years:5__      最近5个年度（含当年），用于分红
+      __recent_year_ends:5__  最近5个年末，严格早于今天，用于历史估值
+    """
+    from datetime import date
+
+    if not isinstance(token, str) or not token.startswith("__"):
+        return token if isinstance(token, list) else [token]
+    today = date.today()
+    years = re.fullmatch(r"__recent_years:(\d+)__", token)
+    if years:
+        count = int(years.group(1))
+        return [str(today.year - offset) for offset in range(count)]
+    ends = re.fullmatch(r"__recent_year_ends:(\d+)__", token)
+    if ends:
+        count = int(ends.group(1))
+        newest = today.year if today.isoformat().endswith("-12-31") else today.year - 1
+        return [f"{newest - offset}-12-31" for offset in range(count)]
+    raise ValueError(f"不认识的维度默认值占位符：{token}")
+
+
+def _resolve_date(text: str) -> str:
+    """把 today / today-Nd 这类占位符换成具体日期；具体日期原样返回。"""
+    from datetime import date, timedelta
+
+    if not text:
+        return ""
+    if text == "today":
+        return date.today().isoformat()
+    rolling = re.fullmatch(r"today-(\d+)d", str(text))
+    if rolling:
+        return (date.today() - timedelta(days=int(rolling.group(1)))).isoformat()
+    return text
 
 
 def build(spec: dict, library: dict[str, dict], *, code: str,
@@ -104,6 +146,12 @@ def build(spec: dict, library: dict[str, dict], *, code: str,
     """
     dims = dict(spec.get("dims") or {})
     defaults = spec.get("defaults") or {}
+    # 维度没给值时用场景默认值填（分红年份、历史估值日期这类）。
+    # 默认值里的占位符在这里展开，调用方不传也能直接用。
+    for key, value in list(dims.items()):
+        if isinstance(value, (list, tuple)) and len(value) == 1 and isinstance(value[0], str) \
+                and value[0].startswith("__"):
+            dims[key] = _expand_dim_default(value[0])
     combos: list[dict]
     if report_dates:
         # 多报告期：一期一行，其余维度照常展开
@@ -121,7 +169,7 @@ def build(spec: dict, library: dict[str, dict], *, code: str,
     # adjust 是业务叫法，公式模板占位符是 type；统一成 type，让用户能覆盖场景字段里的硬编码复权值
     if "adjust" in user_params:
         user_params.setdefault("type", user_params["adjust"])
-    base = {"code": code, "date": report_date or defaults.get("date") or "",
+    base = {"code": code, "date": _resolve_date(report_date or defaults.get("date") or ""),
             **user_params}
 
     columns: list[tuple[int, int]] = []          # (字段序号, 候选序号)

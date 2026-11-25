@@ -164,6 +164,23 @@ def open_excel(req: dict) -> dict:
                                 timeout=float(req.get("timeout") or 60))}
 
 
+def _expand_table_default(value):
+    """表函数场景的输入默认值占位符。
+
+    today_ymd    今天，YYYYMMDD（指数成分股查询日）
+    today-1y_ymd 一年前同一天，YYYYMMDD（指数进出记录默认看最近一年）
+    """
+    if not isinstance(value, str):
+        return value
+    if value == "today_ymd":
+        return f"{datetime.now():%Y%m%d}"
+    rolling = re.fullmatch(r"today-(\d+)y_ymd", value)
+    if rolling:
+        from datetime import timedelta
+        return f"{(datetime.now() - timedelta(days=365 * int(rolling.group(1)))):%Y%m%d}"
+    return value
+
+
 def _fetch_table_scene(req: dict, spec: dict) -> dict:
     """表函数场景：一条公式返回整张表，需要写公式后等函数把数据写到下方。
 
@@ -174,11 +191,15 @@ def _fetch_table_scene(req: dict, spec: dict) -> dict:
     for key in spec.get("inputs") or []:
         if key not in params and req.get(key) is not None:
             params[key] = req[key]
+    # 表单场景的指数参数名各异（idx_code、iv_zsdm），统一允许用 code 传
+    code_input = spec.get("code_input")
+    if code_input and code_input not in params:
+        if req.get("code"):
+            params[code_input] = req["code"]
     for key, value in (spec.get("defaults") or {}).items():
-        if value == "today_ymd" and key not in params:
-            params[key] = f"{datetime.now():%Y%m%d}"
-        elif key not in params:
-            params[key] = value
+        if key in params:
+            continue
+        params[key] = _expand_table_default(value)
     try:
         built = _scenes.build_table(spec, params=params)
     except ValueError as exc:
@@ -231,6 +252,9 @@ def _fetch_table_scene(req: dict, spec: dict) -> dict:
             "kind": "table", "formula": built["formula"],
             "params": params, "rows": len(records), "records": records,
             "elapsed_seconds": round(time.time() - started, 2)}
+    if _all_zero([{k: v for k, v in r.items() if k not in ("params", "formula")}
+                  for r in records]):
+        resp["hint"] = engine.ZERO_VALUE_HINT
     export_path = req.get("export_path")
     if export_path or len(records) > int(req.get("auto_export_rows") or 200):
         target = export_path or str(
@@ -357,7 +381,9 @@ def fetch_scene(req: dict) -> dict:
         # 必须先探最新已披露期；多代码探第一个，不同公司报告期通常一致。
         probed = _probe_report_date(codes[0])
         if not probed:
-            return {"ok": False, "error": f"无法确定最新报告期，请显式传 report_date（探测 {codes[0]} 失败）"}
+            return {"ok": False,
+                    "error": f"无法确定最新报告期，请显式传 report_date（探测 {codes[0]} 失败）",
+                    "hint": engine.ZERO_VALUE_HINT}
         report_date = probed
     library = _scenes._load_library()
     results = []
@@ -386,6 +412,8 @@ def fetch_scene(req: dict) -> dict:
         resp["report_date_probed"] = True
     if report_dates:
         resp["report_dates"] = report_dates
+    if _all_zero(results):
+        resp["hint"] = engine.ZERO_VALUE_HINT
     # 导出口径：调用方给了路径就写文件；没给且行数超过阈值，自动落盘避免把大结果塞进对话
     export_path = req.get("export_path")
     if export_path or len(results) > int(req.get("auto_export_rows") or 200):
@@ -484,6 +512,17 @@ def _scene_groups(name: str) -> dict[str, str]:
     spec = _scenes.load_scene(name)
     return {field["label"]: field.get("group") or ""
             for field in spec.get("fields") or []}
+
+
+def _all_zero(records: list[dict]) -> bool:
+    """判断一批结果是不是「看起来有数据但全为0」。
+
+    实测这种情形常常是插件缓存而非上游没数据，值得提示一句；不做自动重试，
+    以免把偶发情况做成通用兜底。
+    """
+    numbers = [v for record in records for k, v in record.items()
+               if not k.endswith("__unit") and isinstance(v, (int, float))]
+    return bool(numbers) and all(v == 0 for v in numbers)
 
 
 def _fetch_block(scene: str, **kwargs) -> dict:

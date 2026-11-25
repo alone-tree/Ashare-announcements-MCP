@@ -8,7 +8,7 @@
 |---|---|
 | engine.py | Excel COM 执行层，从 market_data_mcp/ifind_excel.py 复制，独立定位工作簿；启动前自动清除本工作簿的崩溃恢复残留 |
 | cli.py | 极薄入口，stdin JSON → stdout JSON，顶层字段 `cmd`；命令见下 |
-| scenes.py / scenes/ | 固定场景清单，`fetch_scene` 按场景取数 |
+| scenes.py / scenes/ | 固定场景清单，`fetch_scene` 按场景取数；各场景带默认时间口径，不传日期也能直接用 |
 | indicator_index.py | 统一指标索引，`find` 在全部能力里搜指标并给用法 |
 | indicators.py | 统一指标取数，`get` 按定义类型自动分派并完成派生计算 |
 | formula_library/derived-indicators.jsonl | 自定义派生指标（毛利润、毛利率），写依赖与算式 |

@@ -1,7 +1,10 @@
 {
   "name": "估值快照",
-  "description": "单个交易日的估值指标。换公司改 code，换日期改 report_date；参数取自库内已实测的 example 写法。",
+  "description": "单个交易日的估值指标。换公司改 code，换日期改 report_date；不传默认今天。参数取自库内已实测的 example 写法。",
   "code_required": true,
+  "defaults": {
+    "date": "today"
+  },
   "fields": [
     {"label": "总市值", "indicator": "market_value", "unit": "元", "params": {"currency": "CNY", "unit": 1}},
     {"label": "流通市值", "indicator": "current_mv", "unit": "元", "params": {"currency": "CNY", "unit": 1}},
