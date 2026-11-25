@@ -40,14 +40,14 @@ def _fmt(value: Any) -> str:
             return json.dumps(json.loads(text), ensure_ascii=False)
         except (ValueError, TypeError):
             pass
-    # 数字去尾随0，避免 252366948.0 这类补位
+    # 数字：整数千分位；小数保留两位去尾零，避免 4093391896.56 或 252366948.0 这类补位
     try:
         num = float(text)
-        if num == int(num):
-            return f"{int(num):,}"
     except (ValueError, TypeError):
-        pass
-    return text
+        return text
+    if num == int(num):
+        return f"{int(num):,}"
+    return f"{num:,.2f}".rstrip("0").rstrip(".")
 
 
 def table(rows: list[dict], *, limit: int | None = None,
@@ -62,6 +62,20 @@ def table(rows: list[dict], *, limit: int | None = None,
            "| " + " | ".join(["---"] * len(headers)) + " |"]
     for row in data:
         out.append("| " + " | ".join(_fmt(row.get(h)) for h in headers) + " |")
+    return "\n".join(out)
+
+
+def key_value(rows: list[dict], *, drop: tuple[str, ...] = ("code",)) -> str:
+    """单条记录转纵向「字段 | 值」表，避免几十列挤成一行难读。"""
+    if not rows:
+        return GAP
+    headers = _headers(rows, drop=drop)
+    if not headers:
+        return GAP
+    row = rows[0]
+    out = ["| 字段 | 值 |", "| --- | --- |"]
+    for h in headers:
+        out.append(f"| {h} | {_fmt(row.get(h))} |")
     return "\n".join(out)
 
 
@@ -80,7 +94,7 @@ def build_report(company: str, code: str, sections: dict[str, str],
 
     lines = [f"# {company}（{code}）公司报告", ""]
 
-    lines += ["## 一、公司基本信息", "", table(basic), ""]
+    lines += ["## 一、公司基本信息", "", key_value(basic), ""]
 
     lines += ["## 二、股东与控制权", "", "### 十大股东", "", table(holders), ""]
 
@@ -91,7 +105,9 @@ def build_report(company: str, code: str, sections: dict[str, str],
     if valuation:
         lines += ["### 估值快照", "", table(valuation), ""]
     if quote:
-        lines += ["### 行情数据（前复权，节选）", "", table(quote, limit=5), ""]
+        # 「非交易日判定」与收盘价同值，展示无意义，去掉
+        lines += ["### 行情数据（前复权，节选）", "",
+                  table(quote, limit=5, drop=("code", "非交易日判定")), ""]
     lines += ["### 分红", "", GAP, ""]
 
     lines += ["## 五、财报摘要", "", table(income), ""]

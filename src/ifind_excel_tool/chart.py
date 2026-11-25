@@ -341,11 +341,20 @@ def _extract_keypoints(values: list[float | None],
     return points
 
 
+_TEMPLATE_TITLES = {
+    "kline_volume": "K线图",
+    "kline_log_volume": "K线图（对数坐标）",
+    "close_mcap_events": "总市值与前复权收盘价",
+    "close_line_keypoints": "收盘价走势",
+}
+
+
 def _title(rows: list[dict], template: str, date_col: str) -> str:
     code = str(rows[0].get("code") or "").strip()
     first = str(rows[0].get(date_col) or "")[:10]
     last = str(rows[-1].get(date_col) or "")[:10]
-    return f"{code + ' ' if code else ''}{template}（{first} 至 {last}）"
+    label = _TEMPLATE_TITLES.get(template, template)
+    return f"{code + ' ' if code else ''}{label}（{first} 至 {last}）"
 
 
 def _finish(fig, output: str, notes: list[str], rows: int,
@@ -424,8 +433,8 @@ def _kline(req: dict, rows: list[dict], headers: list[str],
     for i, (volume, color) in enumerate(zip(volumes, colors)):
         if volume is None or color is None:
             continue
-        ax_vol.bar(i, volume, width=0.6, color=color, linewidth=0)
-    vol_log = _set_log_scale(ax_vol, volumes, log_scale)
+        ax_vol.bar(i, volume / 1e4, width=0.6, color=color, linewidth=0)
+    vol_log = _set_log_scale(ax_vol, [v / 1e4 if v is not None else None for v in volumes], log_scale)
     if log_scale and not vol_log:
         notes.append("成交量含非正值，对数坐标退回普通坐标")
 
@@ -436,8 +445,8 @@ def _kline(req: dict, rows: list[dict], headers: list[str],
         notes.append("events未匹配到交易日，未标注")
     visible, lanes = _annotate_events(ax_main, events, "#59A14F")
     fig.suptitle(_title(rows, template, cols["date"]), fontsize=13, y=0.985)
-    ax_main.set_ylabel("价格", fontsize=10)
-    ax_vol.set_ylabel("成交量", fontsize=10)
+    ax_main.set_ylabel("价格（元）", fontsize=10)
+    ax_vol.set_ylabel("成交量（万股）", fontsize=10)
     return _finish(fig, req.get("output") or str(
         Path(req["data_path"]).with_name(Path(req["data_path"]).stem + f"_{template}.png")),
         notes, len(rows), template, events=visible, label_rows=lanes)
