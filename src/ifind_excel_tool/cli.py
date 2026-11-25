@@ -5,7 +5,7 @@
 主要命令：
   search       查证券代码，必须指定kind=股票/指数/外汇（每页10行，offset翻页）
   fetch_scene  按固定场景取数（优先用这个）；带export_path导CSV
-  export_report  把各板块CSV拼成固定Markdown报告骨架（只拼装不取数）
+  report       一条命令出完整报告：取数、换算、绘图、拼Markdown、落盘
   draw         读行情CSV按模板绘图（kline_volume等四模板）
   lookup/run/text  查公式、执行公式矩阵、取文本字段（场景没有才用）
   help/help_scene/help_indicators/scenes/scene_info  各种帮助查询
@@ -395,10 +395,154 @@ def draw(req: dict) -> dict:
     return _chart.draw(req)
 
 
+REPORT_COLUMNS = 7
+REPORT_BLOCKS = ("工商信息", "十大股东", "IPO信息", "历史行情", "估值快照", "分红",
+                 "资产负债表", "利润表", "现金流量表", "分产品", "分地区",
+                 "客户供应商", "盈利预测", "历史估值")
+
+
+def _report_periods(latest: str, columns: int = REPORT_COLUMNS) -> list[str]:
+    """按旧脚本与 iFinD 模板共用的口径铺报告期列。
+
+    最新期若不是年报，第2列放去年同期（同比），其余补最近年报；
+    最新期是年报时全部按年报铺。资产负债表也照此，不单独处理。
+    """
+    year = int(latest[:4])
+    periods = [latest]
+    if not latest.endswith("12-31"):
+        periods.append(f"{year - 1}{latest[4:]}")
+    annual_start = year - 1
+    for offset in range(0, columns + 2):
+        if len(periods) >= columns:
+            break
+        periods.append(f"{annual_start - offset}-12-31")
+    return periods[:columns]
+
+
+def _scene_groups(name: str) -> dict[str, str]:
+    spec = _scenes.load_scene(name)
+    return {field["label"]: field.get("group") or ""
+            for field in spec.get("fields") or []}
+
+
+def _fetch_block(scene: str, **kwargs) -> dict:
+    payload = {"cmd": "fetch_scene", "scene": scene, **kwargs}
+    result = fetch_scene(payload)
+    if not result.get("ok"):
+        return {"ok": False, "scene": scene, "error": result.get("error")}
+    return result
+
+
+def report(req: dict) -> dict:
+    """一条命令出完整报告：取数、换算、绘图、拼Markdown、落盘。
+
+    传 code 与 output（输出目录）；company 省略时取工商信息里的证券简称。
+    events 可给事件CSV路径，画进市值与收盘价双轴图。
+    """
+    code = (req.get("code") or "").strip()
+    output = (req.get("output") or "").strip()
+    if not code:
+        return {"ok": False, "error": "code 必须提供"}
+    if not output:
+        return {"ok": False, "error": "output 必须提供（输出目录）"}
+    end_date = req.get("end_date") or (_date.today()).isoformat()
+    chart_start = req.get("chart_start") or "2016-01-01"
+    warnings: list[str] = []
+
+    latest = _probe_report_date(code)
+    if not latest:
+        return {"ok": False, "error": f"无法确定最新报告期（探测 {code} 失败）"}
+    periods = _report_periods(latest)
+    annuals = [p for p in periods if p.endswith("12-31")]
+    annual_year = int(annuals[0][:4]) if annuals else int(periods[0][:4]) - 1
+    forecast_years = [str(annual_year + offset) for offset in (1, 2, 3)]
+
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    data: dict[str, list[dict]] = {}
+    csv_paths: dict[str, str] = {}
+
+    def take(block: str, **kwargs) -> None:
+        result = _fetch_block(block, code=code, **kwargs)
+        if not result.get("ok"):
+            warnings.append(f"{block}取数失败：{result.get('error')}")
+            data[block] = []
+            return
+        data[block] = result.get("records") or []
+
+    basic = _fetch_block("工商信息", code=code)
+    if not basic.get("ok"):
+        return {"ok": False, "error": f"工商信息取数失败：{basic.get('error')}"}
+    data["工商信息"] = basic.get("records") or []
+    profile = data["工商信息"][0] if data["工商信息"] else {}
+    company = (req.get("company") or profile.get("证券简称")
+               or profile.get("公司中文名称") or code).strip()
+
+    def export(block: str) -> str:
+        path = out_dir / f"{company}-{block}.csv"
+        csv_paths[block] = str(path)
+        return str(path)
+
+    take("十大股东", report_date=latest, export_path=export("十大股东"))
+    take("IPO信息", report_date=end_date)
+    take("分红", dims={"year": [p[:4] for p in annuals]})
+    take("资产负债表", report_dates=periods)
+    take("利润表", report_dates=periods)
+    take("现金流量表", report_dates=periods)
+    take("分产品", report_dates=periods)
+    take("分地区", report_dates=periods)
+    take("客户供应商", report_dates=periods)
+    take("盈利预测", report_date=end_date, dims={"year": forecast_years})
+    take("历史估值", dims={"date": annuals})
+    take("估值快照", report_date=end_date)
+
+    quote_path = export("历史行情")
+    quote = _fetch_block("历史行情", code=code, start=chart_start,
+                         end=end_date, export_path=quote_path)
+    if quote.get("ok"):
+        data["历史行情"] = quote.get("records") or []
+    else:
+        data["历史行情"] = []
+        warnings.append(f"历史行情取数失败：{quote.get('error')}")
+
+    # 非图表板块的CSV：用已取到的记录直接写，避免重复调一次取数
+    for block in REPORT_BLOCKS:
+        if block in ("历史行情",) or block not in data:
+            continue
+        path = out_dir / f"{company}-{block}.csv"
+        csv_paths[block] = str(path)
+        _scenes.to_csv(data[block], path)
+
+    chart_file = None
+    if data.get("历史行情"):
+        png = out_dir / f"{company}-行情图.png"
+        drawn = _chart.draw({"template": "close_mcap_events", "data_path": quote_path,
+                             "output": str(png), "events": req.get("events")})
+        if drawn.get("ok"):
+            chart_file = png.name
+        else:
+            warnings.append(f"绘图失败：{drawn.get('error')}")
+
+    groups = {name: _scene_groups(name)
+              for name in ("资产负债表", "利润表", "现金流量表")}
+    markdown_text = _report.build_report(
+        company=company, code=code, periods=periods, data=data, groups=groups,
+        chart_file=chart_file, data_date=end_date, warnings=warnings)
+    md_path = out_dir / f"{company}-报告骨架-{stamp}.md"
+    md_path.write_text(markdown_text, encoding="utf-8")
+
+    return {"ok": True, "output": str(md_path), "company": company, "code": code,
+            "latest_report": latest, "periods": periods,
+            "forecast_years": forecast_years, "chart": chart_file,
+            "csv": csv_paths, "warnings": warnings,
+            "chars": len(markdown_text)}
+
+
 CMDS = {"lookup": lookup, "run": run, "text": text, "close": close,
         "status": status, "open": open_excel, "search": search,
         "scenes": scenes, "scene_info": scene_info, "fetch_scene": fetch_scene,
-        "export_report": _report.export_report,
+        "report": report,
         "draw": draw,
         "help": help_overview, "help_scene": help_scene, "help_indicators": help_indicators}
 

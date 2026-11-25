@@ -17,7 +17,7 @@
 
 取数即绘图属于market-data，入口为`get_quote_chart`与`get_quote_chart_batch`，完整行为与视觉约束仅见架构§2.6。iFinD CLI另有`draw`命令，读已导出的行情CSV出PNG，零 import 依赖，两者各自独立；CLI绘图模板与参数见[包说明](src/ifind_excel_tool/README.md#绘图draw)。
 
-`ifind_excel_tool` 是公式库驱动的 iFinD Excel 取数工作台，纯 CLI、随用随开发：首选 `fetch_scene` 固定场景取数，另有分板块CSV导出、报告骨架拼装与模板绘图；场景没有的指标才查公式库、写一次性脚本调 `engine.py`。方案见[建设方案](docs/iFinD公式验证库建设方案-2026-11-18.md)与[固定报告与绘图扩展方案](docs/iFinD-CLI固定报告与绘图扩展方案-2026-11-25.md)，库字段与用法见[包说明](../src/ifind_excel_tool/README.md)。它与 market-data 平级、零 import 依赖；market-data 保留美股/证券搜索/绘图等独有能力，两边暂并行，后续再定合并或独立。
+`ifind_excel_tool` 是公式库驱动的 iFinD Excel 取数工作台，纯 CLI、随用随开发：首选 `fetch_scene` 固定场景取数，另有一键完整报告（`report`）、分板块CSV导出与模板绘图；场景没有的指标才查公式库、写一次性脚本调 `engine.py`。方案见[建设方案](docs/iFinD公式验证库建设方案-2026-11-18.md)与[固定报告与绘图扩展方案](docs/iFinD-CLI固定报告与绘图扩展方案-2026-11-25.md)，库字段与用法见[包说明](../src/ifind_excel_tool/README.md)。它与 market-data 平级、零 import 依赖；market-data 保留美股/证券搜索/绘图等独有能力，两边暂并行，后续再定合并或独立。
 
 克制、数据准确真实、维护简单；不为假设中的需求增加抽象或字段。个人工具，不追求大而全。
 
@@ -47,7 +47,7 @@ CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。�
 
 ### ifind_excel_tool（纯 CLI，非 MCP）
 
-入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`。命令分三类：取数 `fetch_scene`（固定场景，优先用）、`search`（查证券代码）、`lookup`/`run`/`text`（场景没有才用）、`export_report`（各板块CSV拼报告骨架）；帮助 `help`/`help_scene`/`help_indicators`/`scenes`/`scene_info`；Excel生命周期 `open`/`status`/`close`。另提供 `draw` 命令按模板绘图（行情CSV出PNG）。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。取数见[包说明](src/ifind_excel_tool/README.md)，录入和验收见[批量公式录入与验证流程](src/ifind_excel_tool/formula_library/README.md#批量公式录入与验证流程)。绘图模板与参数见[包说明](src/ifind_excel_tool/README.md#绘图draw)。
+入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`。命令分三类：取数 `fetch_scene`（固定场景，优先用）、`search`（查证券代码）、`lookup`/`run`/`text`（场景没有才用）；一键报告 `report`（取数、换算、绘图、拼Markdown、落盘）；帮助 `help`/`help_scene`/`help_indicators`/`scenes`/`scene_info`；Excel生命周期 `open`/`status`/`close`。另提供 `draw` 命令按模板绘图（行情CSV出PNG）。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。取数见[包说明](src/ifind_excel_tool/README.md)，录入和验收见[批量公式录入与验证流程](src/ifind_excel_tool/formula_library/README.md#批量公式录入与验证流程)。绘图模板与参数见[包说明](src/ifind_excel_tool/README.md#绘图draw)。
 
 ### market-data MCP（7 个工具）
 

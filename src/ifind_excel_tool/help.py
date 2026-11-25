@@ -67,7 +67,7 @@ def overview() -> dict:
             "要财报三表": "fetch_scene 对应的资产负债表/利润表/现金流量表场景",
             "要公司资料或股东": "fetch_scene 场景「工商信息」「十大股东」",
             "要指数成分股": "fetch_scene 场景「指数成分股」",
-            "要导出固定报告骨架": '各板块 fetch_scene 带 export_path 导CSV，再 {"cmd":"export_report",...} 拼Markdown',
+            "要一份完整报告": '{"cmd":"report","code":"002796.SZ","output":"导出目录"} 一条命令取数、换算、绘图、拼Markdown',
             "要画行情图": '{"cmd":"draw","template":"kline_volume","data_path":"...csv","output":"...png"}',
             "库里没有的指标": "lookup 查公式，确认场景确实没有再自己用 run 拼",
             "重要规则": [
@@ -90,7 +90,7 @@ def overview() -> dict:
             "看某场景要哪些字段": '{"cmd":"scene_info","scene":"历史行情"}',
             "取数": '{"cmd":"fetch_scene","scene":"历史行情","code":"600519.SH"}',
             "板块导出CSV": '{"cmd":"fetch_scene","scene":"工商信息","code":"002796.SZ","export_path":"数据/工商信息.csv"}',
-            "合并报告骨架": '{"cmd":"export_report","company":"世嘉科技","code":"002796.SZ","sections":{"工商信息":"数据/工商信息.csv"},"output":"报告骨架.md"}',
+            "只看单个板块": '{"cmd":"fetch_scene","scene":"分红","code":"002796.SZ","dims":{"year":["2025","2024"]}}',
             "画行情图": '{"cmd":"draw","template":"kline_volume","data_path":"数据/历史行情.csv","output":"行情.png"}',
             "查单个指标公式": '{"cmd":"lookup","keyword":"营业收入"}',
             "直接执行任意公式": '{"cmd":"run","matrix":[[...]]}',
