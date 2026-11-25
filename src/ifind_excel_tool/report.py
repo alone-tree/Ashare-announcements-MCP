@@ -297,7 +297,6 @@ def render_dividends(records: list[dict], income: dict[str, dict], periods: list
         ["归母净利润"],
     ]
     for year in years:
-        period = f"{year}-12-31"
         record = dividends.get(year) or {}
         cash = to_number(record.get("现金分红总额"))
         total = to_number(record.get("现金分红及回购"))
@@ -305,8 +304,13 @@ def render_dividends(records: list[dict], income: dict[str, dict], periods: list
         rows[0].append(amount(cash, "万元"))
         rows[1].append(amount(buyback, "万元"))
         rows[2].append(amount(total, "万元"))
-        rows[3].append(amount(value_at(income.get(period), "归属于母公司所有者的净利润"), "万元"))
-    return markdown(headers, rows)
+        # 归母净利润取该年度最新已披露报告期：有年报用年报，没有则用三季报/中报，不等年报。
+        candidates = [p for p in income if p.startswith(str(year) + "-")]
+        latest_period = max(candidates) if candidates else None
+        rows[3].append(amount(value_at(income.get(latest_period), "归属于母公司所有者的净利润"), "万元"))
+    note = ("归母净利润取该年度最新已披露报告期（最新年度用三季报/中报，不等年报）；"
+            "现金分红为iFinD按分红所属年度统计的口径。")
+    return markdown(headers, rows) + "\n\n" + note
 
 
 SUMMARY_ROWS = [
@@ -442,9 +446,13 @@ def render_forecast(forecast: list[dict], valuation: list[dict],
         return [values.get(year) for year in list(reversed(forecast_years)) + history_years]
 
     def growth(values: list[float | None]) -> list[str]:
-        out = ["—"]
-        for previous, current in zip(values, values[1:]):
-            if previous in (None, 0) or current is None:
+        """参考件口径：第i列增速 = 第i列 / 第i+1列 - 1（相对更早一年）。
+        列按 2028E→2027E→...→2022 排列，2028E列除以2027E也有增速；末列留「—」。"""
+        out = []
+        for i, current in enumerate(values):
+            previous = values[i + 1] if i + 1 < len(values) else None
+            # 预测无券商覆盖时上游返回0，视为无数据，不算增速（避免假的-100%）
+            if previous in (None, 0) or current in (None, 0):
                 out.append("—")
             else:
                 out.append(f"{(current / previous - 1) * 100:.1f}%")
@@ -474,7 +482,7 @@ def render_forecast(forecast: list[dict], valuation: list[dict],
             ps.append(ratio(cap / operating[year] if cap and operating[year] else None))
             pb.append(ratio(record.get("市净率")))
             pcf.append(ratio(record.get("市现率")))
-    rows += [["总市值"] + caps, ["市盈率"] + pe, ["市销率"] + ps,
+    rows += [["总市值（万元）"] + caps, ["市盈率"] + pe, ["市销率"] + ps,
              ["市净率"] + pb, ["市现率"] + pcf]
 
     counts = []
@@ -486,7 +494,7 @@ def render_forecast(forecast: list[dict], valuation: list[dict],
 
     table = markdown(["单位：万元"] + columns, rows)
     return (table + f"\n\n预测日期：{data_date}，最新总市值："
-            f"{amount(current_cap, '亿元')}亿元\n"
+            f"{amount(current_cap, '万元')}万元（{amount(current_cap, '亿元')}亿元）\n"
             "市盈率、市销率的预测列用当前总市值除以预测值；历史列用年末总市值除以当年实际值；"
             "市净率、市现率取年末值。")
 
@@ -572,6 +580,8 @@ def render_statement(records: list[dict], periods: list[str],
 
     blocks: list[str] = []
     for group_title, labels in labels_by_group:
+        if group_title and "间接法" in group_title:
+            continue  # 用户定稿：间接法补充资料整块不进报告
         rows = []
         for label in labels:
             # 剔全0按原始值判断：有数但换算万元后四舍五入为0的科目要保留。
