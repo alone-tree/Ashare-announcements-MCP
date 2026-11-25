@@ -2,6 +2,7 @@
  "name": "利润表",
  "description": "利润表累计口径全部可用科目。换公司改 code，换报告期改 report_date；默认取最新已披露报告期。",
  "code_required": true,
+ "date_kind": "report",
  "fields": [
   {
    "label": "营业总收入",

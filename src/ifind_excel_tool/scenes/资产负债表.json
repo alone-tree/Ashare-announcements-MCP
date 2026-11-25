@@ -2,6 +2,7 @@
  "name": "资产负债表",
  "description": "资产负债表累计口径全部可用科目。换公司改 code，换报告期改 report_date；默认取最新已披露报告期。",
  "code_required": true,
+ "date_kind": "report",
  "fields": [
   {
    "label": "货币资金",
@@ -270,18 +271,16 @@
    }
   },
   {
-   "label": "固定资产合计",
-   "indicator": "ths_fixed_asset_sum_stock",
-   "params": {
-    "type": "100"
-   }
-  },
-  {
    "label": "固定资产",
-   "indicator": "ths_fixed_asset_stock",
+   "candidates": [
+    "ths_fixed_asset_sum_stock",
+    "ths_fixed_asset_stock"
+   ],
    "params": {
     "type": "100"
-   }
+   },
+   "pick": "max",
+   "unit": "元"
   },
   {
    "label": "固定资产清理",
@@ -291,18 +290,16 @@
    }
   },
   {
-   "label": "在建工程合计",
-   "indicator": "ths_construction_in_process_sum_stock",
-   "params": {
-    "type": "100"
-   }
-  },
-  {
    "label": "在建工程",
-   "indicator": "ths_construction_in_process_stock",
+   "candidates": [
+    "ths_construction_in_process_sum_stock",
+    "ths_construction_in_process_stock"
+   ],
    "params": {
     "type": "100"
-   }
+   },
+   "pick": "max",
+   "unit": "元"
   },
   {
    "label": "工程物资",

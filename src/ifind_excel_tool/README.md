@@ -7,11 +7,17 @@
 | 部分 | 内容 |
 |---|---|
 | engine.py | Excel COM 执行层，从 market_data_mcp/ifind_excel.py 复制，独立定位工作簿；启动前自动清除本工作簿的崩溃恢复残留 |
-| cli.py | 极薄入口，只有 lookup / run / text / close 四个命令 |
+| cli.py | 极薄入口，stdin JSON → stdout JSON，顶层字段 `cmd`；命令见下 |
+| scenes.py / scenes/ | 固定场景清单，`fetch_scene` 按场景取数 |
+| search.py | 证券代码搜索，股票走东财、指数外汇查本地表 |
+| report.py | 固定报告拼装，`export_report` 把各板块CSV拼成Markdown骨架 |
+| chart.py | 绘图基础模块，`draw` 按模板出PNG，仅用matplotlib，零 import market-data |
+| resample.py | 行情周/月本地聚合 |
 | formula_library/verified-formulas.jsonl | 已验证公式，人工锚定，AI 优先检索 |
 | formula_library/catalog.jsonl | 全量30281条指标索引，内容不可靠，禁止查询 |
-| scenes/ | 固定场景清单，按场景取数 |
 | data/ifind_workspace.xlsx | 专用工作簿，只含 data 页（纯取数通道，永不保存） |
+
+命令分三类：取数 `fetch_scene`（固定场景，优先用）、`search`（查证券代码）、`lookup`/`run`/`text`（场景没有才用）、`export_report`（各板块CSV拼报告骨架）、`draw`（按模板绘图）；帮助 `help`/`help_scene`/`help_indicators`/`scenes`/`scene_info`；Excel生命周期 `open`/`status`/`close`。先跑 `{"cmd":"help"}` 看导航。
 
 ## 用法
 
@@ -33,6 +39,45 @@ echo '{"cmd":"lookup","keyword":"净利润","limit":5}' | PYTHONPATH=src D:/venv
 `run`/`text` 同理，把上面 JSON 换成 `{"cmd":"run","matrix":[...]}` 或 `{"cmd":"text","formulas":[...]}`；用完可发 `{"cmd":"close"}` 不保存关闭专用 Excel。
 
 另有 `{"cmd":"status"}`（只读查状态，未打开时不启动 Excel）与 `{"cmd":"open"}`（打开或复用专用工作簿）。
+
+## 固定报告导出
+
+一个板块导一份 CSV：`fetch_scene` 带 `export_path` 写到指定路径即可，每个代码单独导就按单 `code` 调用。
+
+```bash
+echo '{"cmd":"fetch_scene","scene":"工商信息","code":"002796.SZ","export_path":"数据/工商信息.csv"}' | PYTHONPATH=src D:/venvs/a-share-announcements/Scripts/python.exe src/ifind_excel_tool/cli.py
+```
+
+板块与场景对应：工商信息、十大股东、历史行情、估值快照、资产负债表、利润表、现金流量表、利润表单季、现金流量表单季、指数成分股、指数进出记录。显式传 `export_path` 时 `records` 全量返回；不传且超过200行时自动落 `exports/` 且只回前20行预览（`truncated=true`），完整数据在 `export.path`，判断是否取全看 `rows` 与CSV。
+
+各板块CSV齐了以后，拼成固定Markdown骨架：
+
+```bash
+echo '{"cmd":"export_report","company":"世嘉科技","code":"002796.SZ","sections":{"工商信息":"数据/工商信息.csv","利润表":"数据/利润表.csv"},"output":"骨架.md"}' | PYTHONPATH=src D:/venvs/a-share-announcements/Scripts/python.exe src/ifind_excel_tool/cli.py
+```
+
+`export_report` 只做拼装，不取数、不推算。没有数据的板块留空节并标注缺口。IPO信息、分红、营收结构、盈利预测四块暂未在场景中提供，会标"未取到数据，待补"。
+
+注意：财报类场景（三表、单季表、十大股东）不传 `report_date` 时会自动探测最新已披露报告期，并在返回里给出 `report_date` 与 `report_date_probed=true`；探测失败会明确报错要求显式指定。固定资产、在建工程已合并为多候选字段，自动取合计与单科目的较大值，两值不同时留 `__choices` 痕迹。
+
+## 绘图draw
+
+`draw` 读已导出的行情CSV出PNG，不取数。列名自动识别中文（iFinD导出）与英文；也可用 `price_col`/`mcap_col` 显式指定。
+
+```bash
+echo '{"cmd":"draw","template":"kline_volume","data_path":"数据/历史行情.csv","output":"行情.png"}' | PYTHONPATH=src D:/venvs/a-share-announcements/Scripts/python.exe src/ifind_excel_tool/cli.py
+```
+
+四个模板：
+
+| 模板 | 内容 | 常用参数 |
+|---|---|---|
+| kline_volume | 标准K线+成交量副图+MA5/10/20/60，红涨绿跌 | `ma_windows`、`log_scale` |
+| kline_log_volume | 同上，价格与量轴取对数，含0或负值自动退回普通坐标 | `ma_windows` |
+| close_mcap_events | 双轴折线（总市值+前复权收盘价）+事件标注 | `events`、`price_col`、`mcap_col` |
+| close_line_keypoints | 单折线+最高/最低/最新+回撤高低点标注 | `drawdown_threshold`（默认0.30） |
+
+`events` 支持 CSV（date,description 两列）或 JSON 数组 `[{"date":"2024-09-24","description":"..."}]`，事件日对齐到不早于事件日的最近交易日。绘图视觉规范（配色、字体、布局、标签避让）由 chart.py 统一固定，模板不各自维护。此绘图能力与 market-data 的 `get_quote_chart` 各自独立：market-data 是取数即绘图，这里是读已导出的CSV绘图，零 import 依赖。
 
 ## 取数失败时怎么判断
 

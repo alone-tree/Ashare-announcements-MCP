@@ -81,6 +81,32 @@
 
 四、港股代码必须是四位（0700.HK），传五位（00700.HK）会静默返回错值或0。用 `search` 查代码最稳，返回的 ifind_code 直接可用，不要自己改位数。
 
+五、财报类场景（三表、单季表、十大股东）不传 `report_date` 时自动探最新已披露期，返回里给出 `report_date`；探不到明确报错要求指定。固定资产、在建工程已合并多候选，自动取合计与单科目较大值。
+
+## 固定报告导出与绘图
+
+一个板块一份CSV：`fetch_scene` 带 `export_path` 写指定路径，每个代码单独导按单 `code` 调用。CSV齐后 `export_report` 拼固定Markdown骨架，只拼装不取数，缺的板块留空节标注。IPO信息、分红、营收结构、盈利预测四块暂无场景，会标"未取到数据，待补"。
+
+```
+{"cmd":"fetch_scene","scene":"工商信息","code":"002796.SZ","export_path":"数据/工商信息.csv"}
+{"cmd":"export_report","company":"世嘉科技","code":"002796.SZ","sections":{"工商信息":"数据/工商信息.csv"},"output":"骨架.md"}
+```
+
+`draw` 读已导出的行情CSV出PNG，不取数，四个模板：
+
+```
+{"cmd":"draw","template":"kline_volume","data_path":"数据/历史行情.csv","output":"行情.png"}
+```
+
+| 模板 | 内容 | 参数 |
+|---|---|---|
+| kline_volume | K线+量+MA5/10/20/60 | ma_windows、log_scale |
+| kline_log_volume | 同上，对数轴，含0或负值自动退回 | ma_windows |
+| close_mcap_events | 双轴总市值+前复权收盘价+事件 | events、price_col、mcap_col |
+| close_line_keypoints | 折线+最高/最低/最新+回撤高低点 | drawdown_threshold（默认0.30） |
+
+`events` 为 date,description 两列CSV或 `[{"date":"...","description":"..."}]`，事件日对齐到最近交易日。绘图视觉规范由 chart.py 统一固定。
+
 ## 底层能力
 
 需要库里没有的指标，或要试新公式时：

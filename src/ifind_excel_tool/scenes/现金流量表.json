@@ -2,6 +2,7 @@
  "name": "现金流量表",
  "description": "现金流量表累计口径全部可用科目。换公司改 code，换报告期改 report_date；默认取最新已披露报告期。",
  "code_required": true,
+ "date_kind": "report",
  "fields": [
   {
    "label": "销售商品、提供劳务收到的现金",

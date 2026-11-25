@@ -4,7 +4,9 @@
 先跑 {"cmd":"help"} 看导航（start_here 按需求指明该调哪个命令）。
 主要命令：
   search       查证券代码，必须指定kind=股票/指数/外汇（每页10行，offset翻页）
-  fetch_scene  按固定场景取数（优先用这个）
+  fetch_scene  按固定场景取数（优先用这个）；带export_path导CSV
+  export_report  把各板块CSV拼成固定Markdown报告骨架（只拼装不取数）
+  draw         读行情CSV按模板绘图（kline_volume等四模板）
   lookup/run/text  查公式、执行公式矩阵、取文本字段（场景没有才用）
   help/help_scene/help_indicators/scenes/scene_info  各种帮助查询
   open/status/close  Excel生命周期
@@ -15,15 +17,16 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
-from datetime import datetime
+from datetime import date as _date, datetime
 from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ifind_excel_tool import engine, help as _help, resample as _resample, scenes as _scenes, search as _search
+from ifind_excel_tool import chart as _chart, engine, help as _help, resample as _resample, scenes as _scenes, search as _search, report as _report
 
 LIB = Path(__file__).resolve().parent / "formula_library"
 
@@ -266,11 +269,35 @@ def scene_info(req: dict) -> dict:
                         "pick": f.get("pick")} for f in spec["fields"]]}
 
 
+def _probe_report_date(code: str) -> str | None:
+    """探最新已披露报告期，返回 YYYY-MM-DD；探不到返回 None。
+
+    依据：verified-formulas.jsonl 的 ths_regular_report_latest_rp_stock（A股）
+    与 ths_latest_rp_hks（港股），均为已验证的文本公式，取插件原文写法，
+    不猜参数。交易日用当天，公式按公告日返回截止日。
+    """
+    suffix = code.rsplit(".", 1)[-1].upper() if "." in code else ""
+    indicator = "ths_latest_rp_hks" if suffix == "HK" else "ths_regular_report_latest_rp_stock"
+    today = _date.today().isoformat()
+    formula = f'=@thsiFinD("{indicator}","{code}","{today}")'
+    result = engine.fetch_formulas([formula], text_ok=True)
+    values = result.get("values") or []
+    raw = values[0] if values else None
+    if not isinstance(raw, str):
+        return None
+    m = re.fullmatch(r"(\d{4})[-/]?(\d{2})[-/]?(\d{2})", raw.strip()[:10])
+    if not m:
+        return None
+    y, mo, d = m.groups()
+    return f"{y}-{mo}-{d}"
+
+
 def fetch_scene(req: dict) -> dict:
     """按固定场景取数。换公司与日期只改 code 和 report_date。
 
     历史行情场景支持 period=daily/weekly/monthly（默认 daily）：始终先取日K，
     再按需本地聚合为周/月线，不直接取周月K。
+    财报场景不传 report_date 时自动探最新已披露期，探不到明确报错。
     """
     name = req.get("scene") or ""
     spec = _scenes.load_scene(name)
@@ -288,11 +315,20 @@ def fetch_scene(req: dict) -> dict:
         codes = [single]
     if not codes:
         return {"ok": False, "error": "code 或 codes 至少要给一个"}
+    report_date = req.get("report_date")
+    probed = None
+    if not report_date and spec.get("date_kind") == "report":
+        # 财报类场景 date 是报告期。留空不能填空串（实测返回全零），
+        # 必须先探最新已披露期；多代码探第一个，不同公司报告期通常一致。
+        probed = _probe_report_date(codes[0])
+        if not probed:
+            return {"ok": False, "error": f"无法确定最新报告期，请显式传 report_date（探测 {codes[0]} 失败）"}
+        report_date = probed
     library = _scenes._load_library()
     results = []
     for one in codes:
         built = _scenes.build(spec, library, code=one,
-                              report_date=req.get("report_date"),
+                              report_date=report_date,
                               params=req.get("params"),
                               start=req.get("start"), end=req.get("end"))
         raw = engine.fetch_matrix(built["matrix"], visible=req.get("visible"),
@@ -309,6 +345,9 @@ def fetch_scene(req: dict) -> dict:
     resp = {"ok": True, "source": "ifind_excel", "scene": spec.get("name"),
             "period": period, "fields": len(spec["fields"]),
             "rows": len(results), "records": results}
+    if probed:
+        resp["report_date"] = probed
+        resp["report_date_probed"] = True
     # 导出口径：调用方给了路径就写文件；没给且行数超过阈值，自动落盘避免把大结果塞进对话
     export_path = req.get("export_path")
     if export_path or len(results) > int(req.get("auto_export_rows") or 200):
@@ -340,9 +379,16 @@ def help_indicators(req: dict) -> dict:
                                  int(req.get("limit") or 100))
 
 
+def draw(req: dict) -> dict:
+    """按模板绘图：读已导出的行情CSV（data_path），输出PNG。"""
+    return _chart.draw(req)
+
+
 CMDS = {"lookup": lookup, "run": run, "text": text, "close": close,
         "status": status, "open": open_excel, "search": search,
         "scenes": scenes, "scene_info": scene_info, "fetch_scene": fetch_scene,
+        "export_report": _report.export_report,
+        "draw": draw,
         "help": help_overview, "help_scene": help_scene, "help_indicators": help_indicators}
 
 

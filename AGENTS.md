@@ -47,7 +47,7 @@ CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。�
 
 ### ifind_excel_tool（纯 CLI，非 MCP）
 
-入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`，仅 `lookup`（查正式库公式）、`run`（数值公式矩阵）、`text`（文本公式）、`close`（不保存关闭专用Excel）四个命令。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。取数见[包说明](src/ifind_excel_tool/README.md)，录入和验收见[批量公式录入与验证流程](src/ifind_excel_tool/formula_library/README.md#批量公式录入与验证流程)。
+入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`。命令分三类：取数 `fetch_scene`（固定场景，优先用）、`search`（查证券代码）、`lookup`/`run`/`text`（场景没有才用）、`export_report`（各板块CSV拼报告骨架）；帮助 `help`/`help_scene`/`help_indicators`/`scenes`/`scene_info`；Excel生命周期 `open`/`status`/`close`。另提供 `draw` 命令按模板绘图（行情CSV出PNG）。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。取数见[包说明](src/ifind_excel_tool/README.md)，录入和验收见[批量公式录入与验证流程](src/ifind_excel_tool/formula_library/README.md#批量公式录入与验证流程)。绘图模板与参数见[包说明](src/ifind_excel_tool/README.md#绘图draw)。
 
 ### market-data MCP（7 个工具）
 

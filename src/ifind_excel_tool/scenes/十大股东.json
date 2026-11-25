@@ -2,6 +2,7 @@
   "name": "十大股东",
   "description": "一期完整的前十大股东披露表，十行乘各字段。换公司改 code，换报告期改 report_date。",
   "code_required": true,
+ "date_kind": "report",
   "dims": {"rank": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]},
   "fields": [
     {"label": "股东名称", "indicator": "ths_holder_name_stock"},

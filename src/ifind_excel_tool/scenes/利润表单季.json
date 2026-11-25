@@ -2,6 +2,7 @@
  "name": "利润表单季",
  "description": "利润表单季口径全部可用科目。换公司改 code，换报告期改 report_date；报告期用季末日如 2025-09-30。",
  "code_required": true,
+ "date_kind": "report",
  "fields": [
   {
    "label": "单季度.营业总收入",
