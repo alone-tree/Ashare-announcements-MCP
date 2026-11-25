@@ -524,11 +524,23 @@ def report(req: dict) -> dict:
         else:
             warnings.append(f"绘图失败：{drawn.get('error')}")
 
+    # 违规次数依赖实际上市日，单独取：工商信息场景里没有这个动态参数
+    violations = "—"
+    ipo_date = str(profile.get("上市日期") or "")
+    if ipo_date:
+        violation_result = run({"cmd": "run", "matrix": [[
+            f'=@thsiFinD("ths_int_illegality_num_stock","{code}","{ipo_date}","{end_date}")']]})
+        values = violation_result.get("values") or []
+        number = values[0][0] if values and values[0] else None
+        if isinstance(number, (int, float)):
+            violations = f"{number:,.0f}"
+
     groups = {name: _scene_groups(name)
               for name in ("资产负债表", "利润表", "现金流量表")}
     markdown_text = _report.build_report(
         company=company, code=code, periods=periods, data=data, groups=groups,
-        chart_file=chart_file, data_date=end_date, warnings=warnings)
+        chart_file=chart_file, data_date=end_date, violations=violations,
+        warnings=warnings)
     md_path = out_dir / f"{company}-报告骨架-{stamp}.md"
     md_path.write_text(markdown_text, encoding="utf-8")
 
