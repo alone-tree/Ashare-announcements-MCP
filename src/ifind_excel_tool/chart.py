@@ -552,6 +552,7 @@ def _close_line_keypoints(req: dict, rows: list[dict], headers: list[str]) -> di
     keypoints = _extract_keypoints(values, threshold)
     # 回撤点与最高/最低重合时不再重复标注
     marked = {low_idx, high_idx}
+    n_total = max(1, len(rows))
     for idx, val, kind in keypoints:
         if idx in marked:
             continue
@@ -559,8 +560,15 @@ def _close_line_keypoints(req: dict, rows: list[dict], headers: list[str]) -> di
         color = "#16a34a" if kind == "peak" else _RED
         ax.scatter([idx], [val], s=22, color=color, zorder=6,
                    edgecolors="white", linewidths=0.6)
-        ax.annotate(f"{val:,.2f}", xy=(idx, val), xytext=(4, -12),
-                    textcoords="offset points", fontsize=8, color=color,
+        # 左右边缘的点把标签朝内放，避免被画布裁切
+        if idx <= n_total * 0.04:
+            offset, ha = (10, -12), "left"
+        elif idx >= n_total * 0.96:
+            offset, ha = (-10, -12), "right"
+        else:
+            offset, ha = (4, -12), "left"
+        ax.annotate(f"{val:,.2f}", xy=(idx, val), xytext=offset,
+                    textcoords="offset points", fontsize=8, color=color, ha=ha,
                     bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.7))
     if not keypoints:
         notes.append(f"未找到回撤超过{threshold:.0%}的高低点，未标注回撤")

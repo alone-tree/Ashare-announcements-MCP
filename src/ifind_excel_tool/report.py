@@ -28,7 +28,8 @@ def _read_csv(path: str | Path | None) -> list[dict[str, str]]:
 def _headers(rows: list[dict], *, drop: tuple[str, ...] = ("code",)) -> list[str]:
     if not rows:
         return []
-    return [k for k in rows[0] if k not in drop and not k.endswith("__unit")]
+    # 取数痕迹（__unit/__choices）是内部字段，不进报告
+    return [k for k in rows[0] if k not in drop and "__" not in k]
 
 
 def _fmt(value: Any) -> str:
@@ -79,6 +80,26 @@ def key_value(rows: list[dict], *, drop: tuple[str, ...] = ("code",)) -> str:
     return "\n".join(out)
 
 
+def statement(rows: list[dict], *, drop: tuple[str, ...] = ("code",)) -> str:
+    """报表类板块转纵向「科目 | 数值」表：一条记录含几十上百个科目，
+    横向铺开会一行几百列不可读。全期全零的科目不列。"""
+    if not rows:
+        return GAP
+    headers = _headers(rows, drop=drop)
+    if not headers:
+        return GAP
+    row = rows[0]
+    out = ["| 科目 | 数值 |", "| --- | --- |"]
+    for h in headers:
+        value = row.get(h)
+        text = _fmt(value)
+        # 0 值科目多为该公司不适用的科目，跳过以保持可读
+        if text in ("0", "—", ""):
+            continue
+        out.append(f"| {h} | {text} |")
+    return "\n".join(out) if len(out) > 2 else GAP
+
+
 def build_report(company: str, code: str, sections: dict[str, str],
                  *, chart_path: str | None = None) -> str:
     """按固定章节拼装报告骨架。sections 的键为板块名，值为CSV路径。"""
@@ -110,19 +131,22 @@ def build_report(company: str, code: str, sections: dict[str, str],
                   table(quote, limit=5, drop=("code", "非交易日判定")), ""]
     lines += ["### 分红", "", GAP, ""]
 
-    lines += ["## 五、财报摘要", "", table(income), ""]
-    if income_q:
-        lines += ["### 单季利润表", "", table(income_q), ""]
+    # 财报摘要只放要点科目，完整三表在附录，避免同一张表出现两次
+    summary_items = ("营业总收入", "营业成本", "营业利润", "利润总额", "净利润",
+                     "归属于母公司所有者的净利润", "扣除非经常性损益后的归属母公司股东净利润")
+    summary_rows = [{k: income[0].get(k) for k in summary_items if k in income[0]}]
+    lines += ["## 五、财报摘要", "", statement(summary_rows) if summary_rows else GAP,
+              "", "完整三表见附录。", ""]
 
     lines += ["## 六、公司业务", "", "### 营收结构", "", GAP, ""]
 
     lines += ["## 七、盈利预测与估值", "", GAP, ""]
 
-    lines += ["---", "", "## 附录", "", "### A、资产负债表", "", table(balance), "",
-              "### B、利润表", "", table(income), "",
-              "### C、现金流量表", "", table(cashflow), ""]
+    lines += ["---", "", "## 附录", "", "### A、资产负债表", "", statement(balance), "",
+              "### B、利润表", "", statement(income), "",
+              "### C、现金流量表", "", statement(cashflow), ""]
     if cashflow_q:
-        lines += ["### D、现金流量表单季", "", table(cashflow_q), ""]
+        lines += ["### D、现金流量表单季", "", statement(cashflow_q), ""]
 
     md = "\n".join(lines).replace("**", "")
     return md if md.endswith("\n") else md + "\n"
