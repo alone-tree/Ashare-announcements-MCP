@@ -1,0 +1,89 @@
+{
+  "name": "IPO信息",
+  "description": "IPO发行要素与对应的最新值。发行要素固定不随日期变；最新值按 report_date 交易日取，不传则需显式给报告期。",
+  "code_required": true,
+  "defaults": {
+    "date": "today"
+  },
+  "fields": [
+    {
+      "label": "发行数量",
+      "indicator": "ths_ipo_quantity_stock",
+      "unit": "股"
+    },
+    {
+      "label": "发行价",
+      "indicator": "ths_ipo_price_stock",
+      "unit": "元"
+    },
+    {
+      "label": "发行后总股本",
+      "indicator": "ths_total_shares_after_ipo_ld_stock",
+      "unit": "股"
+    },
+    {
+      "label": "发行后市盈率",
+      "indicator": "ths_ipo_pe_dlt_stock",
+      "unit": "倍"
+    },
+    {
+      "label": "发行后市净率",
+      "indicator": "ths_ipo_pb_stock",
+      "unit": "倍"
+    },
+    {
+      "label": "募资总额",
+      "indicator": "ths_ipo_rc_stock",
+      "unit": "元"
+    },
+    {
+      "label": "募资净额",
+      "indicator": "ths_ipo_actual_rc_stock",
+      "unit": "元"
+    },
+    {
+      "label": "发行费用",
+      "indicator": "ipo_fee",
+      "unit": "万元",
+      "params": {
+        "fee_unit": 10000
+      }
+    },
+    {
+      "label": "上市日期",
+      "indicator": "ths_ipo_date_stock"
+    },
+    {
+      "label": "最新总股本",
+      "indicator": "ths_total_shares_stock",
+      "unit": "股"
+    },
+    {
+      "label": "最新后复权收盘价",
+      "indicator": "ths_close_price_stock",
+      "unit": "元",
+      "params": {
+        "type": "105"
+      }
+    },
+    {
+      "label": "最新除权收盘价",
+      "indicator": "ths_close_price_stock",
+      "unit": "元",
+      "params": {
+        "type": "100"
+      }
+    },
+    {
+      "label": "最新市盈率TTM",
+      "indicator": "pe_ttm",
+      "params": {
+        "basis": 101
+      }
+    },
+    {
+      "label": "最新市净率",
+      "indicator": "pb_mrq"
+    }
+  ]
+}

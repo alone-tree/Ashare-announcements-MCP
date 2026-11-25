@@ -1,0 +1,36 @@
+{
+  "name": "分地区",
+  "description": "主营构成按地区的项目名称、收入、毛利，逐项展开10个序号。序号超过该公司项目数时名称返回0，调用方据此截断。中报与年报有数据，季报多为0。",
+  "code_required": true,
+  "date_kind": "report",
+  "dims": {
+    "index": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ]
+  },
+  "fields": [
+    {
+      "label": "项目名称",
+      "indicator": "ths_moc_project_name_district_stock"
+    },
+    {
+      "label": "项目收入",
+      "indicator": "ths_moc_project_income_district_stock",
+      "unit": "元"
+    },
+    {
+      "label": "项目毛利",
+      "indicator": "ths_moc_project_profit_district_stock",
+      "unit": "元"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "盈利预测",
+  "description": "券商一致预期的营业收入与归母净利润均值、预测机构数。预测年份必须由调用方通过 dims 传入，如 {\"year\":[\"2026\",\"2027\",\"2028\"]}；report_date 为一致预期数据截止交易日。",
+  "code_required": true,
+  "defaults": {
+    "date": "today"
+  },
+  "fields": [
+    {
+      "label": "营业收入均值",
+      "indicator": "ths_fore_mob_income_mean_consensus_stock",
+      "unit": "元"
+    },
+    {
+      "label": "归母净利润均值",
+      "indicator": "ths_fore_np_mean_consensus_stock",
+      "unit": "元"
+    },
+    {
+      "label": "预测机构数",
+      "indicator": "ths_eps_fore_org_num_consensus_stock",
+      "unit": "家"
+    }
+  ]
+}

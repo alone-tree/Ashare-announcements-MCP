@@ -1,0 +1,44 @@
+{
+  "name": "历史估值",
+  "description": "指定若干交易日的估值快照，一行一个日期。日期列表必须由调用方通过 dims 传入，如 {\"date\":[\"2025-12-31\",\"2024-12-31\"]}。",
+  "code_required": true,
+  "fields": [
+    {
+      "label": "总市值",
+      "indicator": "market_value",
+      "unit": "元",
+      "params": {
+        "currency": "CNY",
+        "unit": 1
+      }
+    },
+    {
+      "label": "市盈率TTM",
+      "indicator": "pe_ttm",
+      "params": {
+        "basis": 101
+      }
+    },
+    {
+      "label": "市销率TTM",
+      "indicator": "ps_ttm",
+      "params": {
+        "basis": 101
+      }
+    },
+    {
+      "label": "市净率",
+      "indicator": "pb_latest",
+      "params": {
+        "basis": 101
+      }
+    },
+    {
+      "label": "市现率",
+      "indicator": "pcf_operate_cash_flow_ttm",
+      "params": {
+        "basis": 101
+      }
+    }
+  ]
+}

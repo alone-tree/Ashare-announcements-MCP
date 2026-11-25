@@ -297,7 +297,9 @@ def fetch_scene(req: dict) -> dict:
 
     历史行情场景支持 period=daily/weekly/monthly（默认 daily）：始终先取日K，
     再按需本地聚合为周/月线，不直接取周月K。
-    财报场景不传 report_date 时自动探最新已披露期，探不到明确报错。
+    财报场景不传 report_date 时自动探最新已披露期，探不到明确报错；
+    传 report_dates 列表时一次取回多期，跳过探测。
+    dims 可覆盖场景的维度取值（分红传年份、历史估值传日期等）。
     """
     name = req.get("scene") or ""
     spec = _scenes.load_scene(name)
@@ -309,15 +311,21 @@ def fetch_scene(req: dict) -> dict:
     resample_spec = spec.get("resample") or {}
     if period != "daily" and not resample_spec:
         return {"ok": False, "error": f"场景「{name}」不支持 period={period}（仅日线）"}
+    dims_override = req.get("dims")
+    if dims_override:
+        spec = {**spec, "dims": {**(spec.get("dims") or {}), **dims_override}}
     codes = req.get("codes") or []
     single = (req.get("code") or "").strip()
     if single:
         codes = [single]
     if not codes:
         return {"ok": False, "error": "code 或 codes 至少要给一个"}
+    report_dates = req.get("report_dates")
+    if report_dates and not isinstance(report_dates, list):
+        return {"ok": False, "error": "report_dates 必须是日期字符串数组"}
     report_date = req.get("report_date")
     probed = None
-    if not report_date and spec.get("date_kind") == "report":
+    if not report_date and not report_dates and spec.get("date_kind") == "report":
         # 财报类场景 date 是报告期。留空不能填空串（实测返回全零），
         # 必须先探最新已披露期；多代码探第一个，不同公司报告期通常一致。
         probed = _probe_report_date(codes[0])
@@ -330,7 +338,8 @@ def fetch_scene(req: dict) -> dict:
         built = _scenes.build(spec, library, code=one,
                               report_date=report_date,
                               params=req.get("params"),
-                              start=req.get("start"), end=req.get("end"))
+                              start=req.get("start"), end=req.get("end"),
+                              report_dates=report_dates)
         raw = engine.fetch_matrix(built["matrix"], visible=req.get("visible"),
                                   timeout=float(req.get("timeout") or 300),
                                   text_ok=True)
@@ -348,6 +357,8 @@ def fetch_scene(req: dict) -> dict:
     if probed:
         resp["report_date"] = probed
         resp["report_date_probed"] = True
+    if report_dates:
+        resp["report_dates"] = report_dates
     # 导出口径：调用方给了路径就写文件；没给且行数超过阈值，自动落盘避免把大结果塞进对话
     export_path = req.get("export_path")
     if export_path or len(results) > int(req.get("auto_export_rows") or 200):

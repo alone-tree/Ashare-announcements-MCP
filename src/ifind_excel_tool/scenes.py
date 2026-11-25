@@ -49,6 +49,17 @@ def load_scene(name: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_NUMERIC = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+def _coerce(value):
+    """iFinD 部分指标把数字当文本返回（如 "124154176.7600"），统一转成 float。
+    只认纯数字串，名称类文本（含字母、逗号、百分号等）原样保留。"""
+    if isinstance(value, str) and _NUMERIC.match(value.strip()):
+        return float(value)
+    return value
+
+
 def _fill(template: str, context: dict) -> str:
     text = template
     for placeholder in re.findall(r"\{(\w+)\}", template):
@@ -83,16 +94,23 @@ def _date_range(start: str, end: str) -> list[str]:
 
 def build(spec: dict, library: dict[str, dict], *, code: str,
           report_date: str | None = None, params: dict | None = None,
-          start: str | None = None, end: str | None = None) -> dict:
+          start: str | None = None, end: str | None = None,
+          report_dates: list[str] | None = None) -> dict:
     """把场景展开成待提交的公式与取数后的还原方案。
 
     返回 {"matrix": 二维公式列表, "plan": 还原方案, "combos": 维度组合}。
     有 dims.date_range 的场景（如行情）按自然日逐日展开为行。
+    传 report_dates 时按给定报告期逐期展开为行（多期财报一次取回）。
     """
     dims = dict(spec.get("dims") or {})
     defaults = spec.get("defaults") or {}
     combos: list[dict]
-    if dims.pop("date_range", False):
+    if report_dates:
+        # 多报告期：一期一行，其余维度照常展开
+        extra_dims = {k: v for k, v in dims.items() if k != "date_range"}
+        extra = _combos(extra_dims) if extra_dims else [{}]
+        combos = [{**e, "date": d} for d in report_dates for e in extra]
+    elif dims.pop("date_range", False):
         days = _date_range(start or defaults.get("start") or "",
                            end or defaults.get("end") or "today")
         extra = _combos(dims) if dims else [{}]
@@ -146,7 +164,7 @@ def shape(spec: dict, plan: list[dict], columns: list[tuple[int, int]],
         column = 0
         for field in plan:
             count = len(field["candidates"])
-            cells = row[column:column + count]
+            cells = [_coerce(v) for v in row[column:column + count]]
             column += count
             numbers = [(v, c) for v, c in zip(cells, field["candidates"]) if isinstance(v, (int, float))]
             if count == 1:

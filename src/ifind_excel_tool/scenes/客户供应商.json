@@ -1,0 +1,48 @@
+{
+  "name": "客户供应商",
+  "description": "客户与供应商集中度。占比直接是百分数数值（75.98 表示 75.98%），不除100。年报有值，中报常为0。",
+  "code_required": true,
+  "date_kind": "report",
+  "fields": [
+    {
+      "label": "前5大客户收入占比",
+      "indicator": "ths_main_customer_sales_amt_ratio_stock",
+      "unit": "%"
+    },
+    {
+      "label": "第1大客户收入占比",
+      "indicator": "ths_main_customer_ratio_stock",
+      "unit": "%",
+      "params": {
+        "rank": 1
+      }
+    },
+    {
+      "label": "第1大客户名称",
+      "indicator": "ths_main_customer_name_stock",
+      "params": {
+        "rank": 1
+      }
+    },
+    {
+      "label": "前5大供应商采购占比",
+      "indicator": "ths_main_supplier_pur_amt_ratio_stock",
+      "unit": "%"
+    },
+    {
+      "label": "第1大供应商采购占比",
+      "indicator": "ths_main_supplier_ratio_stock",
+      "unit": "%",
+      "params": {
+        "rank": 1
+      }
+    },
+    {
+      "label": "第1大供应商名称",
+      "indicator": "ths_main_supplier_name_stock",
+      "params": {
+        "rank": 1
+      }
+    }
+  ]
+}
