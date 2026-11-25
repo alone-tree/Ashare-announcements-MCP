@@ -536,9 +536,12 @@ def _close_line_keypoints(req: dict, rows: list[dict], headers: list[str]) -> di
     high_idx, high_val = max(valid, key=lambda item: item[1])
     last_idx, last_val = valid[-1]
     # 偏移方向分开相邻点（最新与最低常落在末端附近）
-    marks = [(low_idx, low_val, "最低", _RED, (5, -12), "left"),
-             (high_idx, high_val, "最高", "#16a34a", (5, 8), "left"),
-             (last_idx, last_val, "最新", colors[2], (-8, 10), "right")]
+    # 末端最低/最新常相邻，标注方向分开：最低正下方、最高正上方、最新左上
+    marks = [(low_idx, low_val, "最低", _RED, (0, -18), "center"),
+             (high_idx, high_val, "最高", "#16a34a", (0, 12), "center")]
+    # 最新点与最低/最高同处末端时不重复标（数值已由该点给出）
+    if last_idx not in (low_idx, high_idx):
+        marks.append((last_idx, last_val, "最新", colors[2], (-18, 10), "right"))
     for idx, val, name, color, offset, ha in marks:
         ax.scatter([idx], [val], s=30, color=color, zorder=6,
                    edgecolors="white", linewidths=0.6)
@@ -547,7 +550,12 @@ def _close_line_keypoints(req: dict, rows: list[dict], headers: list[str]) -> di
                     bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8))
 
     keypoints = _extract_keypoints(values, threshold)
+    # 回撤点与最高/最低重合时不再重复标注
+    marked = {low_idx, high_idx}
     for idx, val, kind in keypoints:
+        if idx in marked:
+            continue
+        marked.add(idx)
         color = "#16a34a" if kind == "peak" else _RED
         ax.scatter([idx], [val], s=22, color=color, zorder=6,
                    edgecolors="white", linewidths=0.6)
