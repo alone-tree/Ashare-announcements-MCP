@@ -3,8 +3,10 @@
 
 先跑 {"cmd":"help"} 看导航（start_here 按需求指明该调哪个命令）。
 主要命令：
+  find         搜指标（不知道数据叫什么先搜），范围含公式/场景/报表函数/自定义/指标组
+  get          按指标名或指标码取数，类型自动分派，拿回加工好的结果
   search       查证券代码，必须指定kind=股票/指数/外汇（每页10行，offset翻页）
-  fetch_scene  按固定场景取数（优先用这个）；带export_path导CSV
+  fetch_scene  按固定场景取数（整表、多字段）；带export_path导CSV
   report       一条命令出完整报告：取数、换算、绘图、拼Markdown、落盘
   draw         读行情CSV按模板绘图（kline_volume等四模板）
   lookup/run/text  查公式、执行公式矩阵、取文本字段（场景没有才用）

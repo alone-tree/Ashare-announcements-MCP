@@ -9,6 +9,10 @@
 | engine.py | Excel COM 执行层，从 market_data_mcp/ifind_excel.py 复制，独立定位工作簿；启动前自动清除本工作簿的崩溃恢复残留 |
 | cli.py | 极薄入口，stdin JSON → stdout JSON，顶层字段 `cmd`；命令见下 |
 | scenes.py / scenes/ | 固定场景清单，`fetch_scene` 按场景取数 |
+| indicator_index.py | 统一指标索引，`find` 在全部能力里搜指标并给用法 |
+| indicators.py | 统一指标取数，`get` 按定义类型自动分派并完成派生计算 |
+| formula_library/derived-indicators.jsonl | 自定义派生指标（毛利润、毛利率），写依赖与算式 |
+| formula_library/indicator-groups.jsonl | 指标组（利润表常用科目），一次取一组 |
 | search.py | 证券代码搜索，股票走东财、指数外汇查本地表 |
 | report.py | 固定报告排版，`report` 命令把各板块数据拼成Markdown（取数在cli.py编排） |
 | chart.py | 绘图基础模块，`draw` 按模板出PNG，仅用matplotlib，零 import market-data |
@@ -17,16 +21,50 @@
 | formula_library/catalog.jsonl | 全量30281条指标索引，内容不可靠，禁止查询 |
 | data/ifind_workspace.xlsx | 专用工作簿，只含 data 页（纯取数通道，永不保存） |
 
-命令分三类：取数 `fetch_scene`（固定场景，优先用）、`search`（查证券代码）、`lookup`/`run`/`text`（场景没有才用）；一键报告 `report`（取数、换算、绘图、拼Markdown、落盘）；绘图 `draw`；帮助 `help`/`help_scene`/`help_indicators`/`scenes`/`scene_info`；Excel生命周期 `open`/`status`/`close`。先跑 `{"cmd":"help"}` 看导航。
+命令分三类：取数 `fetch_scene`（固定场景）、`get`（按指标取一个数，优先用这个）、`find`（搜指标，不知道指标叫什么时先搜）、`search`（查证券代码）、`lookup`/`run`/`text`（场景没有才用）；一键报告 `report`（取数、换算、绘图、拼Markdown、落盘）；绘图 `draw`；帮助 `help`/`help_scene`/`help_indicators`/`scenes`/`scene_info`；Excel生命周期 `open`/`status`/`close`。先跑 `{"cmd":"help"}` 看导航。
+
+## 指标find与get
+
+不知道某个数据在库里叫什么，先 `find` 搜；搜到后按用法 `get` 取数。
+
+搜索范围覆盖全部业务数据能力，不按存储形态割裂：已验证单格公式807条、固定场景、
+报表函数型（指数成分股、指数进出记录）、自定义派生指标（毛利率）、指标组、探最新报告期。
+
+```bash
+echo '{"cmd":"find","keyword":"毛利率"}' | PYTHONPATH=src D:/venvs/a-share-announcements/Scripts/python.exe src/ifind_excel_tool/cli.py
+echo '{"cmd":"get","indicator":"毛利率","code":"002796.SZ","report_date":"2026-09-30"}' | PYTHONPATH=src D:/venvs/a-share-announcements/Scripts/python.exe src/ifind_excel_tool/cli.py
+```
+
+`get` 的 `indicator` 可以写中文名（毛利率、固定资产、利润表常用科目），也可以写指标码
+（ths_operating_cost_stock）。类型自动分派，调用方不用判断底层是公式、多候选、派生还是场景。
+
+一次取一组：
+
+```bash
+echo '{"cmd":"get","indicator":"利润表常用科目","code":"002796.SZ","report_date":"2026-09-30"}' | PYTHONPATH=src D:/venvs/a-share-announcements/Scripts/python.exe src/ifind_excel_tool/cli.py
+```
+
+返回 `members` 逐项给值；组内派生指标（毛利润、毛利率）已算好，不用再加工。
+
+两条要注意的：
+
+- 跨市场同名指标（营业利润、总股本、收盘价等）按代码后缀自动择市场。库里没有该市场版本时
+  明确报错说明缺哪个市场，不会拿别的市场公式套。
+- `find` 里 `kind` 可限定类型：`derived`/`group`/`select`/`excel`/`scene`/`table`/`special`。
+
+新增自定义指标：往 `formula_library/derived-indicators.jsonl` 加一行，写 `name`、`expr`
+（四则运算，变量名是 `deps` 里的 `label`）、`deps`、`unit`、`decimals`，即刻可搜可调。
 
 ## 用法
 
 AI 取数流程：
 
-1. `lookup` 查已验证库，拿到公式模板和参数。
-2. 命中：写一次性脚本调 engine.fetch_matrix（数值）或 fetch_formulas（文本）执行。
-3. 未命中：按[公式来源与录入流程](formula_library/README.md#批量公式录入与验证流程)核对插件原文。
-4. 反复使用的场景才写成 recipes/ 下的固定脚本。
+1. 不确定数据在库里叫什么：先 `find` 搜。它覆盖公式、场景、报表函数、自定义指标与指标组。
+2. 指标级、要一个数或一组数：`get` 取，类型自动分派，拿回的是加工好的结果。
+3. 整表、一次要很多字段：`fetch_scene` 按场景取（三表、行情、工商信息、十大股东等）。
+4. 以上都没有：`lookup` 查公式，用 `run`/`text` 把原始公式原样传给 Excel 执行。
+   新公式按[公式来源与录入流程](formula_library/README.md#批量公式录入与验证流程)核对插件原文后入库，
+   入库后 `find`/`get` 即可用。
 
 CLI 示例（stdin JSON → stdout JSON）：
 
