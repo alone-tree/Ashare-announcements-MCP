@@ -15,9 +15,9 @@
 | 能力 | 公告、A股互动问答、港美电话会议；具体市场边界见公告侧主文档 | 证券搜索、行情、绘图、财报、营收结构、基础比率及公司信息；具体市场边界见行为规范 |
 | 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（行为）+ `字段与数据源支持情况.md`（客观能力）+ `docs/决策记录.md`（变动历史） |
 
-绘图属于market-data，入口为`get_quote_chart`与`get_quote_chart_batch`；完整行为与视觉约束仅见架构§2.6。
+取数即绘图属于market-data，入口为`get_quote_chart`与`get_quote_chart_batch`，完整行为与视觉约束仅见架构§2.6。iFinD CLI另有`draw`命令，读已导出的行情CSV出PNG，零 import 依赖，两者各自独立；CLI绘图模板与参数见[包说明](src/ifind_excel_tool/README.md#绘图draw)。
 
-`ifind_excel_tool` 是公式库驱动的 iFinD Excel 取数工作台，纯 CLI、随用随开发：AI 先查公式库拿已验证写法，再写一次性脚本调 `engine.py` 取数；高频场景才沉淀为 `recipes/`。方案见[建设方案](docs/iFinD公式验证库建设方案-2026-11-18.md)，库字段与用法见[包说明](../src/ifind_excel_tool/README.md)。它与 market-data 平级、零 import 依赖；market-data 保留美股/证券搜索/绘图等独有能力，两边暂并行，后续再定合并或独立。
+`ifind_excel_tool` 是公式库驱动的 iFinD Excel 取数工作台，纯 CLI、随用随开发：首选 `fetch_scene` 固定场景取数，另有分板块CSV导出、报告骨架拼装与模板绘图；场景没有的指标才查公式库、写一次性脚本调 `engine.py`。方案见[建设方案](docs/iFinD公式验证库建设方案-2026-11-18.md)与[固定报告与绘图扩展方案](docs/iFinD-CLI固定报告与绘图扩展方案-2026-11-25.md)，库字段与用法见[包说明](../src/ifind_excel_tool/README.md)。它与 market-data 平级、零 import 依赖；market-data 保留美股/证券搜索/绘图等独有能力，两边暂并行，后续再定合并或独立。
 
 克制、数据准确真实、维护简单；不为假设中的需求增加抽象或字段。个人工具，不追求大而全。
 
