@@ -16,6 +16,27 @@ QUARTER_NAMES = {"03-31": "一季", "06-30": "中报", "09-30": "三季", "12-31
 
 # ---------------- 基础格式化 ----------------
 
+
+# 科目显示别名：用户90脚本 INCOME_ITEMS 的别名，长名缩短便于打印阅读。
+DISPLAY_ALIAS = {
+    "归属于母公司股东的净利润": "归母净利润",
+    "归属于母公司所有者的净利润": "归母净利润",
+    "扣除非经常性损益后的归属母公司股东净利润": "扣非净利润",
+    "归属于母公司股东的扣除非经常性损益的净利润": "扣非净利润",
+    "(一) 基本每股收益(元)": "基本每股收益",
+    "减：所得税费用": "所得税费用",
+    "实收资本(或股本)": "实收资本",
+    "归属于母公司所有者权益合计": "归母所有者权益合计",
+    "支付给职工以及为职工支付的现金": "支付给职工的现金",
+    "分配股利、利润或偿付利息支付的现金": "分配股利或偿付利息",
+    "购建固定资产、无形资产和其他长期资产支付的现金": "购建固定资产、无形资产和其他长期资产",
+    "汇率变动对现金及现金等价物的影响": "汇率变动影响",
+    "经营活动产生的现金流量净额": "经营活动净现金流",
+    "投资活动产生的现金流量净额": "投资活动净现金流",
+    "筹资活动产生的现金流量净额": "筹资活动净现金流",
+    "现金及现金等价物净增加额": "现金净增加额",
+}
+
 def to_number(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -134,17 +155,30 @@ BASIC_POINTS = [
 
 
 def _control_line(profile: dict, holders: list[dict]) -> str:
-    """控股股东及实控人：参考件格式，一行并列。"""
-    holder = text_value(profile.get("控股股东"))
-    holder_pct = to_number(profile.get("控股股东股比"))
-    controller = text_value(profile.get("实际控制人"))
-    controller_pct = to_number(profile.get("实际控制人股比"))
+    """控股股东及实控人：参考件格式，名称+股比；多个用逗号分隔时逐个带股比。"""
+    def pct_text(name: str, pct: Any) -> str:
+        numbers = []
+        for part in str(pct or "").split(","):
+            n = to_number(part)
+            if n is not None and n != 0:
+                numbers.append(f"{n:.2f}%")
+        names = [x.strip() for x in str(name or "").split(",") if x.strip()]
+        if not names or names == ["0"]:
+            return ""
+        out = []
+        for i, one in enumerate(names):
+            p = numbers[i] if i < len(numbers) else (numbers[0] if len(numbers) == 1 else "")
+            out.append(f"{one}" + (f"（{p}）" if p else ""))
+        return "、".join(out)
+
+    holder = pct_text(profile.get("控股股东"), profile.get("控股股东股比"))
+    controller = pct_text(profile.get("实际控制人"), profile.get("实际控制人股比"))
     parts = []
-    if holder != "—":
-        parts.append(f"控股股东：{holder}" + (f"（{holder_pct:.2f}%）" if holder_pct else ""))
-    if controller != "—":
-        parts.append(f"实际控制人：{controller}" + (f"（{controller_pct:.2f}%）" if controller_pct else ""))
-    return "；".join(parts) if parts else "—"
+    if holder:
+        parts.append(f"控股股东：{holder}")
+    if controller:
+        parts.append(f"实际控制人：{controller}")
+    return "，".join(parts) if parts else "—"
 
 
 def render_basic_points(profile: dict, holders: list[dict] | None = None,
@@ -154,11 +188,11 @@ def render_basic_points(profile: dict, holders: list[dict] | None = None,
     get = profile.get
     lines = [
         f"- 公司全称：{text_value(get('公司中文名称'))}（{text_value(get('成立日期'))}成立）",
-        f"- 上市板块：{text_value(get('上市板块'))}（{text_value(get('上市日期'))}上市）",
+        f"- 上市板块：{text_value(get('交易所中文名称') or get('上市地点'))}{text_value(get('上市板块'))}（{text_value(get('上市日期'))}上市）",
     ]
     registered = text_value(get("注册地址"))
     office = text_value(get("办公地址"))
-    address = office if registered == office else f"办公地址：{office}，注册地址：{registered}"
+    address = f"{office}（注册地址同办公地址）" if registered == office else f"办公地址：{office}，注册地址：{registered}"
     lines.append(f"- 地址：{address}")
     lines.append(f"- 控股股东及实控人：{_control_line(profile, holders)}")
     lines.append(f"- 公司高管：法定代表人{text_value(get('法人代表'))}、"
@@ -198,7 +232,7 @@ def render_holders(records: list[dict]) -> str:
     return markdown(headers, rows)
 
 
-def render_ipo(record: dict) -> str:
+def render_ipo(record: dict, data_date: str = "") -> str:
     if not record:
         return GAP
     get = record.get
@@ -209,20 +243,18 @@ def render_ipo(record: dict) -> str:
     raw_close = to_number(get("最新除权收盘价"))
     after_cap = issue_price * after_shares if issue_price and after_shares else None
     latest_cap = raw_close * latest_shares if raw_close and latest_shares else None
+    latest_title = f"最新（{data_date}）" if data_date else "最新"
     rows = [
-        ["总股本（万股）",
-         ratio(after_shares / 1e4 if after_shares else None, 0),
+        ["总股本（万股）", ratio(after_shares / 1e4 if after_shares else None, 0),
          ratio(latest_shares / 1e4 if latest_shares else None, 0)],
-        ["股价（元）",
-         ratio(issue_price),
+        ["股价（元）", ratio(issue_price),
          f"{ratio(after_price)}（后复权）" if after_price is not None else "—"],
-        ["市值（亿元）",
-         ratio(after_cap / 1e8 if after_cap else None),
+        ["市值（亿元）", ratio(after_cap / 1e8 if after_cap else None),
          ratio(latest_cap / 1e8 if latest_cap else None)],
         ["市盈率（倍）", ratio(get("发行后市盈率")), ratio(get("最新市盈率TTM"))],
         ["市净率（倍）", ratio(get("发行后市净率")), ratio(get("最新市净率"))],
     ]
-    body = markdown(["项目", "发行时", "最新"], rows)
+    body = markdown(["项目", "发行时", latest_title], rows)
     raised = to_number(get("募资总额"))
     net = to_number(get("募资净额"))
     fee = to_number(get("发行费用"))
@@ -255,15 +287,16 @@ def render_dividends(records: list[dict], income: dict[str, dict], periods: list
     if not records or not annuals:
         return GAP
     dividends = {str(rec.get("year") or ""): rec for rec in records}
-    headers = ["单位：万元"] + [f"{period[:4]}年" for period in annuals]
+    years = sorted({str(rec.get("year") or "") for rec in records} | {p[:4] for p in annuals}, reverse=True)
+    headers = ["单位：万元"] + [f"{y}年" for y in years]
     rows = [
         ["现金分红总额"],
         ["股票回购总额"],
         ["现金分红及回购"],
         ["归母净利润"],
     ]
-    for period in annuals:
-        year = period[:4]
+    for year in years:
+        period = f"{year}-12-31"
         record = dividends.get(year) or {}
         cash = to_number(record.get("现金分红总额"))
         total = to_number(record.get("现金分红及回购"))
@@ -293,7 +326,7 @@ def render_summary(data: dict[str, dict], periods: list[str]) -> str:
         values = [amount(value_at(index.get(p), label), "亿元") for p in periods]
         if all(value == "—" for value in values):
             continue
-        rows.append([label] + values)
+        rows.append([DISPLAY_ALIAS.get(label, label)] + values)
     if not rows:
         return GAP
     return markdown(headers, rows)
@@ -496,18 +529,32 @@ APPENDIX_CASHFLOW = [
 
 
 def render_statement(records: list[dict], periods: list[str],
-                     spec: list[tuple[str, list[str]]]) -> str:
-    """按参考件白名单渲染附录表：科目、顺序、分组全部照参考件，iFinD多给的一律不进。"""
+                     spec: list[tuple[str, list[str]]] | None = None,
+                     group_map: dict[str, str] | None = None) -> str:
+    """按参考件分组渲染：保留全部有数据的科目，仅剔除展示期内整行全0的科目。
+
+    spec 为可选白名单（旧参考模式）；不传时按 records 字段顺序与 group 分组渲染，
+    科目顺序由场景JSON定义（报表标准顺序），不逐家公司定制。
+    """
     if not records:
         return GAP
     index = by_date(records)
     headers = ["科目（万元）"] + [period_label(p) for p in periods]
-    blocks: list[str] = []
+    sample = records[0]
+    if spec:
+        labels_by_group = [(g, labels) for g, labels in spec]
+    else:
+        groups: dict[str, list[str]] = {}
+        for key in sample:
+            if key in ("date", "code") or key.endswith("__unit"):
+                continue
+            group = (group_map or {}).get(key, "")
+            groups.setdefault(group, []).append(key)
+        labels_by_group = list(groups.items())
 
     def cell(label: str, period: str) -> str:
         record = index.get(period) or {}
         if label == "@毛利润":
-            # 毛利润、毛利率由营业总收入减营业成本本地算出，和早期的Excel模板计算方法一致
             revenue = to_number(record.get("营业总收入"))
             cost = to_number(record.get("营业成本"))
             return amount(revenue - cost, "万元") if revenue is not None and cost is not None else "—"
@@ -515,37 +562,38 @@ def render_statement(records: list[dict], periods: list[str],
             revenue = to_number(record.get("营业总收入"))
             cost = to_number(record.get("营业成本"))
             return percentage_from_fraction(
-                (revenue - cost) if revenue is not None and cost is not None else None,
-                revenue)
+                (revenue - cost) if revenue is not None and cost is not None else None, revenue)
         raw = record.get(label)
         if "(元)" in label:
             number = to_number(raw)
             return "—" if number in (None, 0) else f"{number:.2f}"
         return amount(raw, "万元")
 
-    for group_title, labels in spec:
+    blocks: list[str] = []
+    for group_title, labels in labels_by_group:
         rows = []
         for label in labels:
-            display = label.replace("@", "")
-            values = [cell(label, period) for period in periods]
-            if all(v in ("—", "0", "") for v in values):
+            # 剔全0按原始值判断：有数但换算万元后四舍五入为0的科目要保留。
+            raw_values = [to_number(value_at(index.get(p), label)) for p in periods]
+            if all(v in (None, 0) for v in raw_values):
                 continue
-            rows.append([display] + values)
+            values = [cell(label, period) for period in periods]
+            rows.append([DISPLAY_ALIAS.get(label, label)] + values)
         if not rows:
             continue
         table = markdown(headers, rows)
-        blocks.append(group_title + "\n\n" + table if group_title else table)
+        blocks.append(group_title.rstrip("：") + "：" + "\n\n" + table if group_title else table)
     return "\n\n".join(blocks) if blocks else GAP
 
 
-# ---------------- 拼装 ----------------
-
 def build_report(*, company: str, code: str, periods: list[str],
+                 segment_periods: list[str] | None = None,
                  data: dict[str, list[dict]], groups: dict[str, dict] | None = None,
                  chart_file: str | None = None, data_date: str = "",
                  events_note: str = "", violations: str = "—",
                  warnings: list[str] | None = None) -> str:
     """严格照中际旭创正文 + 兆易创新附录排版；参考件没有的不进。"""
+    segment_periods = segment_periods or periods
     profile = (data.get("工商信息") or [{}])[0]
     profile = {k: v for k, v in profile.items() if not k.endswith("__unit")} if profile else {}
     holders = data.get("十大股东") or []
@@ -562,7 +610,7 @@ def build_report(*, company: str, code: str, periods: list[str],
               render_basic_points(profile, holders, violations), ""]
     lines += [f"### 十大股东（截至{periods[0]}）", "", render_holders(holders), ""]
 
-    lines += ["## 二、资本运作", "", "### IPO信息", "", render_ipo(ipo), "",
+    lines += ["## 二、资本运作", "", "### IPO信息", "", render_ipo(ipo, data_date), "",
               "### 再融资与重大投资", ""]
 
     lines += ["## 三、行情走势及分红", ""]
@@ -577,8 +625,8 @@ def build_report(*, company: str, code: str, periods: list[str],
 
     lines += ["## 五、公司业务", "", "### 营收结构", "",
               render_segments(data.get("分产品") or [], data.get("分地区") or [],
-                              income, periods), ""]
-    customer_table = render_customers(data.get("客户供应商") or [], periods)
+                              income, segment_periods), ""]
+    customer_table = render_customers(data.get("客户供应商") or [], segment_periods)
     if customer_table != GAP:
         lines += ["客户供应商集中度", "", customer_table, ""]
     lines += ["### 业务概述", "", "### 主要客户", ""]
@@ -590,12 +638,10 @@ def build_report(*, company: str, code: str, periods: list[str],
 
     lines += ["---", "", "## 附录", "",
               "附录金额统一换算为万元，四舍五入取整。", ""]
-    specs = (("A、资产负债表", "资产负债表", APPENDIX_BALANCE),
-             ("B、利润表", "利润表", APPENDIX_INCOME),
-             ("C、现金流量表", "现金流量表", APPENDIX_CASHFLOW))
-    for title, key, spec in specs:
+    for title, key in (("A、资产负债表", "资产负债表"), ("B、利润表", "利润表"), ("C、现金流量表", "现金流量表")):
         lines += [f"### {title}（万元）", "",
-                  render_statement(data.get(key) or [], periods, spec), ""]
+                  render_statement(data.get(key) or [], periods,
+                                   group_map=groups.get(key) or {}), ""]
 
     if warnings:
         lines += ["## 数据获取提示", "", *[f"- {w}" for w in dict.fromkeys(warnings)], ""]

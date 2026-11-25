@@ -419,6 +419,40 @@ def _report_periods(latest: str, columns: int = REPORT_COLUMNS) -> list[str]:
     return periods[:columns]
 
 
+def _segment_periods(latest: str, columns: int = REPORT_COLUMNS) -> list[str]:
+    """营收结构/分地区/客户供应商只在年报和中报披露，不能用三季报/一季报。
+
+    口径：最新中报或年报 + 去年同类中报/年报 + 逐年年报，去重后共7列。
+    例：最新2026三季报 → 2026中报、2025中报、2025年、2024年、2023年、2022年、2021年。
+    最新是年报时全用年报：2025年、2024年……2019年。
+    """
+    year, md = int(latest[:4]), latest[5:]
+    if md == "09-30":
+        first = f"{year}-06-30"
+    elif md == "03-31":
+        first = f"{year - 1}-12-31"
+    else:
+        first = latest
+    fy, fmd = first[:4], first[5:]
+    out = [first, f"{int(fy) - 1}-{fmd}"]
+    annual_start = int(fy) if fmd == "12-31" else int(fy) - 1
+    for offset in range(columns + 4):
+        if len(out) >= columns:
+            break
+        period = f"{annual_start - offset}-12-31"
+        if period not in out:
+            out.append(period)
+    # 去重保序
+    seen, result = set(), []
+    for period in out:
+        if period not in seen:
+            seen.add(period)
+            result.append(period)
+        if len(result) >= columns:
+            break
+    return result
+
+
 def _scene_groups(name: str) -> dict[str, str]:
     spec = _scenes.load_scene(name)
     return {field["label"]: field.get("group") or ""
@@ -453,6 +487,7 @@ def report(req: dict) -> dict:
     if not latest:
         return {"ok": False, "error": f"无法确定最新报告期（探测 {code} 失败）"}
     periods = _report_periods(latest)
+    segment_periods = _segment_periods(latest)
     annuals = [p for p in periods if p.endswith("12-31")]
     annual_year = int(annuals[0][:4]) if annuals else int(periods[0][:4]) - 1
     forecast_years = [str(annual_year + offset) for offset in (1, 2, 3)]
@@ -486,13 +521,15 @@ def report(req: dict) -> dict:
 
     take("十大股东", report_date=latest, export_path=export("十大股东"))
     take("IPO信息", report_date=end_date)
-    take("分红", dims={"year": [p[:4] for p in annuals]})
+    # 分红当年（如2026）也要列，虽然多数公司中报未宣告；取数年份=年报年份+当年
+    dividend_years = sorted({p[:4] for p in annuals} | {str(end_date)[:4]}, reverse=True)
+    take("分红", dims={"year": dividend_years})
     take("资产负债表", report_dates=periods)
     take("利润表", report_dates=periods)
     take("现金流量表", report_dates=periods)
-    take("分产品", report_dates=periods)
-    take("分地区", report_dates=periods)
-    take("客户供应商", report_dates=periods)
+    take("分产品", report_dates=segment_periods)
+    take("分地区", report_dates=segment_periods)
+    take("客户供应商", report_dates=segment_periods)
     take("盈利预测", report_date=end_date, dims={"year": forecast_years})
     take("历史估值", dims={"date": annuals})
     take("估值快照", report_date=end_date)
@@ -538,7 +575,8 @@ def report(req: dict) -> dict:
     groups = {name: _scene_groups(name)
               for name in ("资产负债表", "利润表", "现金流量表")}
     markdown_text = _report.build_report(
-        company=company, code=code, periods=periods, data=data, groups=groups,
+        company=company, code=code, periods=periods, segment_periods=segment_periods,
+        data=data, groups=groups,
         chart_file=chart_file, data_date=end_date, violations=violations,
         warnings=warnings)
     md_path = out_dir / f"{company}-报告骨架-{stamp}.md"

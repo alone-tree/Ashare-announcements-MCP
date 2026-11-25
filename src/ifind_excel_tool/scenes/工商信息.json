@@ -20,6 +20,10 @@
       "indicator": "listed_mkt"
     },
     {
+      "label": "交易所中文名称",
+      "indicator": "listed_exchange_cn"
+    },
+    {
       "label": "上市板块",
       "indicator": "mkt"
     },

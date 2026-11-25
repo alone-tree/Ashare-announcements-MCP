@@ -16,7 +16,7 @@ _MPL_READY = False
 
 _RED = "#d9403f"       # 涨（A股口径）
 _GREEN = "#2ea26d"     # 跌
-_BG = "#FAFAFA"
+_BG = "white"
 _GRID = "#e6e6e6"
 _FIGSIZE = (16, 11)
 _DPI = 200
@@ -130,7 +130,7 @@ def _style_axes(ax, grid: bool = True) -> None:
     ax.grid(True, color=_GRID, alpha=0.3, linewidth=0.5) if grid else None
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.tick_params(labelsize=9)
+    ax.tick_params(labelsize=12)
 
 
 def _format_x_ticks(ax, dates: list[str], right_pad: float = 14.0) -> None:
@@ -138,12 +138,12 @@ def _format_x_ticks(ax, dates: list[str], right_pad: float = 14.0) -> None:
     step = max(1, n // 8)
     ticks = list(range(0, n, step))
     ax.set_xticks(ticks)
-    ax.set_xticklabels([dates[i][:10] for i in ticks], rotation=0, fontsize=9)
+    ax.set_xticklabels([dates[i][:10] for i in ticks], rotation=0, fontsize=12)
     ax.set_xlim(-1, n + right_pad)
 
 
 def _inline_labels(ax, entries: list[tuple[Any, str]], x_pos: float,
-                   fontsize: int = 8) -> None:
+                   fontsize: int = 12) -> None:
     """右侧inline标签：测量字高后纵向避让，白底描边，不画图例框。"""
     import matplotlib.patheffects as pe
 
@@ -241,7 +241,7 @@ def _annotate_events(ax, events: list[tuple[int, str]], color: str) -> tuple[int
     for idx, desc in events:
         if not x_min <= idx <= x_max:
             continue
-        probe = ax.text(0, 0, desc, fontsize=11)
+        probe = ax.text(0, 0, desc, fontsize=15)
         box = probe.get_window_extent(renderer)
         probe.remove()
         labels.append((idx, desc, box.width + 2 * pad, box.height + 2 * pad))
@@ -291,7 +291,7 @@ def _annotate_events(ax, events: list[tuple[int, str]], color: str) -> tuple[int
         texts.append(ax.annotate(
             text, xy=(x, 1), xycoords=ax.get_xaxis_transform(),
             xytext=(-pad_points, (offset_pixels + pad) / pixels_per_point),
-            textcoords="offset points", ha="right", va="bottom", fontsize=11,
+            textcoords="offset points", ha="right", va="bottom", fontsize=14,
             annotation_clip=False,
             bbox={"boxstyle": f"square,pad={pad_points / 11}",
                   "facecolor": "white", "edgecolor": color, "linewidth": 0.8},
@@ -444,9 +444,9 @@ def _kline(req: dict, rows: list[dict], headers: list[str],
     if req.get("events") and not events:
         notes.append("events未匹配到交易日，未标注")
     visible, lanes = _annotate_events(ax_main, events, "#59A14F")
-    fig.suptitle(_title(rows, template, cols["date"]), fontsize=13, y=0.985)
-    ax_main.set_ylabel("价格（元）", fontsize=10)
-    ax_vol.set_ylabel("成交量（万股）", fontsize=10)
+    fig.suptitle(_title(rows, template, cols["date"]), fontsize=18, y=0.985)
+    ax_main.set_ylabel("价格（元）", fontsize=14)
+    ax_vol.set_ylabel("成交量（万股）", fontsize=14)
     return _finish(fig, req.get("output") or str(
         Path(req["data_path"]).with_name(Path(req["data_path"]).stem + f"_{template}.png")),
         notes, len(rows), template, events=visible, label_rows=lanes)
@@ -480,11 +480,11 @@ def _close_mcap_events(req: dict, rows: list[dict], headers: list[str]) -> dict:
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     line_mcap, = left.plot(range(len(rows)), mcaps, color=colors[0], linewidth=1.7)
     line_price, = right.plot(range(len(rows)), prices, color=colors[1], linewidth=1.7)
-    left.set_ylabel(f"{mcap_col}（亿元）", color=colors[0], fontsize=11)
-    right.set_ylabel(f"{price_col}（元）", color=colors[1], fontsize=11)
-    left.tick_params(axis="y", colors=colors[0], labelsize=9)
-    right.tick_params(axis="y", colors=colors[1], labelsize=9)
-    left.tick_params(axis="x", labelsize=9)
+    left.set_ylabel(f"{mcap_col}（亿元）", color=colors[0], fontsize=15)
+    right.set_ylabel(f"{price_col}（元）", color=colors[1], fontsize=15)
+    left.tick_params(axis="y", colors=colors[0], labelsize=12)
+    right.tick_params(axis="y", colors=colors[1], labelsize=12)
+    left.tick_params(axis="x", labelsize=12)
     left.set_ylim(bottom=0)
     right.set_ylim(bottom=0)
     _format_x_ticks(left, dates)
@@ -496,7 +496,7 @@ def _close_mcap_events(req: dict, rows: list[dict], headers: list[str]) -> dict:
     if req.get("events") and not events:
         events = []
     visible, lanes = _annotate_events(left, events, colors[2])
-    fig.suptitle(_title(rows, "close_mcap_events", date_col), fontsize=13, y=0.985)
+    fig.suptitle(_title(rows, "close_mcap_events", date_col), fontsize=18, y=0.985)
     notes: list[str] = []
     if not events and req.get("events"):
         notes.append("events未匹配到交易日，未标注")
@@ -546,7 +546,7 @@ def _close_line_keypoints(req: dict, rows: list[dict], headers: list[str]) -> di
         ax.scatter([idx], [val], s=30, color=color, zorder=6,
                    edgecolors="white", linewidths=0.6)
         ax.annotate(f"{name} {val:,.2f}", xy=(idx, val), xytext=offset,
-                    textcoords="offset points", fontsize=9, color=color, ha=ha,
+                    textcoords="offset points", fontsize=12, color=color, ha=ha,
                     bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8))
 
     keypoints = _extract_keypoints(values, threshold)
@@ -568,7 +568,7 @@ def _close_line_keypoints(req: dict, rows: list[dict], headers: list[str]) -> di
         else:
             offset, ha = (4, -12), "left"
         ax.annotate(f"{val:,.2f}", xy=(idx, val), xytext=offset,
-                    textcoords="offset points", fontsize=8, color=color, ha=ha,
+                    textcoords="offset points", fontsize=12, color=color, ha=ha,
                     bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.7))
     if not keypoints:
         notes.append(f"未找到回撤超过{threshold:.0%}的高低点，未标注回撤")
@@ -578,8 +578,8 @@ def _close_line_keypoints(req: dict, rows: list[dict], headers: list[str]) -> di
     if req.get("events") and not events:
         notes.append("events未匹配到交易日，未标注")
     visible, lanes = _annotate_events(ax, events, "#59A14F")
-    fig.suptitle(_title(rows, "close_line_keypoints", date_col), fontsize=13, y=0.985)
-    ax.set_ylabel(price_col, fontsize=10)
+    fig.suptitle(_title(rows, "close_line_keypoints", date_col), fontsize=18, y=0.985)
+    ax.set_ylabel(price_col, fontsize=14)
     return _finish(fig, req.get("output") or str(
         Path(req["data_path"]).with_name(Path(req["data_path"]).stem + "_close_line_keypoints.png")),
         notes, len(rows), "close_line_keypoints", events=visible, label_rows=lanes,
