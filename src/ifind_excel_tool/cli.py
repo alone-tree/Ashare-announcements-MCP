@@ -79,7 +79,8 @@ def get(req: dict) -> dict:
     return _fetch.get(req.get("indicator") or "",
                       code=(req.get("code") or "").strip(),
                       date=(req.get("report_date") or "").strip(),
-                      params=req.get("params"))
+                      params=req.get("params"),
+                      growth=(req.get("growth") or "").strip())
 
 
 def fetch_package(req: dict) -> dict:

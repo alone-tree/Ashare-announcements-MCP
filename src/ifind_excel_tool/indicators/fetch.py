@@ -63,6 +63,9 @@ def _eval_expr(expr: str, names: dict[str, float]) -> float:
             return _BIN_OPS[type(node.op)](walk(node.left), walk(node.right))
         if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
             return _UNARY_OPS[type(node.op)](walk(node.operand))
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "max" and not node.keywords):
+            return max(walk(arg) for arg in node.args)
         raise ValueError(f"算式含不支持的写法：{ast.dump(node)}")
 
     return walk(tree)
@@ -106,12 +109,190 @@ def _probe_if_needed(kind: str, code: str, date: str) -> tuple[str, str | None]:
     return probed, probed
 
 
+_QUARTER_ENDS = ["03-31", "06-30", "09-30", "12-31"]
+
+
+def _base_period(t1: str, mode: str) -> str:
+    """对比基期。yoy=上年同期；qoq=上一报告期。"""
+    year = int(t1[:4])
+    if mode == "yoy":
+        return f"{year - 1}{t1[4:]}"
+    if mode == "qoq":
+        index = _QUARTER_ENDS.index(t1[5:])
+        if index == 0:
+            return f"{year - 1}-12-31"
+        return f"{year}-{_QUARTER_ENDS[index - 1]}"
+    raise ValueError(f"不支持的对比口径：{mode}")
+
+
+def _last_n_quarters(count: int, t1: str) -> list[str]:
+    """以 t1 为最新一期，往回数 count 个季末报告期。"""
+    if t1[5:] not in _QUARTER_ENDS:
+        raise ValueError(f"报告期 {t1} 不是季末（03-31/06-30/09-30/12-31），无法铺单季序列")
+    index = _QUARTER_ENDS.index(t1[5:])
+    year = int(t1[:4])
+    out = []
+    for offset in range(count):
+        position = index - offset
+        shift = position // 4
+        out.append(f"{year + shift}-{_QUARTER_ENDS[position % 4]}")
+    return out
+
+
+def _package_indicators(*names: str) -> set[str]:
+    """收集若干组合的全部底层指标码（含衍生依赖与多候选）。"""
+    single = library.load_single()
+    derived = definitions.load_derived()
+    specs = definitions.load_packages()
+    out: set[str] = set()
+    for name in names:
+        for field in (specs.get(name) or {}).get("fields") or []:
+            if field.get("derived"):
+                for dep in (derived.get(field["derived"]) or {}).get("deps") or []:
+                    out.add(dep["indicator"])
+            for candidate in field.get("candidates") or [field.get("indicator")]:
+                if candidate and candidate in single:
+                    out.add(candidate)
+    return out
+
+
+def _qoq_reason(indicators: list[str]) -> str | None:
+    """环比适用性检查。返回 None 表示允许，否则返回给调用方的提示文案。
+
+    单季科目（ths_sq_ 前缀）与资产负债表科目可环比；利润表/现金流量表
+    累计口径不提供环比；其余科目同样不支持。
+    """
+    if any(code.startswith("ths_sq_") for code in indicators):
+        return None
+    if any(code in _package_indicators("资产负债表", "资产负债表常用科目")
+           for code in indicators):
+        return None
+    if any(code in _package_indicators("利润表", "现金流量表")
+           for code in indicators):
+        return "累计报不支持环比计算"
+    return "仅单季度科目和资产负债表科目支持环比计算"
+
+
+def _entry_indicators(entry: dict) -> list[str]:
+    """一个科目条目背后的真实指标码（衍生取依赖，多候选取全部候选）。"""
+    if entry["kind"] == "derived":
+        definition = definitions.load_derived().get(entry["name"]) or {}
+        return [dep["indicator"] for dep in definition.get("deps") or []]
+    return list(entry.get("candidates") or [entry.get("indicator")])
+
+
+def _growth_result(name: str, decimals, t1: str, t0: str,
+                   current, base) -> dict:
+    """按公告口径算增速：(本期-基期)/|基期|。基期为负时附标记，不自创算法。"""
+    if not isinstance(current, (int, float)):
+        return {"ok": False, "indicator": name,
+                "error": f"本期（{t1}）无数据，同比/环比不可用"}
+    if not isinstance(base, (int, float)):
+        return {"ok": False, "indicator": name,
+                "error": f"基期（{t0}）无数据，同比/环比不可用"}
+    if base == 0:
+        return {"ok": False, "indicator": name,
+                "error": f"基期（{t0}）为0，增速无定义，不可用"}
+    value = round((float(current) - float(base)) / abs(float(base)) * 100,
+                  decimals if isinstance(decimals, int) else 2)
+    out = {"ok": True, "indicator": name, "value": value, "unit": "%",
+           "period": t1, "base_period": t0,
+           "current": current, "base": base}
+    if base < 0:
+        out["base_negative"] = True
+    return out
+
+
+def _growth_value(entry: dict, code: str, date: str,
+                  params: dict | None, mode: str) -> dict:
+    """对任意科目取同比/环比：基期各取一次该科目的值再算增速。"""
+    name = entry["name"]
+    if mode not in ("yoy", "qoq"):
+        return {"ok": False, "indicator": name,
+                "error": f"不支持的对比口径 {mode}（支持 yoy=同比、qoq=环比）"}
+    reason = _qoq_reason(_entry_indicators(entry)) if mode == "qoq" else None
+    if reason:
+        out = {"ok": False, "indicator": name, "error": reason}
+        if reason == "累计报不支持环比计算":
+            out["note"] = "环比仅对单季度科目和资产负债表科目生效"
+        return out
+    lookup = entry["indicator"] if entry["kind"] == "formula" else name
+    t1 = date
+    if not t1:
+        t1 = probe_latest_report(code)
+    if not t1:
+        return {"ok": False, "indicator": name,
+                "error": f"无法确定本期报告期，请显式传 report_date（探测 {code} 失败）",
+                "hint": engine.ZERO_VALUE_HINT}
+    t0 = _base_period(t1, mode)
+    current = get(lookup, code=code, date=t1, params=params)
+    base = get(lookup, code=code, date=t0, params=params)
+    if not current.get("ok"):
+        return {"ok": False, "indicator": name,
+                "error": f"本期取数失败：{current.get('error')}"}
+    if not base.get("ok"):
+        return {"ok": False, "indicator": name,
+                "error": f"基期取数失败：{base.get('error')}"}
+    result = _growth_result(name, entry.get("decimals"), t1, t0,
+                            current.get("value"), base.get("value"))
+    if result.get("ok"):
+        result["code"] = code
+    return result
+
+
+def _growth_from_definition(definition: dict, code: str, date: str) -> dict:
+    """衍生同比科目：deps[0] 在本期与基期各取一次，一次矩阵提交。"""
+    name = definition["name"]
+    mode = definition.get("growth")
+    dep = (definition.get("deps") or [None])[0]
+    if dep is None:
+        return {"ok": False, "indicator": name, "error": "同比科目缺少依赖定义"}
+    t1 = date
+    if not t1:
+        t1 = probe_latest_report(code)
+    if not t1:
+        return {"ok": False, "indicator": name,
+                "error": f"无法确定本期报告期，请显式传 report_date（探测 {code} 失败）",
+                "hint": engine.ZERO_VALUE_HINT}
+    t0 = _base_period(t1, mode)
+    single = library.load_single()
+    record = single.get(dep["indicator"])
+    if record is None:
+        return {"ok": False, "indicator": name,
+                "error": f"指标未入库：{dep['indicator']}"}
+    formulas = [library.render(record, {"code": code, "date": period,
+                                        **(dep.get("params") or {})})
+                for period in (t1, t0)]
+    block = (engine.fetch_matrix([formulas], text_ok=True).get("values") or [[]])[0]
+    current = library.coerce(block[0]) if len(block) > 0 else None
+    base = library.coerce(block[1]) if len(block) > 1 else None
+    result = _growth_result(name, definition.get("decimals"), t1, t0,
+                            current, base)
+    if result.get("ok"):
+        result["code"] = code
+        result["base_negative_label"] = ("扭亏为盈" if base < 0 <= current
+                                         else "减亏" if base < 0 and current < 0
+                                         else "")
+        if not result.get("base_negative_label"):
+            result.pop("base_negative_label")
+    return result
+
+
 def get(name_or_code: str, code: str = "", date: str = "",
-        params: dict | None = None) -> dict:
-    """按科目名或指标码取数。类型自动分派，调用方不用判断底层形态。"""
+        params: dict | None = None, growth: str = "") -> dict:
+    """按科目名或指标码取数。类型自动分派，调用方不用判断底层形态。
+
+    growth 可选 yoy（同比）/ qoq（环比）：对任意单科目按公告口径算增速，
+    基期自动取上年同期或上一报告期。
+    """
     entry = definitions.resolve(name_or_code, code)
     kind = entry["kind"]
     date, probed = _probe_if_needed(kind, code, date)
+
+    if growth and kind in ("formula", "derived", "select") \
+            and not (kind == "derived"
+                     and (definitions.load_derived().get(entry["name"]) or {}).get("growth")):
+        return _growth_value(entry, code, date, params, growth)
 
     if kind == "special":
         latest = probe_latest_report(code)
@@ -154,6 +335,8 @@ def get(name_or_code: str, code: str = "", date: str = "",
 
     if kind == "derived":
         definition = definitions.load_derived()[entry["name"]]
+        if definition.get("growth"):
+            return _growth_from_definition(definition, code, date)
         values, missing = _fetch_deps(definition.get("deps") or [], code, date)
         if missing:
             return {"ok": False, "indicator": entry["name"],
@@ -192,26 +375,48 @@ def _fetch_one(record: dict, formula: str):
 
 
 def _fetch_deps(deps: list[dict], code: str, date: str) -> tuple[dict, list[str]]:
-    """一次取回全部依赖。返回 (label→数值, 缺失说明)。"""
+    """一次取回全部依赖。返回 (label→数值, 缺失说明)。
+
+    dep 可带 sum_periods=N：对最近N个季末报告期各取一次后求和（如TTM），
+    任一期缺失则整体缺失。dep 可带 date_mode=latest：不传日期取最新（行情类）。
+    """
     single = library.load_single()
-    formulas, labels = [], []
+    formulas: list[str] = []
+    plan: list[tuple[str, dict, int]] = []  # (label, dep, 占几个单元格)
     for dep in deps:
         record = single.get(dep["indicator"])
         if record is None:
             raise ValueError(f"指标未入库：{dep['indicator']}")
-        formulas.append(library.render(record, {"code": code, "date": date,
-                                                **(dep.get("params") or {})}))
-        labels.append(dep["label"])
+        if dep.get("sum_periods"):
+            dates = _last_n_quarters(int(dep["sum_periods"]), date)
+            for period in dates:
+                formulas.append(library.render(
+                    record, {"code": code, "date": period,
+                             **(dep.get("params") or {})}))
+            plan.append((dep["label"], dep, len(dates)))
+        else:
+            dep_date = "" if dep.get("date_mode") == "latest" else date
+            formulas.append(library.render(
+                record, {"code": code, "date": dep_date,
+                         **(dep.get("params") or {})}))
+            plan.append((dep["label"], dep, 1))
     if not formulas:
         return {}, []
     block = (engine.fetch_matrix([formulas], text_ok=True).get("values") or [[]])[0]
     values, missing = {}, []
-    for label, raw in zip(labels, block):
-        value = library.coerce(raw)
-        if isinstance(value, (int, float)):
-            values[label] = float(value)
+    position = 0
+    for label, dep, size in plan:
+        cells = [library.coerce(v) for v in block[position:position + size]]
+        position += size
+        if size == 1:
+            if isinstance(cells[0], (int, float)):
+                values[label] = float(cells[0])
+            else:
+                missing.append(label)
+        elif cells and all(isinstance(v, (int, float)) for v in cells):
+            values[label] = float(sum(cells))
         else:
-            missing.append(label)
+            missing.append(f"{label}（{dep['sum_periods']}期中有缺失）")
     return values, missing
 
 

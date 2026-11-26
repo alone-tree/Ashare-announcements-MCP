@@ -202,6 +202,10 @@ def resolve(name_or_code: str, code: str = "") -> dict:
         select = [e for e in exact if e["kind"] == "select"]
         if len(select) == 1:
             return select[0]
+        # 与原始科目同名的衍生定义是有意合并过的稳健口径（如合同负债=max(合同负债,预收)），优先
+        derived = [e for e in exact if e["kind"] == "derived"]
+        if len(derived) == 1:
+            return derived[0]
         picked = _prefer_market(exact, code)
         if picked:
             return picked
