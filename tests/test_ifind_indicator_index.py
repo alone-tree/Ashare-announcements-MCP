@@ -151,8 +151,12 @@ def test_default_time_windows():
 
 
 def test_prompt_style_aliases():
-    """别名长度要短于原名，否则失去「常用称呼」的意义。"""
+    """别名不得与原名重复，也不得是空串。
+
+    长度不再强制短于原名（2026-11-26 调整）：个别科目需要更清晰的展示名，
+    如 market_value 原名「总市值」、别名「公司总市值」，展示时用别名。
+    """
     for entry in definitions.build_index():
         for alias in entry.get("aliases") or []:
-            if any("\u4e00" <= ch <= "\u9fff" for ch in alias):
-                assert len(alias) <= len(entry["name"]), (alias, entry["name"])
+            assert alias.strip(), entry["name"]
+            assert alias != entry["name"], (alias, entry["name"])
