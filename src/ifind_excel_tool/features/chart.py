@@ -585,11 +585,252 @@ def _close_line_keypoints(req: dict, rows: list[dict], headers: list[str]) -> di
         price_col=price_col, keypoints=len(keypoints) // 2)
 
 
+_DUAL_PALETTE = ["#006BA4", "#FF800E", "#ABABAB", "#595959", "#5F9ED1",
+                 "#C85200", "#898989", "#A2C8EC", "#FFBC79"]  # tableau色板9色
+
+
+def _parse_x(value: str, numeric: bool):
+    """时间点解析。numeric=True按相对天数，否则按ymd日期。"""
+    if numeric:
+        number = _to_float(value)
+        if number is None:
+            raise ValueError(f"时间点「{value}」不是数字；本组数据的时间类型须与第一组一致")
+        return number
+    try:
+        from datetime import date as _d
+
+        return _d.fromisoformat(str(value).strip()[:10])
+    except (TypeError, ValueError):
+        raise ValueError(f"时间点「{value}」不是ymd日期（如2026-11-26）；"
+                         f"本组数据的时间类型须与第一组一致")
+
+
+def _load_series_points(item: dict, index: int) -> list[tuple]:
+    """一组series的数据点。支持内嵌 data 或 file+列名读CSV。"""
+    label = (item.get("label") or "").strip()
+    if not label:
+        raise ValueError(f"series[{index}] 缺 label")
+    points: list[tuple] = []
+    if item.get("data") is not None:
+        rows = item["data"]
+        if not isinstance(rows, list) or not rows:
+            raise ValueError(f"「{label}」的 data 必须是非空数组")
+        points = rows
+    elif item.get("file"):
+        rows, headers = _read_rows(item["file"])
+        # 历史行情CSV含非交易日填充行（收盘=前收、量额为0），自动剔掉，不出假台阶
+        flag = next((h for h in headers if h.strip() == "非交易日判定"), None)
+        if flag:
+            rows = [r for r in rows if _to_float(r.get(flag)) != 0]
+        x_col = _resolve_col(headers, _ALIASES["date"],
+                             item.get("x_column"), label="时间列")
+        y_col = _resolve_col(headers, tuple(), item.get("y_column"),
+                             label="数值列")
+        points = [(row.get(x_col), row.get(y_col)) for row in rows]
+    else:
+        raise ValueError(f"「{label}」缺数据：给 data 数组或 file+列名")
+    return points
+
+
+def _log_axis(ax, values: list[float]) -> None:
+    """log轴并细化刻度：跨度小（≤1.5个量级）时1-9全标，否则1-2-5体系。
+
+    刻度显示实际数值文本，不用只有10-100-1000的粗刻度。
+    """
+    from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+
+    finite = [v for v in values if v is not None and v > 0]
+    ax.set_yscale("log")
+    span = (math.log10(max(finite)) - math.log10(min(finite))) if finite else 0.0
+    major_subs = tuple(range(1, 10)) if span <= 1.5 else (1.0, 2.0, 5.0)
+    ax.yaxis.set_major_locator(
+        LogLocator(base=10.0, subs=major_subs, numticks=24))
+    ax.yaxis.set_major_formatter(FuncFormatter(_cn_tick))
+    ax.yaxis.set_minor_locator(
+        LogLocator(base=10.0, subs=tuple(range(1, 10)), numticks=48))
+    ax.yaxis.set_minor_formatter(NullFormatter())
+
+
+def _trim_zero(text: str) -> str:
+    """「5,000.0」去掉无意义的小数尾，「734.5」保留。"""
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _cn_tick(value, _pos=None):
+    """中文单位刻度：万亿/亿/万自适应，不显示1e12这类科学计数偏移。"""
+    a = abs(value)
+    if a >= 1e12:
+        return _trim_zero(f"{value / 1e12:,.2f}") + "万亿"
+    if a >= 1e8:
+        return _trim_zero(f"{value / 1e8:,.1f}") + "亿"
+    if a >= 1e4:
+        return _trim_zero(f"{value / 1e4:,.1f}") + "万"
+    if a >= 1:
+        return f"{value:,.0f}"
+    return f"{value:g}"
+
+
+def _offset_ylim(ax, lo: float, hi: float, log: bool, shift_up: bool) -> None:
+    """双轴错层：一条轴的数据带偏上、另一条偏下，避免同构序列完全重叠盖死。"""
+    if log:
+        if shift_up:
+            ax.set_ylim(lo / 1.25, hi * 1.12)
+        else:
+            ax.set_ylim(lo / 1.12, hi * 1.25)
+        return
+    span = (hi - lo) or abs(hi) or 1.0
+    if shift_up:
+        ax.set_ylim(lo - span * 0.22, hi + span * 0.07)
+    else:
+        ax.set_ylim(lo - span * 0.07, hi + span * 0.22)
+
+
+def _dual_axis_series(req: dict) -> dict:
+    """双轴时间序列模板：多组series按时间落点，左右轴、虚实线、log细化刻度。"""
+    from matplotlib import dates as _mdates
+    import matplotlib.pyplot as plt
+
+    series_spec = req.get("series")
+    if not isinstance(series_spec, list) or not series_spec:
+        return {"ok": False, "error": "series 必须是非空数组"}
+
+    # 读全部数据并统一时间类型：第一组首个时间点决定日期轴还是数字轴
+    parsed: list[dict] = []
+    numeric = None
+    for index, item in enumerate(series_spec):
+        label = (item.get("label") or "").strip()
+        raw_points = _load_series_points(item, index)
+        if numeric is None:
+            probe = next((p[0] for p in raw_points if p[0] not in (None, "")), None)
+            if probe is None:
+                raise ValueError(f"「{label}」没有可用时间点")
+            numeric = _to_float(probe) is not None
+        seen: dict = {}
+        xs, ys = [], []
+        skipped = 0
+        for point in raw_points:
+            x_raw, y_raw = point[0], point[1] if len(point) > 1 else None
+            value = _to_float(y_raw)
+            x = _parse_x(x_raw, numeric)
+            if x in seen:            # 同一时间点重复出现时取后值（CSV常态）
+                ys[seen[x]] = value
+                continue
+            seen[x] = len(xs)
+            xs.append(x)
+            ys.append(value)
+        axis = (item.get("axis") or "left").strip().lower()
+        if axis not in ("left", "right"):
+            raise ValueError(f"「{label}」的 axis 只能是 left/right")
+        parsed.append({"label": label, "axis": axis, "xs": xs, "ys": ys,
+                       "dashed": bool(item.get("dashed")),
+                       "color": item.get("color"), "points": len(xs)})
+
+    fig, ax1 = plt.subplots(figsize=_FIGSIZE)
+    ax2 = ax1.twinx()
+    axes = {"left": ax1, "right": ax2}
+    fig.subplots_adjust(bottom=0.14)
+    notes: list[str] = []
+    handles: list = []
+    left_first = right_first = None
+    total = 0
+    order = 0
+    for spec in parsed:
+        ax = axes[spec["axis"]]
+        color = spec["color"] or _DUAL_PALETTE[order % len(_DUAL_PALETTE)]
+        if spec["axis"] == "left" and left_first is None:
+            left_first = color
+        if spec["axis"] == "right" and right_first is None:
+            right_first = color
+        pairs = [(x, y) for x, y in zip(spec["xs"], spec["ys"]) if y is not None]
+        if not pairs:
+            notes.append(f"「{spec['label']}」没有可用数值点，未绘制")
+            order += 1
+            continue
+        use_log = (req.get(spec["axis"]) or {}).get("log")
+        if use_log:
+            kept = [(x, y) for x, y in pairs if y > 0]
+            if len(kept) < len(pairs):
+                notes.append(f"「{spec['label']}」有{len(pairs) - len(kept)}"
+                             f"个非正数值，log轴下已跳过")
+            pairs = kept or pairs
+        style = {"color": color, "linewidth": 2.2, "zorder": 3,
+                 "linestyle": "--" if spec["dashed"] else "-"}
+        line, = ax.plot([p[0] for p in pairs], [p[1] for p in pairs],
+                        label=spec["label"], **style)
+        handles.append(line)
+        total += len(pairs)
+        order += 1
+
+    for name, ax in (("left", ax1), ("right", ax2)):
+        from matplotlib.ticker import FuncFormatter
+
+        values = [y for spec in parsed if spec["axis"] == name
+                  for y in spec["ys"] if y is not None]
+        use_log = bool((req.get(name) or {}).get("log"))
+        if use_log:
+            _log_axis(ax, values)
+        else:
+            ax.set_yscale("linear")
+            ax.yaxis.set_major_formatter(FuncFormatter(_cn_tick))
+        tick_color = left_first if name == "left" else right_first
+        if tick_color:
+            ax.tick_params(axis="y", colors=tick_color, labelsize=12)
+        ax.yaxis.set_label_text((req.get(name) or {}).get("label") or "",
+                                fontsize=14, color=tick_color or "black")
+        if values:
+            _offset_ylim(ax, min(values), max(values), use_log,
+                         shift_up=(name == "left"))
+    ax1.grid(True, color=_GRID, alpha=0.3, linewidth=0.5)
+    ax2.grid(False)
+    ax1.spines["top"].set_visible(False)
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["left"].set_visible(False)
+
+    if numeric:
+        step = max(1, max(len(spec["xs"]) for spec in parsed) // 10)
+        axis_values = sorted({x for spec in parsed for x in spec["xs"]})
+        ax1.set_xticks(axis_values[::step])
+        ax1.tick_params(axis="x", labelsize=12)
+    else:
+        from matplotlib.ticker import FuncFormatter
+
+        locator = _mdates.AutoDateLocator()
+        ax1.xaxis.set_major_locator(locator)
+
+        def _fmt_date(value, _pos=None):
+            day = _mdates.num2date(value)
+            if day.month == 1 and day.day <= 7:
+                return f"{day.year}-{day.month:02d}"
+            return f"{day.month:02d}-{day.day:02d}"
+
+        ax1.xaxis.set_major_formatter(FuncFormatter(_fmt_date))
+        ax1.tick_params(axis="x", labelsize=12)
+
+    if handles:
+        ncol = min(len(handles), 6)
+        fig.legend(handles=handles, loc="lower center", ncol=ncol,
+                   fontsize=13, frameon=False,
+                   bbox_to_anchor=(0.5, 0.0),
+                   columnspacing=1.6, handlelength=2.4)
+    title = (req.get("title") or "").strip()
+    if title:
+        fig.suptitle(title, fontsize=18, y=0.985)
+
+    output = req.get("output") or str(
+        Path("dual_axis_series.png"))
+    return _finish(fig, output, notes, total, "dual_axis_series",
+                   series=[spec["label"] for spec in parsed],
+                   left_log=bool((req.get("left") or {}).get("log")),
+                   right_log=bool((req.get("right") or {}).get("log")))
+
+
 def draw(req: dict) -> dict:
     """统一绘图入口：{"cmd":"draw","template":...,"data_path":...,"output":...}。"""
     try:
         _ensure_mpl()
         template = req.get("template") or ""
+        if template == "dual_axis_series":
+            return _dual_axis_series(req)
         if template not in ("kline_volume", "kline_log_volume",
                             "close_mcap_events", "close_line_keypoints"):
             return {"ok": False, "error": f"未知template：{template}"}

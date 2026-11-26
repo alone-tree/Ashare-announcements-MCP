@@ -16,6 +16,23 @@
 | `kline_log_volume` | 同上，纵轴对数 | data_path、output |
 | `close_mcap_events` | 双轴：左总市值、右前复权收盘价，可标注事件 | data_path、output、events |
 | `close_line_keypoints` | 折线 + 高点低点标注，可标回撤 | data_path、output、keypoints、drawdown_threshold |
+| `dual_axis_series` | 双轴时间序列：多组序列任选左右轴、虚实线、log轴，底部自动图例（2026-11-26） | series[]、left/right、title、output |
+
+`dual_axis_series` 不用 data_path，数据写在 `series` 里（内嵌 `data` 数组或 `file`+`y_column` 读CSV）：
+
+```json
+{"cmd":"draw","template":"dual_axis_series","title":"标题","output":"图.png",
+ "left":{"log":true,"label":"左轴标签"},"right":{"log":false,"label":"右轴标签"},
+ "series":[
+  {"label":"茅台股价","axis":"left","file":"行情.csv","y_column":"收盘价"},
+  {"label":"PE","axis":"right","dashed":true,
+   "data":[[1,22.0],[2,22.8],[3,22.1]]}]}
+```
+
+- 时间点支持 ymd 日期或相对天数（1、2、3），一次调用统一一种；各组按自己时间点落笔，不插值。
+- 每组可选 `axis`（默认left）、`dashed`（默认实线）、`color`（默认tableau色板顺序分配）。
+- log轴刻度按数据跨度细化（跨度小则1-9全标，否则1-2-5），显示实际数值。
+- 该模板是标准基础版；要加标记线、事件标注等个性化，复制模板到临时目录改，不进正式模板清单。
 
 绘图只读已导出的行情 CSV，不自己取数。视觉规范统一在 `chart.py` 内固定：
 纯白背景、不要底色、字号放大，便于打印后阅读。
