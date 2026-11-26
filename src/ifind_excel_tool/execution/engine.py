@@ -21,7 +21,7 @@ WORKBOOK = Path(__file__).resolve().parent.parent / "data" / "ifind_workspace.xl
 SHEET = "data"
 FORMULA = '=@thsiFinD("ths_mv_back_test_stock","{code}","{date}")'
 LOADING = ("抓取", "提取", "请求数据", "重新计算", "#GETTING_DATA", "#BUSY!")
-ROWS_PER_BATCH = 2500  # 单批行数上限：3万式单批曾间歇整批全0，2500行（约3.25万式）为故障隔离粒度
+ROWS_PER_BATCH = 3000  # 单批公式数上限，与插件原生请求包对齐（perf.log实测一批3000格约3秒完成）。历史上的3万式单批曾间歇整批全0，小批也是故障隔离粒度
 
 
 def fetch_formulas(formulas: list[str], *, visible: bool | None = None,
@@ -212,19 +212,36 @@ def _fetch_one(matrix: list[list[str]], *, visible: bool | None,
     raise RuntimeError(f"{last}；{_reset_hint(last)}")
 
 
+def _split_by_cells(matrix: list[list[str]], limit: int) -> list[list[list[str]]]:
+    """按公式总数切块，行内公式必须同批；单行超上限时该行自成一批。"""
+    batches: list[list[list[str]]] = []
+    current: list[list[str]] = []
+    used = 0
+    for row in matrix:
+        width = len(row)
+        if current and used + width > limit:
+            batches.append(current)
+            current, used = [], 0
+        current.append(row)
+        used += width
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _fetch_batched(matrix: list[list[str]], *, visible: bool | None,
                    timeout: float, text_ok: bool) -> dict:
     values: list[list] = []
     errors: list[dict] = []
     metrics: dict = {}
     offset = 0
-    for start in range(0, len(matrix), ROWS_PER_BATCH):
-        result = _fetch_one(matrix[start:start + ROWS_PER_BATCH], visible=visible,
+    for batch in _split_by_cells(matrix, ROWS_PER_BATCH):
+        result = _fetch_one(batch, visible=visible,
                             timeout=timeout, text_ok=text_ok)
         values.extend(result["values"])
         for item in result.get("errors") or []:
             errors.append({**item, "row": item["row"] + offset})
-        offset += len(matrix[start:start + ROWS_PER_BATCH])
+        offset += len(batch)
         for key in ("formula_write_seconds", "read_seconds", "polls"):
             metrics[key] = metrics.get(key, 0) + (result.get("metrics") or {}).get(key, 0)
         metrics["batches"] = metrics.get("batches", 0) + 1
