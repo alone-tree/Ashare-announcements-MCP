@@ -15,9 +15,9 @@
 | 能力 | 公告、A股互动问答、港美电话会议；具体市场边界见公告侧主文档 | 证券搜索、行情、绘图、财报、营收结构、基础比率及公司信息；具体市场边界见行为规范 |
 | 文档 | `docs/AH公告与互动问答改造方案.md`（公告侧唯一权威） | `docs/market-data架构设计.md`（行为）+ `字段与数据源支持情况.md`（客观能力）+ `docs/决策记录.md`（变动历史） |
 
-取数即绘图属于market-data，入口为`get_quote_chart`与`get_quote_chart_batch`，完整行为与视觉约束仅见架构§2.6。iFinD CLI另有`draw`命令，读已导出的行情CSV出PNG，零 import 依赖，两者各自独立；CLI绘图模板与参数见[包说明](src/ifind_excel_tool/README.md#绘图draw)。
+取数即绘图属于market-data，入口为`get_quote_chart`与`get_quote_chart_batch`，完整行为与视觉约束仅见架构§2.6。iFinD CLI另有`draw`命令，读已导出的行情CSV出PNG，零 import 依赖，两者各自独立；CLI绘图模板与参数见[功能说明](src/ifind_excel_tool/features/README.md#绘图)。
 
-`ifind_excel_tool` 是公式库驱动的 iFinD Excel 取数工作台，纯 CLI、随用随开发：首选 `fetch_scene` 固定场景取数，另有一键完整报告（`report`）、分板块CSV导出与模板绘图；场景没有的指标才查公式库、写一次性脚本调 `engine.py`。方案见[建设方案](docs/iFinD公式验证库建设方案-2026-11-18.md)与[固定报告与绘图扩展方案](docs/iFinD-CLI固定报告与绘图扩展方案-2026-11-25.md)，库字段与用法见[包说明](../src/ifind_excel_tool/README.md)。它与 market-data 平级、零 import 依赖；market-data 保留美股/证券搜索/绘图等独有能力，两边暂并行，后续再定合并或独立。
+`ifind_excel_tool` 是公式库驱动的 iFinD Excel 取数工作台，纯 CLI、随用随开发。整包按五块组织：公式录入（`formulas/`）、业务定义（`indicators/`）、额外功能（`features/`）、AI 交互（`interface/`）、执行层（`execution/`）。框架与「加东西放哪」仅见[框架说明](docs/iFinD-CLI框架说明.md)；各块格式与用法见该块 `README.md`。它与 market-data 平级、零 import 依赖；market-data 保留美股/证券搜索/绘图等独有能力，两边暂并行，后续再定合并或独立。
 
 克制、数据准确真实、维护简单；不为假设中的需求增加抽象或字段。个人工具，不追求大而全。
 
@@ -47,7 +47,11 @@ CLI为`python -m ashare_announcements_mcp.cli`，stdin JSON → stdout JSON。�
 
 ### ifind_excel_tool（纯 CLI，非 MCP）
 
-入口 `python src/ifind_excel_tool/cli.py`，stdin JSON → stdout JSON，顶层字段 `cmd`。命令分三类：取数 `fetch_scene`（固定场景，优先用）、`search`（查证券代码）、`lookup`/`run`/`text`（场景没有才用）；一键报告 `report`（取数、换算、绘图、拼Markdown、落盘）；帮助 `help`/`help_scene`/`help_indicators`/`scenes`/`scene_info`；Excel生命周期 `open`/`status`/`close`。另提供 `draw` 命令按模板绘图（行情CSV出PNG）。执行层 `engine.py` 从 market-data 的 `ifind_excel.py` 复制而来、不 import 旧包；专用工作簿随包。取数见[包说明](src/ifind_excel_tool/README.md)，录入和验收见[批量公式录入与验证流程](src/ifind_excel_tool/formula_library/README.md#批量公式录入与验证流程)。绘图模板与参数见[包说明](src/ifind_excel_tool/README.md#绘图draw)。
+入口 `python -m ifind_excel_tool.cli`（或 `python src/ifind_excel_tool/cli.py`），stdin JSON → stdout JSON，顶层字段 `cmd`。只做命令分派，业务逻辑不在入口。
+
+日常取数两步：`find` 搜科目拿用法，`get` 取数（类型自动分派）。整表用 `fetch_batch`，多期与周月聚合用 `fetch_package`。另有 `search`（证券代码）、`packages`/`package_info`/`help`/`help_indicators`（查询说明）、`report`（一键报告）、`draw`（绘图）、`lookup`/`run`/`text`（逃生舱）、`open`/`status`/`close`（Excel 生命周期）。
+
+五块职责与「加东西放哪」仅见[框架说明](docs/iFinD-CLI框架说明.md)；各块格式见该块 `README.md`：公式录入见[formulas](src/ifind_excel_tool/formulas/README.md)，业务定义见[indicators](src/ifind_excel_tool/indicators/README.md)，额外功能见[features](src/ifind_excel_tool/features/README.md)，交互见[interface](src/ifind_excel_tool/interface/README.md)，执行层见[execution](src/ifind_excel_tool/execution/README.md)。
 
 ### market-data MCP（7 个工具）
 
@@ -91,8 +95,8 @@ iFinD Excel手册的指标码、参数原文及页码可直接检索[公式索�
 6. **重写/大改任何文档前必须先备份**（时间戳目录 `docs/backup-YYYYMMDD-HHMM/`）。
 7. 未经用户明确要求，不部署、不导出、不推送。**本地 commit 不用等提醒：每组改动完成并验证后直接 `git commit` 作为保存点；仍未要求不 push**。（规则变动过程见 `docs/决策记录.md` 2026-10-19）
 8. 临时探针放 `.codex-temp/`，不得混入生产模块。
-9. ifind_excel_tool 公式库的数据来源与写入纪律见[库说明](src/ifind_excel_tool/formula_library/README.md#数据来源等级2026-11-18-踩坑后定)。
-10. **`catalog.jsonl` 除用户明确要求外，任何情况下都不查**——内容全是错的、混淆的公式，AI 据此取数已多次出错。不得用它找候选写法、核对字段、推断参数或补任何信息；查不到指标就向用户要插件界面原文。任何文档、Skill、提示词里"可以查来参考"的说法一律删除。
+9. ifind_excel_tool 公式库的数据来源与写入纪律见[录入规范](src/ifind_excel_tool/formulas/README.md#数据来源等级2026-11-18-踩坑后定)。
+10. **`formulas/legacy/catalog.jsonl` 除用户明确要求外，任何情况下都不查**——内容全是错的、混淆的公式，AI 据此取数已多次出错。不得用它找候选写法、核对字段、推断参数或补任何信息；查不到指标就向用户要插件界面原文。任何文档、Skill、提示词里"可以查来参考"的说法一律删除。
 
 ## 七、开发方式
 
