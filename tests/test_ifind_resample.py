@@ -4,7 +4,8 @@
 import pandas as pd
 import pytest
 
-from ifind_excel_tool import cli, resample, scenes
+from ifind_excel_tool import cli
+from ifind_excel_tool.indicators import aggregate, definitions, packages
 
 FIELD_MAP = {
     "open": "开盘价", "high": "最高价", "low": "最低价",
@@ -38,7 +39,7 @@ DAILY = _daily([
 
 
 def test_weekly_ohlcv_hand_computed():
-    out = resample.resample_ohlcv(DAILY, "weekly", FIELD_MAP)
+    out = aggregate.resample_ohlcv(DAILY, "weekly", FIELD_MAP)
     # W-FRI：2024-01-02~05 → 01-05；01-08~12 → 01-12；01-15~16 → 01-19；01-31~02-02 → 02-02
     assert [r["date"] for r in out] == ["2024-01-05", "2024-01-12", "2024-01-19", "2024-02-02"]
     first = out[0]
@@ -53,7 +54,7 @@ def test_weekly_ohlcv_hand_computed():
 
 
 def test_monthly_ohlcv_hand_computed():
-    out = resample.resample_ohlcv(DAILY, "monthly", FIELD_MAP)
+    out = aggregate.resample_ohlcv(DAILY, "monthly", FIELD_MAP)
     assert [r["date"] for r in out] == ["2024-01-31", "2024-02-29"]
     jan = out[0]
     assert (jan["开盘价"], jan["最高价"], jan["最低价"], jan["收盘价"]) == (10, 25, 9, 24)
@@ -65,15 +66,15 @@ def test_monthly_ohlcv_hand_computed():
 
 
 def test_daily_and_empty_passthrough():
-    assert resample.resample_ohlcv(DAILY, "daily", FIELD_MAP) is DAILY
-    assert resample.resample_ohlcv([], "weekly", FIELD_MAP) == []
+    assert aggregate.resample_ohlcv(DAILY, "daily", FIELD_MAP) is DAILY
+    assert aggregate.resample_ohlcv([], "weekly", FIELD_MAP) == []
     with pytest.raises(ValueError, match="不支持的周期"):
-        resample.resample_ohlcv(DAILY, "yearly", FIELD_MAP)
+        aggregate.resample_ohlcv(DAILY, "yearly", FIELD_MAP)
 
 
 def test_extra_columns_take_last_value():
     rows = [dict(r, code="600519.SH", note=f"n{i}") for i, r in enumerate(DAILY)]
-    out = resample.resample_ohlcv(rows, "weekly", FIELD_MAP)
+    out = aggregate.resample_ohlcv(rows, "weekly", FIELD_MAP)
     assert out[0]["code"] == "600519.SH"
     assert out[0]["note"] == "n3"   # 第一周最后交易日 01-05 的下标 3
 
@@ -84,7 +85,7 @@ def test_equivalent_to_market_data_resample_ohlcv():
 
     ref = md_resample(pd.DataFrame(DAILY).rename(columns={v: k for k, v in FIELD_MAP.items()}), "weekly")
     ref = ref.rename(columns={k: v for k, v in FIELD_MAP.items()})
-    mine = pd.DataFrame(resample.resample_ohlcv(DAILY, "weekly", FIELD_MAP))
+    mine = pd.DataFrame(aggregate.resample_ohlcv(DAILY, "weekly", FIELD_MAP))
     pd.testing.assert_frame_equal(
         mine[["date", "开盘价", "最高价", "最低价", "收盘价", "成交量", "成交额"]].reset_index(drop=True),
         ref[["date", "开盘价", "最高价", "最低价", "收盘价", "成交量", "成交额"]].reset_index(drop=True),
@@ -105,18 +106,18 @@ class _FakeEngine:
 
 
 def test_cli_period_default_daily_and_validation(monkeypatch):
-    spec = scenes.load_scene("历史行情")
+    spec = definitions.load_packages()["历史行情"]
     # 一行日线的矩阵：hidden判定 + 6字段；值顺序按 fields 定义。
     values = [[1, 11, 10, 12, 9, 100, 1000]]
     fake = _FakeEngine(values)
     monkeypatch.setattr(cli.engine, "fetch_matrix", fake.fetch_matrix)
 
-    daily = cli.fetch_scene({"scene": "历史行情", "code": "600519.SH",
+    daily = cli.fetch_package({"package": "历史行情", "code": "600519.SH",
                              "start": "2024-01-02", "end": "2024-01-02"})
     assert daily["ok"] is True and daily["period"] == "daily"
     assert daily["records"][0]["收盘价"] == 11
 
-    bad = cli.fetch_scene({"scene": "历史行情", "code": "600519.SH", "period": "yearly"})
+    bad = cli.fetch_package({"package": "历史行情", "code": "600519.SH", "period": "yearly"})
     assert bad["ok"] is False and "不支持的周期" in bad["error"]
     assert len(fake.calls) == 1   # 非法周期不触发取数
 
@@ -132,7 +133,7 @@ def test_cli_weekly_returns_aggregated_records(monkeypatch):
     values = [[1, c, o, h, l, v, a] for _, o, h, l, c, v, a in raw]
     fake = _FakeEngine(values)
     monkeypatch.setattr(cli.engine, "fetch_matrix", fake.fetch_matrix)
-    resp = cli.fetch_scene({"scene": "历史行情", "code": "600519.SH", "period": "weekly",
+    resp = cli.fetch_package({"package": "历史行情", "code": "600519.SH", "period": "weekly",
                             "start": "2024-01-02", "end": "2024-01-05"})
     assert resp["ok"] is True and resp["period"] == "weekly" and resp["rows"] == 1
     rec = resp["records"][0]
