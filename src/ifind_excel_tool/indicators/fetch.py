@@ -279,10 +279,12 @@ def _growth_from_definition(definition: dict, code: str, date: str) -> dict:
 
 
 def _mv_route(code: str) -> str:
-    """证券市值的路由：按代码后缀与号段选类别市值公式。"""
+    """证券市值的路由：按代码后缀与号段选类别市值公式。美股ADR返回空串。"""
     suffix = code.rsplit(".", 1)[-1].upper() if "." in code else ""
     if suffix == "HK":
         return "ths_totalcapitalforsecurities_hk"
+    if suffix in ("N", "O", "US", "A", "P", "K"):
+        return ""          # 美股ADR/多类别股：无类别股本数据，拒绝而非给错值
     digits = code.split(".")[0]
     if digits.startswith("900") or digits.startswith("200"):
         return "ths_bshare_mv_with_limit_tc_stock"
@@ -300,6 +302,12 @@ def _securities_mv(code: str, date: str, params: dict | None) -> dict:
     """证券市值：类别口径按代码自动路由，B股附带交易币种。"""
     single = library.load_single()
     indicator = _mv_route(code)
+    if not indicator:
+        return {"ok": False, "indicator": "证券市值", "code": code,
+                "error": "美股ADR与多类别股算不出证券市值：iFinD无ADR实际发行量字段，"
+                         "「证券总股本」是按全股本÷ADR比例折算的，传入ADR代码得到的是"
+                         "约等于公司总市值的数，与主上市代码的证券市值相加即双倍。"
+                         "请改用「总市值」（取任一主上市代码）作为公司口径。"}
     record = single.get(indicator)
     if record is None:
         return {"ok": False, "indicator": "证券市值",

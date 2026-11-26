@@ -150,6 +150,23 @@ def test_securities_mv_route():
     assert route("00700.HK") == "ths_totalcapitalforsecurities_hk"
 
 
+def test_securities_mv_rejects_adr():
+    """美股ADR与多类别股路由为空，明确报错不给错值。"""
+    for code in ("BABA.N", "TSM.N", "GOOG.O", "GOOGL.O", "AAPL.O"):
+        assert fetch._mv_route(code) == "", code
+    result = fetch._securities_mv("BABA.N", "2026-11-26", None)
+    assert not result["ok"] and "ADR" in result["error"]
+    assert "总市值" in result["error"]
+
+
+def test_securities_mv_note_covered():
+    """证券市值的口径边界写进 notes，find 能带出。"""
+    entry = definitions.resolve("证券市值", "600519.SH")
+    note = entry.get("notes") or ""
+    for keyword in ("A股、B股、港股可用", "相加", "ADR", "不可", "总市值"):
+        assert keyword in note, keyword
+
+
 def test_normalize_hk_code():
     """港股五位转四位：00700.HK→0700.HK；四位与A股不动。"""
     normalize = library.normalize_code
