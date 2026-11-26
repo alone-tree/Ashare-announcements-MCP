@@ -138,3 +138,46 @@ def test_qoq_rejects_cumulative_income():
     entry = {"name": "净利润", "kind": "formula", "indicator": "ths_np_stock"}
     result = fetch._growth_value(entry, "600519.SH", T1, None, "qoq")
     assert not result["ok"] and result["error"] == "累计报不支持环比计算"
+
+
+def test_securities_mv_route():
+    """证券市值按代码号段与后缀路由到类别市值公式。"""
+    route = fetch._mv_route
+    assert route("600519.SH") == "ths_ashare_mv_include_ls_stock"
+    assert route("920002.BJ") == "ths_ashare_mv_include_ls_stock"
+    assert route("900901.SH") == "ths_bshare_mv_with_limit_tc_stock"
+    assert route("200725.SZ") == "ths_bshare_mv_with_limit_tc_stock"
+    assert route("00700.HK") == "ths_totalcapitalforsecurities_hk"
+
+
+def test_normalize_hk_code():
+    """港股五位转四位：00700.HK→0700.HK；四位与A股不动。"""
+    normalize = library.normalize_code
+    assert normalize("00700.HK") == "0700.HK"
+    assert normalize("0700.HK") == "0700.HK"
+    assert normalize("600519.SH") == "600519.SH"
+
+
+def test_market_value_route_by_market():
+    """「总市值」同名多市场：各市场代码都解析到全球版（公司总市值口径）。
+
+    港股版path用户原文未提供无法参与前缀路由，按指标码可达。
+    """
+    assert definitions.resolve("总市值", "600519.SH")["indicator"] == "market_value"
+    assert definitions.resolve("总市值", "00700.HK")["indicator"] == "market_value"
+    assert definitions.resolve("ths_market_value_hks")["indicator"] == "ths_market_value_hks"
+
+
+def test_market_value_notes_surfaced():
+    """market_value 与 mv_sec_oriented 的使用注释进入索引并带 notes。"""
+    index = {e["indicator"]: e for e in definitions.build_index()
+             if e["kind"] == "formula"}
+    assert "最常用的市值字段" in index["market_value"]["notes"]
+    assert "除非用户明确要求" in index["mv_sec_oriented"]["notes"]
+    assert "港股类别市值口径" in index["ths_totalcapitalforsecurities_hk"]["notes"]
+
+
+def test_securities_mv_special_registered():
+    """「证券市值」解析到 special 条目，A股/B股公式的同名别名被遮蔽。"""
+    entry = definitions.resolve("证券市值", "600519.SH")
+    assert entry["kind"] == "special" and entry["indicator"] == "securities_market_value"

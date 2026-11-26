@@ -278,6 +278,55 @@ def _growth_from_definition(definition: dict, code: str, date: str) -> dict:
     return result
 
 
+def _mv_route(code: str) -> str:
+    """证券市值的路由：按代码后缀与号段选类别市值公式。"""
+    suffix = code.rsplit(".", 1)[-1].upper() if "." in code else ""
+    if suffix == "HK":
+        return "ths_totalcapitalforsecurities_hk"
+    digits = code.split(".")[0]
+    if digits.startswith("900") or digits.startswith("200"):
+        return "ths_bshare_mv_with_limit_tc_stock"
+    return "ths_ashare_mv_include_ls_stock"
+
+
+_MV_ROUTES = {
+    "ths_ashare_mv_include_ls_stock": "A股市值(含限售股)",
+    "ths_bshare_mv_with_limit_tc_stock": "B股市值(含限售股,交易币种)",
+    "ths_totalcapitalforsecurities_hk": "港股类别市值",
+}
+
+
+def _securities_mv(code: str, date: str, params: dict | None) -> dict:
+    """证券市值：类别口径按代码自动路由，B股附带交易币种。"""
+    single = library.load_single()
+    indicator = _mv_route(code)
+    record = single.get(indicator)
+    if record is None:
+        return {"ok": False, "indicator": "证券市值",
+                "error": f"指标未入库：{indicator}"}
+    context = {"code": code, "date": date, "unit": "1"}
+    currency = None
+    if indicator == "ths_totalcapitalforsecurities_hk":
+        currency = (params or {}).get("currency") or "HKD"
+        context["currency"] = currency
+    formula = library.render(record, context)
+    value = library.coerce(_fetch_one(record, formula))
+    out = {"ok": True, "indicator": "证券市值", "code": code, "date": date,
+           "value": value, "unit": "元", "source_indicator": indicator,
+           "route": _MV_ROUTES[indicator]}
+    if indicator == "ths_bshare_mv_with_limit_tc_stock":
+        currency_row = single.get("ths_trade_currency_stock")
+        currency_value = None
+        if currency_row is not None:
+            currency_value = _fetch_one(
+                currency_row, library.render(currency_row, {"code": code}))
+        out["currency"] = str(currency_value).strip() if currency_value is not None else None
+        out["note"] = "B股市值按交易币种计价，见 currency 字段，勿直接当人民币。"
+    elif indicator == "ths_totalcapitalforsecurities_hk":
+        out["currency"] = currency
+    return out
+
+
 def get(name_or_code: str, code: str = "", date: str = "",
         params: dict | None = None, growth: str = "") -> dict:
     """按科目名或指标码取数。类型自动分派，调用方不用判断底层形态。
@@ -295,6 +344,8 @@ def get(name_or_code: str, code: str = "", date: str = "",
         return _growth_value(entry, code, date, params, growth)
 
     if kind == "special":
+        if entry["name"] == "证券市值":
+            return _securities_mv(code, date, params)
         latest = probe_latest_report(code)
         if not latest:
             return {"ok": False, "indicator": entry["name"],

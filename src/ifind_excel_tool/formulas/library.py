@@ -71,12 +71,22 @@ def fill(template: str, context: dict) -> str:
     return text
 
 
+def normalize_code(code: str) -> str:
+    """港股代码五位转四位（00700.HK→0700.HK）。实测五位在行情与估值公式返回0。"""
+    if (code or "").upper().endswith(".HK"):
+        digits = code.split(".", 1)[0]
+        if len(digits) == 5 and digits.startswith("0"):
+            return digits[1:] + ".HK"
+    return code
+
+
 def render(record: dict, context: dict) -> str:
     """按库内登记的参数默认值补全上下文，再填模板。
 
     调用方没给、库里也没登记默认值的参数一律报错——iFinD 参数严禁猜测。
     """
     merged = dict(context)
+    merged["code"] = normalize_code(str(merged.get("code") or ""))
     for param in record.get("parameters") or []:
         name = param.get("name") or ""
         if not name or param.get("default") is None:

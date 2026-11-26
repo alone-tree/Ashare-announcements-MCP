@@ -123,6 +123,7 @@ def build_index() -> list[dict]:
             "unit": record.get("unit", ""),
             "path": record.get("path", ""),
             "reading_mode": record.get("reading_mode") or "matrix",
+            "notes": record.get("notes") or "",
             "call": _call(code),
             "returns": RETURNS["formula"],
         })
@@ -140,7 +141,7 @@ def build_index() -> list[dict]:
             "returns": RETURNS["batch"],
         })
 
-    # 特殊能力：探最新报告期
+    # 特殊能力：探最新报告期、证券市值按市场自动路由
     entries.append({
         "name": "最新报告期",
         "kind": "special",
@@ -148,6 +149,18 @@ def build_index() -> list[dict]:
         "indicator": "latest_report_date",
         "description": "查询某只股票最新已披露的报告期，不取财务数值。",
         "call": {"cmd": "get", "indicator": "latest_report_date", "code": "<证券代码>"},
+        "returns": RETURNS["special"],
+    })
+    entries.append({
+        "name": "证券市值",
+        "kind": "special",
+        "aliases": [],
+        "indicator": "securities_market_value",
+        "description": "该证券对应股份类别的市值，按代码自动路由：沪深A股/北交所"
+                       "用A股市值(含限售股)，B股代码（沪900/深200开头）用B股市值"
+                       "(含限售股,交易币种)并附带币种，港股用总市值(面向证券)。"
+                       "注意这是类别口径，不是公司总市值；公司口径用总市值。",
+        "call": {"cmd": "get", "indicator": "证券市值", "code": "<证券代码>"},
         "returns": RETURNS["special"],
     })
     return entries
@@ -167,7 +180,15 @@ def _prefer_market(candidates: list[dict], code: str) -> dict | None:
     prefix = {"股票": "股票全部指标", "港股": "港股全部指标", "美股": "美股全部指标",
               "指数": "指数全部指标", "外汇": "外汇全部指标"}[market]
     matched = [e for e in candidates if (e.get("path") or "").startswith(prefix)]
-    return matched[0] if len(matched) == 1 else None
+    if len(matched) == 1:
+        return matched[0]
+    if not matched:
+        # 全球口径的指标（如总市值market_value）是各市场通用的兜底
+        global_rows = [e for e in candidates
+                       if (e.get("path") or "").startswith("全球股票全部指标")]
+        if len(global_rows) == 1:
+            return global_rows[0]
+    return None
 
 
 def _describe_markets(candidates: list[dict]) -> str:
