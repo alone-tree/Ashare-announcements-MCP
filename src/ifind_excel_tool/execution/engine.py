@@ -53,12 +53,14 @@ def fetch_formulas(formulas: list[str], *, visible: bool | None = None,
 
 
 def fetch_matrix(formulas: list[list[str]], *, visible: bool | None = None,
-                 timeout: float = 600, text_ok: bool = False) -> dict:
+                 timeout: float = 60, text_ok: bool = False) -> dict:
     """日期×字段的完整公式矩阵批写批读；错误单元格单独报告。
 
-    按行分块（每批ROWS_PER_BATCH行）执行后合并。iFinD 对同公式有缓存，
-    取数失败的重试必须关闭 Excel 重开，不能仅重输公式；COM 忙（写入被拒）
-    在本层按1/3/5秒等待重试，此类重写安全：写入被拒时公式未提交。
+    按行分块（每批ROWS_PER_BATCH行）执行后合并。正常批量3-10秒完成（万级
+    公式实测3-7秒），60秒足够；偶发插件挂起时早失败早处置（2026-11-26）。
+    iFinD 对同公式有缓存，取数失败的重试必须关闭 Excel 重开，不能仅重输
+    公式；COM 忙（写入被拒）在本层按1/3/5秒等待重试，此类重写安全：写入
+    被拒时公式未提交。
     """
     if not formulas or not isinstance(formulas[0], list) or not formulas[0]:
         raise ValueError("需要非空的二维 iFinD 公式矩阵")
@@ -265,7 +267,8 @@ def _call(operation: str, *, timeout: float, **arguments) -> dict:
     except subprocess.TimeoutExpired as error:
         # 只结束本次 Python 工作进程；不杀 Excel，不影响其他工作簿。
         raise TimeoutError(
-            f"Excel {operation} 超过 {timeout:g} 秒；已停止等待，Excel 保持原状"
+            f"Excel {operation} 超过 {timeout:g} 秒；已停止等待，Excel 保持原状。"
+            "重开专用工作簿后重试同一请求通常立即完成（插件缓存不随重开丢失）"
         ) from error
     if completed.returncode:
         raise RuntimeError(f"Excel 工作进程退出：{completed.stderr.strip()}")
@@ -591,6 +594,21 @@ def _snapshot(app, book, pid) -> dict:
             "nonempty_cells": int(app.WorksheetFunction.CountA(sheet.UsedRange))}
 
 
+def _pending_summary(values) -> str:
+    """超时现场：仍处于抓取中/公式未算的行数与行号范围，失败可解释（2026-11-26）。"""
+    if not values:
+        return "本次等待期间连取数区域都读不到（Excel 整体忙，COM 一直被拒）"
+    pending = [i + 1 for i, row in enumerate(values)
+               if any(isinstance(v, str) and (any(w in v for w in LOADING)
+                                              or v.startswith(("=", "@")))
+                      for v in row)]
+    if not pending:
+        return "区域内已无抓取中格子（卡点在计算引擎状态或读通道，而非数据本身）"
+    span = (str(pending[0]) if len(pending) == 1
+            else f"{pending[0]}-{pending[-1]}")
+    return f"仍有{len(pending)}行未出数（行号{span}），其余已就绪"
+
+
 def _execute(request: dict, deadline: float) -> dict:
     import pythoncom
 
@@ -690,9 +708,12 @@ def _execute(request: dict, deadline: float) -> dict:
         region.Formula2 = tuple(tuple(row) for row in formulas)
         metrics["formula_write_seconds"] = time.perf_counter() - stamp
         polls = 0
+        values = None  # 首次读成功前保持空，超时现场据此区分「读不到」与「没出数」
         while True:
             if time.monotonic() >= deadline:
-                raise TimeoutError("等待 iFinD 自动登录或取数完成超时")
+                raise TimeoutError(
+                    f"等待取数完成超时；{_pending_summary(values)}。"
+                    "重开专用工作簿后重试同一请求通常立即完成（插件缓存不随重开丢失）")
             time.sleep(0.5)
             pythoncom.PumpWaitingMessages()
             polls += 1
