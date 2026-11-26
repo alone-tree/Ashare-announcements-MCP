@@ -239,6 +239,11 @@ def resolve(name_or_code: str, code: str = "") -> dict:
         picked = _prefer_market(exact, code)
         if picked:
             return picked
+        # 没有插件路径的条目无法参与市场路由（如用户只给了公式未给搜索树位置），
+        # 只能按指标码指定；按名称解析时让位给路径完整的同市场版本。
+        routed = [e for e in exact if (e.get("path") or "").strip()]
+        if len(routed) == 1:
+            return routed[0]
         given = _market_of(code or "")
         available = _describe_markets(exact)
         if given and given not in available:
